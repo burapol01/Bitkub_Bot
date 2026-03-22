@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+
+runtime_state.json
+signal_log.csv
+paper_trade_log.csv
+
+data/bitkub.db
