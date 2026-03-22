@@ -1,9 +1,29 @@
 {
-  "mode": "read-only",
+  "mode": "live",
   "base_url": "https://api.bitkub.com",
   "fee_rate": 0.0025,
   "interval_seconds": 10,
   "cooldown_seconds": 60,
+  "live_execution_enabled": true,
+  "live_auto_exit_enabled": true,
+  "live_max_order_thb": 500,
+  "live_min_thb_balance": 100,
+  "live_slippage_tolerance_percent": 1.0,
+  "live_daily_loss_limit_thb": 1000,
+  "live_manual_order": {
+    "enabled": true,
+    "symbol": "THB_KUB",
+    "side": "sell",
+    "order_type": "limit",
+    "amount_thb": 100,
+    "amount_coin": 3.41413451,
+    "rate": 30.00
+  },
+  "market_snapshot_retention_days": 30,
+  "signal_log_retention_days": 30,
+  "runtime_event_retention_days": 30,
+  "account_snapshot_retention_days": 30,
+  "reconciliation_retention_days": 30,
   "signal_log_file": "signal_log.csv",
   "trade_log_file": "paper_trade_log.csv",
   "rules": {
@@ -24,12 +44,28 @@
       "max_trades_per_day": 2
     },
     "THB_KUB": {
-      "buy_below": 29.50,
-      "sell_above": 29.71,
+      "buy_below": 29.12,
+      "sell_above": 30.00,
       "budget_thb": 100,
       "stop_loss_percent": 1.0,
       "take_profit_percent": 1.2,
       "max_trades_per_day": 3
+    },
+    "THB_BCH": {
+      "buy_below": 15000,
+      "sell_above": 15700,
+      "budget_thb": 100,
+      "stop_loss_percent": 1.5,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LUNA": {
+      "buy_below": 0.00122,
+      "sell_above": 0.00129,
+      "budget_thb": 100,
+      "stop_loss_percent": 1.5,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
     }
   }
 }

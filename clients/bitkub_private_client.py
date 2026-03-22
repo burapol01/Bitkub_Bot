@@ -29,10 +29,43 @@ def _json_body(payload: dict[str, Any] | None) -> str:
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
+def _split_symbol(symbol: str) -> tuple[str, str]:
+    parts = str(symbol).split("_", 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid trading symbol format: {symbol}")
+    return parts[0], parts[1]
+
+
+def _quote_base_lower_symbol(symbol: str) -> str:
+    quote_asset, base_asset = _split_symbol(symbol)
+    return f"{base_asset.lower()}_{quote_asset.lower()}"
+
+
+def _base_quote_upper_symbol(symbol: str) -> str:
+    quote_asset, base_asset = _split_symbol(symbol)
+    return f"{base_asset.upper()}_{quote_asset.upper()}"
+
+
+def _quote_base_upper_symbol(symbol: str) -> str:
+    quote_asset, base_asset = _split_symbol(symbol)
+    return f"{quote_asset.upper()}_{base_asset.upper()}"
+
+
+def _cancel_symbol_variants(symbol: str) -> tuple[str, ...]:
+    return (
+        _quote_base_upper_symbol(symbol).lower(),
+        _quote_base_lower_symbol(symbol),
+        _base_quote_upper_symbol(symbol).lower(),
+    )
+
+
 class BitkubPrivateClient:
     SERVER_TIME_PATHS = ("/api/v3/servertime", "/api/servertime")
     WALLET_PATHS = ("/api/v3/market/wallet", "/api/market/wallet")
     BALANCES_PATHS = ("/api/v3/market/balances", "/api/market/balances")
+    PLACE_BID_PATHS = ("/api/v3/market/place-bid", "/api/market/place-bid")
+    PLACE_ASK_PATHS = ("/api/v3/market/place-ask", "/api/market/place-ask")
+    CANCEL_ORDER_PATHS = ("/api/v3/market/cancel-order", "/api/market/cancel-order")
     OPEN_ORDERS_PATHS = ("/api/v3/market/my-open-orders", "/api/market/my-open-orders")
     ORDER_INFO_PATHS = ("/api/v3/market/order-info", "/api/market/order-info")
     ORDER_HISTORY_PATHS = (
@@ -231,9 +264,92 @@ class BitkubPrivateClient:
     def get_balances(self) -> Any:
         return self._request_methods(("POST", "GET"), self.BALANCES_PATHS)
 
+    def prepare_place_bid_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized_payload = dict(payload)
+        if normalized_payload.get("sym") is not None:
+            normalized_payload["sym"] = _quote_base_lower_symbol(
+                str(normalized_payload["sym"])
+            )
+        return normalized_payload
+
+    def place_bid(self, payload: dict[str, Any]) -> Any:
+        return self._request(
+            "POST",
+            self.PLACE_BID_PATHS,
+            payload=self.prepare_place_bid_payload(payload),
+        )
+
+    def prepare_place_ask_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized_payload = dict(payload)
+        if normalized_payload.get("sym") is not None:
+            normalized_payload["sym"] = _quote_base_lower_symbol(
+                str(normalized_payload["sym"])
+            )
+        return normalized_payload
+
+    def place_ask(self, payload: dict[str, Any]) -> Any:
+        return self._request(
+            "POST",
+            self.PLACE_ASK_PATHS,
+            payload=self.prepare_place_ask_payload(payload),
+        )
+
+    def prepare_cancel_order_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized_payload = dict(payload)
+        if normalized_payload.get("sym") is not None:
+            normalized_payload["sym"] = str(normalized_payload["sym"]).lower()
+        return normalized_payload
+
+    def cancel_order(self, payload: dict[str, Any]) -> Any:
+        normalized_payload = dict(payload)
+        symbol = normalized_payload.get("sym")
+        if symbol is None:
+            return self._request(
+                "POST",
+                self.CANCEL_ORDER_PATHS,
+                payload=self.prepare_cancel_order_payload(normalized_payload),
+            )
+
+        last_error: Exception | None = None
+        for sym_value in _cancel_symbol_variants(str(symbol)):
+            try:
+                attempt_payload = dict(normalized_payload)
+                attempt_payload["sym"] = sym_value
+                return self._request(
+                    "POST",
+                    self.CANCEL_ORDER_PATHS,
+                    payload=attempt_payload,
+                )
+            except BitkubPrivateClientError as e:
+                last_error = e
+
+        if last_error is not None:
+            raise last_error
+        raise BitkubPrivateClientError("Unable to cancel order.")
+
     def get_open_orders(self, symbol: str | None = None) -> Any:
-        params = {"sym": symbol} if symbol else None
-        return self._request("GET", self.OPEN_ORDERS_PATHS, params=params)
+        if symbol is None:
+            return self._request("GET", self.OPEN_ORDERS_PATHS)
+
+        symbol_variants = (
+            _quote_base_lower_symbol(symbol),
+            _base_quote_upper_symbol(symbol),
+        )
+        last_error: Exception | None = None
+
+        for sym_value in symbol_variants:
+            try:
+                return self._request(
+                    "GET",
+                    self.OPEN_ORDERS_PATHS,
+                    params={"sym": sym_value},
+                )
+            except BitkubPrivateClientError as e:
+                last_error = e
+
+        if last_error is not None:
+            raise last_error
+        raise BitkubPrivateClientError("Unable to fetch open orders.")
 
     def get_order_info(
         self,
@@ -242,8 +358,30 @@ class BitkubPrivateClient:
         symbol: str | None = None,
         side: str | None = None,
     ) -> Any:
-        params = {"id": order_id, "sym": symbol, "sd": side}
-        return self._request("GET", self.ORDER_INFO_PATHS, params=params)
+        base_params = {"id": order_id, "sd": side}
+
+        if symbol is None:
+            return self._request("GET", self.ORDER_INFO_PATHS, params=base_params)
+
+        symbol_variants = (
+            _quote_base_lower_symbol(symbol),
+            _base_quote_upper_symbol(symbol),
+        )
+        last_error: Exception | None = None
+
+        for sym_value in symbol_variants:
+            try:
+                return self._request(
+                    "GET",
+                    self.ORDER_INFO_PATHS,
+                    params={**base_params, "sym": sym_value},
+                )
+            except BitkubPrivateClientError as e:
+                last_error = e
+
+        if last_error is not None:
+            raise last_error
+        raise BitkubPrivateClientError("Unable to fetch order info.")
 
     def get_order_history(
         self,
@@ -252,5 +390,80 @@ class BitkubPrivateClient:
         page: int | None = None,
         limit: int | None = None,
     ) -> Any:
-        params = {"sym": symbol, "page": page, "lmt": limit}
-        return self._request("GET", self.ORDER_HISTORY_PATHS, params=params)
+        base_params = {"p": page, "lmt": limit}
+
+        if symbol is None:
+            return self._request("GET", self.ORDER_HISTORY_PATHS, params=base_params)
+
+        symbol_variants = (
+            _base_quote_upper_symbol(symbol),
+            _quote_base_lower_symbol(symbol),
+        )
+        last_error: Exception | None = None
+
+        for sym_value in symbol_variants:
+            try:
+                return self._request(
+                    "GET",
+                    self.ORDER_HISTORY_PATHS,
+                    params={**base_params, "sym": sym_value},
+                )
+            except BitkubPrivateClientError as e:
+                last_error = e
+
+        if last_error is not None:
+            raise last_error
+        raise BitkubPrivateClientError("Unable to fetch order history.")
+
+    def probe_open_orders_variants(self, symbol: str) -> dict[str, Any]:
+        variants: dict[str, Any] = {}
+        attempts = {
+            "quote_base_lower": lambda: self._request(
+                "GET",
+                self.OPEN_ORDERS_PATHS,
+                params={"sym": _quote_base_lower_symbol(symbol)},
+            ),
+            "base_quote_upper": lambda: self._request(
+                "GET",
+                self.OPEN_ORDERS_PATHS,
+                params={"sym": _base_quote_upper_symbol(symbol)},
+            ),
+            "without_symbol": lambda: self.get_open_orders(),
+        }
+
+        for name, fetcher in attempts.items():
+            try:
+                variants[name] = {"ok": True, "data": fetcher(), "error": None}
+            except BitkubPrivateClientError as e:
+                variants[name] = {"ok": False, "data": None, "error": str(e)}
+
+        return variants
+
+    def probe_order_history_variants(self, symbol: str) -> dict[str, Any]:
+        variants: dict[str, Any] = {}
+        attempts = {
+            "base_quote_upper": lambda: self._request(
+                "GET",
+                self.ORDER_HISTORY_PATHS,
+                params={"sym": _base_quote_upper_symbol(symbol)},
+            ),
+            "quote_base_lower": lambda: self._request(
+                "GET",
+                self.ORDER_HISTORY_PATHS,
+                params={"sym": _quote_base_lower_symbol(symbol)},
+            ),
+            "base_quote_upper_with_lmt": lambda: self._request(
+                "GET",
+                self.ORDER_HISTORY_PATHS,
+                params={"sym": _base_quote_upper_symbol(symbol), "lmt": 1},
+            ),
+            "without_symbol": lambda: self.get_order_history(),
+        }
+
+        for name, fetcher in attempts.items():
+            try:
+                variants[name] = {"ok": True, "data": fetcher(), "error": None}
+            except BitkubPrivateClientError as e:
+                variants[name] = {"ok": False, "data": None, "error": str(e)}
+
+        return variants

@@ -10,39 +10,92 @@ def get_fee_rate() -> float:
     return float(config["fee_rate"])
 
 
-def open_position(
-    symbol: str, last_price: float, config: dict, positions: dict, timestamp: str
-):
+def create_position_from_coin_qty(
+    *,
+    last_price: float,
+    coin_qty: float,
+    config: dict,
+    timestamp: str,
+    entry_source: str,
+) -> dict:
     fee_rate = get_fee_rate()
+    net_budget_thb = float(coin_qty) * float(last_price)
+    if fee_rate >= 1:
+        raise ValueError("fee_rate must be less than 1.0")
 
-    budget_thb = float(config["budget_thb"])
-    buy_fee_thb = budget_thb * fee_rate
-    net_budget_thb = budget_thb - buy_fee_thb
-    coin_qty = net_budget_thb / last_price if last_price > 0 else 0.0
+    budget_thb = net_budget_thb / (1 - fee_rate)
+    buy_fee_thb = budget_thb - net_budget_thb
     stop_loss_percent = float(config["stop_loss_percent"])
     take_profit_percent = float(config["take_profit_percent"])
     sell_above = float(config["sell_above"])
 
-    positions[symbol] = {
+    return {
         "buy_time": timestamp,
-        "buy_price": last_price,
+        "buy_price": float(last_price),
         "budget_thb": budget_thb,
         "buy_fee_thb": buy_fee_thb,
         "net_budget_thb": net_budget_thb,
-        "coin_qty": coin_qty,
+        "coin_qty": float(coin_qty),
         "fee_rate": fee_rate,
         "stop_loss_percent": stop_loss_percent,
         "take_profit_percent": take_profit_percent,
         "sell_above": sell_above,
+        "entry_source": entry_source,
     }
+
+
+def open_position(
+    symbol: str, last_price: float, config: dict, positions: dict, timestamp: str
+):
+    fee_rate = get_fee_rate()
+    budget_thb = float(config["budget_thb"])
+    buy_fee_thb = budget_thb * fee_rate
+    net_budget_thb = budget_thb - buy_fee_thb
+    coin_qty = net_budget_thb / last_price if last_price > 0 else 0.0
+
+    positions[symbol] = create_position_from_coin_qty(
+        last_price=last_price,
+        coin_qty=coin_qty,
+        config=config,
+        timestamp=timestamp,
+        entry_source="strategy_buy",
+    )
+    position = positions[symbol]
 
     beep_alert("BUY")
     print(
         f"[PAPER BUY]  {symbol} | buy_price={last_price:,.8f} | "
         f"budget={budget_thb:,.2f} THB | fee={buy_fee_thb:,.2f} | "
         f"net={net_budget_thb:,.2f} | qty={coin_qty:,.8f} | "
-        f"sell_target={sell_above:,.8f} | sl={stop_loss_percent:.2f}% | "
-        f"tp={take_profit_percent:.2f}%"
+        f"sell_target={float(position['sell_above']):,.8f} | "
+        f"sl={float(position['stop_loss_percent']):.2f}% | "
+        f"tp={float(position['take_profit_percent']):.2f}%"
+    )
+
+
+def import_wallet_position(
+    symbol: str,
+    *,
+    last_price: float,
+    coin_qty: float,
+    config: dict,
+    positions: dict,
+    timestamp: str,
+):
+    imported_position = create_position_from_coin_qty(
+        last_price=last_price,
+        coin_qty=coin_qty,
+        config=config,
+        timestamp=timestamp,
+        entry_source="wallet_import",
+    )
+    positions[symbol] = imported_position
+
+    print(
+        f"[PAPER IMPORT] {symbol} | source=wallet | "
+        f"price={last_price:,.8f} | qty={float(coin_qty):,.8f} | "
+        f"budget={float(imported_position['budget_thb']):,.2f} THB | "
+        f"target={float(imported_position['sell_above']):,.8f}"
     )
 
 

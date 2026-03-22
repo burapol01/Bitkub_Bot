@@ -21,6 +21,16 @@ def clear_screen():
     os.system("cls")
 
 
+def format_bytes(size_bytes: int) -> str:
+    units = ["B", "KB", "MB", "GB"]
+    size = float(size_bytes)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    return f"{size:.2f} {units[unit_index]}"
+
+
 def section_title(title: str):
     print()
     print(title)
@@ -84,7 +94,9 @@ def render_header(
     )
     hotkey_line = (
         f"Hotkeys: R=reload | P={pause_hotkey_text(manual_pause, safety_pause)} | "
-        f"S=positions | D=daily stats | A=account | B=db summary | H=health | Q=quit"
+        f"S=pos | D=daily | A=acct | B=db | T=reports | "
+        f"F=filter | H=health | O=orders | I=wallet | C=clear | M=manual | "
+        f"L=live | E=exec | K=next | U=update | X=cancel | Q=quit"
     )
 
     print(divider("="))
@@ -158,12 +170,21 @@ def position_detail_text(symbol: str, last_price: float, rule: dict, fee_rate: f
         else 0.0
     )
     move_percent = price_change_percent(float(pos["buy_price"]), last_price)
+    entry_source = str(pos.get("entry_source", "strategy_buy"))
+    source_text = (
+        "wallet"
+        if entry_source == "wallet_import"
+        else "strategy"
+        if entry_source == "strategy_buy"
+        else entry_source
+    )
 
     return (
         f"position: entry={pos['buy_price']:,.8f} qty={pos['coin_qty']:,.8f} "
         f"target={active_sell_above:,.8f} sl={stop_loss_percent:.2f}% "
         f"tp={take_profit_percent:.2f}% move={move_percent:.2f}% "
-        f"uPnL={unrealized_pnl:,.2f} THB ({unrealized_pnl_percent:.2f}%)"
+        f"uPnL={unrealized_pnl:,.2f} THB ({unrealized_pnl_percent:.2f}%) "
+        f"src={source_text}"
     )
 
 
@@ -211,7 +232,8 @@ def print_open_positions_snapshot(
                 f"{target:>{PRICE_COL},.8f} "
                 f"{move_percent:8.2f} {unrealized_pnl:14,.2f}  "
                 f"qty={float(pos['coin_qty']):,.8f} sl={float(pos.get('stop_loss_percent', 0.0)):.2f}% "
-                f"tp={float(pos.get('take_profit_percent', 0.0)):.2f}%"
+                f"tp={float(pos.get('take_profit_percent', 0.0)):.2f}% "
+                f"src={'wallet' if pos.get('entry_source') == 'wallet_import' else 'strategy'}"
             )
 
     section_title("ACTIVE COOLDOWNS")
@@ -223,6 +245,129 @@ def print_open_positions_snapshot(
             print(
                 f"{symbol:<{SYMBOL_COL}} until={cooldown_until} remaining={remaining_seconds}s"
             )
+
+    print(divider("=") + "\n")
+
+
+def print_live_holdings_snapshot(rows: list[dict[str, float | str | None]]):
+    print()
+    print(divider("="))
+    section_title("LIVE HOLDINGS")
+
+    if not rows:
+        print("No tracked live holdings were found in the exchange balances.")
+        print(divider("=") + "\n")
+        return
+
+    print(
+        f"{'SYMBOL':<{SYMBOL_COL}} "
+        f"{'AVAILABLE':>{PRICE_COL}} "
+        f"{'RESERVED':>{PRICE_COL}} "
+        f"{'LAST':>{PRICE_COL}} "
+        f"{'VALUE THB':>{PRICE_COL}}  DETAILS"
+    )
+    print(divider("-"))
+
+    for row in rows:
+        latest_price = row.get("latest_price")
+        market_value_thb = row.get("market_value_thb")
+        last_price_text = f"{float(latest_price):,.8f}" if latest_price is not None else "n/a"
+        market_value_text = (
+            f"{float(market_value_thb):,.2f}" if market_value_thb is not None else "n/a"
+        )
+        detail_parts = [f"asset={row['asset']} total={float(row['total_qty']):,.8f}"]
+        if row.get("last_execution_rate") is not None:
+            detail_parts.append(
+                f"last_exec={str(row.get('last_execution_side'))}@{float(row['last_execution_rate']):,.8f}"
+            )
+        if row.get("entry_rate") is not None:
+            detail_parts.append(f"entry={float(row['entry_rate']):,.8f}")
+        if row.get("stop_loss_price") is not None:
+            detail_parts.append(f"sl={float(row['stop_loss_price']):,.8f}")
+        if row.get("take_profit_price") is not None:
+            detail_parts.append(f"tp={float(row['take_profit_price']):,.8f}")
+        if row.get("sell_above") is not None:
+            detail_parts.append(f"target={float(row['sell_above']):,.8f}")
+        if row.get("auto_exit_status"):
+            detail_parts.append(f"auto={row['auto_exit_status']}")
+        if row.get("last_execution_order_id"):
+            detail_parts.append(f"order_id={row['last_execution_order_id']}")
+
+        print(
+            f"{str(row['symbol']):<{SYMBOL_COL}} "
+            f"{float(row['available_qty']):>{PRICE_COL},.8f} "
+            f"{float(row['reserved_qty']):>{PRICE_COL},.8f} "
+            f"{last_price_text:>{PRICE_COL}} "
+            f"{market_value_text:>{PRICE_COL}}  "
+            + " | ".join(detail_parts)
+        )
+
+    print(divider("=") + "\n")
+
+
+def print_execution_orders_snapshot(summary: dict[str, list[dict]], selected_execution_order_id: int | None):
+    print()
+    print(divider("="))
+    section_title("EXECUTION ORDERS")
+
+    open_orders = summary.get("open_orders", [])
+    recent_orders = summary.get("recent_orders", [])
+    recent_events = summary.get("recent_events", [])
+    live_reconciliation = summary.get("live_reconciliation", {})
+
+    section_title("OPEN EXECUTION ORDERS")
+    if not open_orders:
+        print("No open execution orders.")
+    else:
+        for row in open_orders:
+            marker = "*" if int(row["id"]) == int(selected_execution_order_id or -1) else " "
+            print(
+                f"{marker} id={row['id']} | {row['symbol']} | {row['side']} | "
+                f"state={row['state']} | updated={row['updated_at']}"
+            )
+            if row.get("exchange_order_id"):
+                print(f"  exchange_order_id={row['exchange_order_id']}")
+            print(f"  message={row['message']}")
+
+    section_title("RECENT EXECUTION ORDERS")
+    if not recent_orders:
+        print("No execution orders stored in SQLite yet.")
+    else:
+        for row in recent_orders:
+            marker = "*" if int(row["id"]) == int(selected_execution_order_id or -1) else " "
+            print(
+                f"{marker} id={row['id']} | {row['created_at']} | {row['symbol']} | "
+                f"{row['side']} | {row['state']}"
+            )
+
+    section_title("RECENT EXECUTION EVENTS")
+    if not recent_events:
+        print("No execution order events stored in SQLite yet.")
+    else:
+        for row in recent_events:
+            print(
+                f"id={row['execution_order_id']} | {row['created_at']} | "
+                f"{row['event_type']} | {row['from_state']}->{row['to_state']} | {row['message']}"
+            )
+
+    section_title("LIVE RECONCILIATION")
+    printed_any = False
+    for title, rows in (
+        ("warnings", live_reconciliation.get("warnings", [])),
+        ("partial_fills", live_reconciliation.get("partially_filled_orders", [])),
+        ("reserved_without_open_order", live_reconciliation.get("reserved_without_open_order", [])),
+        ("open_order_without_reserved", live_reconciliation.get("open_order_without_reserved", [])),
+        ("triggered_exit_candidates", live_reconciliation.get("triggered_exit_candidates", [])),
+        ("unmanaged_live_holdings", live_reconciliation.get("unmanaged_live_holdings", [])),
+    ):
+        if not rows:
+            continue
+        printed_any = True
+        print(f"[{title}]")
+        for row in rows:
+            print(f"- {row}")
+    if not printed_any:
+        print("No live reconciliation issues detected.")
 
     print(divider("=") + "\n")
 
@@ -404,6 +549,20 @@ def print_database_summary(summary: dict, today: str):
                 f"{row['zone']} | {row['status']} | last={row['last_price']:,.8f}"
             )
 
+    section_title("TODAY MARKET ANALYTICS")
+    market_analytics = market_snapshots.get("analytics", [])
+    if not market_analytics:
+        print("No market analytics available yet for today.")
+    else:
+        for row in market_analytics:
+            print(
+                f"{row['symbol']} | snapshots={row['snapshots']} | "
+                f"first={row['first_price']:,.8f} | last={row['latest_price']:,.8f} | "
+                f"min={row['min_price']:,.8f} | max={row['max_price']:,.8f} | "
+                f"move={row['day_move_percent']:.2f}% | zone={row['latest_zone']} | "
+                f"mode={row['latest_mode']}"
+            )
+
     section_title("RECENT MARKET SNAPSHOTS")
     recent_market_snapshots = market_snapshots.get("recent", [])
     if not recent_market_snapshots:
@@ -452,17 +611,80 @@ def print_health_snapshot(health: dict):
         f"rules={health['rules_count']} | open_positions={health['open_positions']} | "
         f"cooldowns={health['cooldowns']} | tracked_days={health['tracked_days']}"
     )
+    print(f"report_filter={health.get('report_filter_symbol') or 'ALL'}")
 
     section_title("PATHS")
     print(f"config: {health['config_path']}")
     print(f"runtime_state: {health['state_path']}")
     print(f"sqlite: {health['db_path']}")
 
+    section_title("DB STORAGE")
+    db_storage = health.get("db_storage", {})
+    print(
+        f"exists={'YES' if db_storage.get('db_exists') else 'NO'} | "
+        f"size={format_bytes(int(db_storage.get('db_size_bytes', 0)))}"
+    )
+    table_counts = db_storage.get("table_counts", {})
+    if table_counts:
+        print(
+            " | ".join(
+                f"{table}={count}" for table, count in sorted(table_counts.items())
+            )
+        )
+    latest_cleanup = db_storage.get("latest_cleanup")
+    if latest_cleanup:
+        print(f"latest_cleanup: {latest_cleanup['created_at']} | {latest_cleanup['message']}")
+
+    section_title("RETENTION")
+    retention_days = health.get("retention_days", {})
+    if retention_days:
+        for key, value in retention_days.items():
+            print(f"{key}: {value} days")
+
     section_title("PRIVATE API")
     print(f"status: {health['private_api_status']}")
     capabilities = health.get("private_api_capabilities", [])
     if capabilities:
         print(f"capabilities: {' | '.join(capabilities)}")
+    open_orders_errors = health.get("open_orders_errors", {})
+    if open_orders_errors:
+        print("open_orders_errors:")
+        for symbol, error in open_orders_errors.items():
+            print(f"- {symbol}: {error}")
+
+    section_title("ORDER FOUNDATION")
+    order_foundation = health.get("order_foundation", {})
+    print(f"status: {order_foundation.get('status', 'unknown')}")
+    order_capabilities = order_foundation.get("capabilities", [])
+    if order_capabilities:
+        print(f"capabilities: {' | '.join(order_capabilities)}")
+
+    section_title("LIVE EXECUTION")
+    live_guardrails = health.get("live_execution_guardrails", {})
+    if not live_guardrails:
+        print("No live execution guardrail snapshot recorded.")
+    else:
+        print(
+            f"ready={'YES' if live_guardrails.get('ready') else 'NO'} | "
+            f"kill_switch={'ON' if live_guardrails.get('live_execution_enabled') else 'OFF'} | "
+            f"auto_exit={'ON' if live_guardrails.get('live_auto_exit_enabled') else 'OFF'} | "
+            f"strategy_wired={'YES' if live_guardrails.get('strategy_execution_wired') else 'NO'}"
+        )
+        print(
+            f"open_orders_capability={live_guardrails.get('open_orders_capability', 'UNKNOWN')} | "
+            f"thb_available={float(live_guardrails.get('thb_available_balance', 0.0)):,.2f} | "
+            f"min_thb_balance={float(live_guardrails.get('live_min_thb_balance', 0.0)):,.2f}"
+        )
+        print(
+            f"max_order_thb={float(live_guardrails.get('live_max_order_thb', 0.0)):,.2f} | "
+            f"slippage_tolerance={float(live_guardrails.get('live_slippage_tolerance_percent', 0.0)):.2f}% | "
+            f"daily_loss_limit={float(live_guardrails.get('live_daily_loss_limit_thb', 0.0)):,.2f} THB"
+        )
+        blocked_reasons = live_guardrails.get("blocked_reasons", [])
+        if blocked_reasons:
+            print("blocked_reasons:")
+            for reason in blocked_reasons:
+                print(f"- {reason}")
 
     section_title("LATEST ACCOUNT SNAPSHOT")
     latest_account_snapshot = health.get("latest_account_snapshot")
@@ -495,6 +717,42 @@ def print_health_snapshot(health: dict):
             for warning in warnings:
                 print(f"- {warning}")
 
+    section_title("LIVE RECONCILIATION")
+    live_reconciliation = health.get("live_reconciliation", {})
+    printed_any = False
+    for title, rows in (
+        ("warnings", live_reconciliation.get("warnings", [])),
+        ("partial_fills", live_reconciliation.get("partially_filled_orders", [])),
+        ("reserved_without_open_order", live_reconciliation.get("reserved_without_open_order", [])),
+        ("open_order_without_reserved", live_reconciliation.get("open_order_without_reserved", [])),
+        ("triggered_exit_candidates", live_reconciliation.get("triggered_exit_candidates", [])),
+        ("unmanaged_live_holdings", live_reconciliation.get("unmanaged_live_holdings", [])),
+    ):
+        if not rows:
+            continue
+        printed_any = True
+        print(f"[{title}]")
+        for row in rows:
+            print(f"- {row}")
+    if not printed_any:
+        print("No live reconciliation issues detected.")
+
+    section_title("LATEST EXECUTION ORDER")
+    latest_execution_order = health.get("latest_execution_order")
+    if not latest_execution_order:
+        print("No execution order recorded yet.")
+    else:
+        print(
+            f"id={latest_execution_order['id']} | symbol={latest_execution_order['symbol']} | "
+            f"side={latest_execution_order['side']} | type={latest_execution_order['order_type']} | "
+            f"state={latest_execution_order['state']}"
+        )
+        print(f"created={latest_execution_order['created_at']}")
+        print(f"updated={latest_execution_order['updated_at']}")
+        print(f"message={latest_execution_order['message']}")
+        if latest_execution_order.get("exchange_order_id"):
+            print(f"exchange_order_id={latest_execution_order['exchange_order_id']}")
+
     section_title("LAST NOTICE")
     if health.get("notice"):
         print(health["notice"])
@@ -502,5 +760,140 @@ def print_health_snapshot(health: dict):
             print(f"- {line}")
     else:
         print("No active notice.")
+
+    print(divider("=") + "\n")
+
+
+def print_order_probe(probe: dict):
+    print()
+    print(divider("="))
+    section_title("ORDER FOUNDATION PROBE")
+
+    print(f"status: {probe.get('status', 'unknown')}")
+    print(
+        f"foundation_ready={'YES' if probe.get('foundation_ready') else 'NO'} | "
+        f"execution_locked={'YES' if probe.get('execution_locked') else 'NO'}"
+    )
+    capabilities = probe.get("capabilities", [])
+    if capabilities:
+        print(f"capabilities: {' | '.join(capabilities)}")
+
+    section_title("OPEN ORDERS PROBE")
+    open_orders = probe.get("open_orders", {})
+    if not open_orders:
+        print("No open-order probe data.")
+    else:
+        for symbol in sorted(open_orders):
+            entry = open_orders[symbol]
+            if entry.get("ok", False):
+                print(f"{symbol}: OK")
+            else:
+                print(f"{symbol}: {entry.get('error')}")
+
+    section_title("ORDER HISTORY PROBE")
+    order_history = probe.get("order_history", {})
+    if not order_history:
+        print("No order-history probe data.")
+    else:
+        for symbol in sorted(order_history):
+            entry = order_history[symbol]
+            if entry.get("ok", False):
+                print(f"{symbol}: OK")
+            else:
+                print(f"{symbol}: {entry.get('error')}")
+
+    section_title("ENDPOINT VARIANTS")
+    endpoint_variants = probe.get("endpoint_variants", {})
+    if not endpoint_variants:
+        print("No endpoint variant diagnostics.")
+    else:
+        for symbol in sorted(endpoint_variants):
+            print(f"[{symbol}]")
+            for family, variants in endpoint_variants[symbol].items():
+                print(f"  {family}:")
+                for variant_name, entry in variants.items():
+                    if entry.get("ok", False):
+                        print(f"    {variant_name}: OK")
+                    else:
+                        print(f"    {variant_name}: {entry.get('error')}")
+
+    section_title("PAYLOAD EXAMPLES")
+    payload_examples = probe.get("payload_examples", {})
+    if not payload_examples:
+        print("No payload examples generated.")
+    else:
+        for symbol in sorted(payload_examples):
+            print(f"[{symbol}]")
+            for key, payload in payload_examples[symbol].items():
+                print(f"  {key}: {payload}")
+
+    print(divider("=") + "\n")
+
+
+def print_reporting_summary(report: dict, today: str):
+    print()
+    print(divider("="))
+    filter_symbol = report.get("filter_symbol")
+    filter_label = filter_symbol or "ALL"
+    section_title(f"DB REPORTS ({today})")
+    print(f"Filter: {filter_label}")
+
+    symbol_summary = report.get("symbol_summary", [])
+    recent_trades = report.get("recent_trades", [])
+    recent_errors = report.get("recent_errors", [])
+    recent_execution_orders = report.get("recent_execution_orders", [])
+    recent_auto_exit_events = report.get("recent_auto_exit_events", [])
+
+    section_title("SYMBOL SUMMARY")
+    if not symbol_summary:
+        print("No symbol report data available yet for today.")
+    else:
+        for row in symbol_summary:
+            print(
+                f"{row['symbol']} | zone={row['latest_zone']} | "
+                f"snapshots={row['snapshots']} | signals={row['signals']} | "
+                f"trades={row['trades']} | wins={row['wins']} | losses={row['losses']} | "
+                f"pnl={row['pnl_thb']:,.2f} THB"
+            )
+            if row["snapshots"] > 0:
+                print(
+                    f"  first={row['first_price']:,.8f} | last={row['latest_price']:,.8f} | "
+                    f"min={row['min_price']:,.8f} | max={row['max_price']:,.8f} | "
+                    f"move={row['day_move_percent']:.2f}%"
+                )
+
+    section_title("RECENT PAPER TRADE HISTORY")
+    if not recent_trades:
+        print("No paper trades stored in SQLite yet.")
+    else:
+        for row in recent_trades:
+            print(
+                f"{row['sell_time']} | {row['symbol']} | {row['exit_reason']} | "
+                f"pnl={row['pnl_thb']:,.2f} THB ({row['pnl_percent']:.2f}%)"
+            )
+
+    section_title("RECENT EXECUTION ORDERS")
+    if not recent_execution_orders:
+        print("No execution orders stored in SQLite yet.")
+    else:
+        for row in recent_execution_orders:
+            print(
+                f"id={row['id']} | {row['created_at']} | {row['symbol']} | "
+                f"{row['side']} | {row['state']} | {row['message']}"
+            )
+
+    section_title("RECENT AUTO EXIT EVENTS")
+    if not recent_auto_exit_events:
+        print("No auto live exit events stored in SQLite yet.")
+    else:
+        for row in recent_auto_exit_events:
+            print(f"{row['created_at']} | {row['severity'].upper()} | {row['message']}")
+
+    section_title("RECENT RUNTIME ERRORS")
+    if not recent_errors:
+        print("No runtime errors stored in SQLite yet.")
+    else:
+        for row in recent_errors:
+            print(f"{row['created_at']} | {row['event_type']} | {row['message']}")
 
     print(divider("=") + "\n")

@@ -2,6 +2,7 @@ from typing import Any
 
 from clients.bitkub_private_client import BitkubPrivateClient, BitkubPrivateClientError
 from config import load_config
+from services.reconciliation_service import symbol_to_asset
 
 
 def _capture_result(fetcher) -> dict[str, Any]:
@@ -48,6 +49,23 @@ def account_snapshot_errors(snapshot: dict[str, Any]) -> list[str]:
     return errors
 
 
+def open_orders_error_map(snapshot: dict[str, Any] | None) -> dict[str, str]:
+    if not snapshot:
+        return {}
+
+    errors: dict[str, str] = {}
+    open_orders = snapshot.get("open_orders", {})
+    if not isinstance(open_orders, dict):
+        return errors
+
+    for symbol in sorted(open_orders):
+        entry = open_orders[symbol]
+        if isinstance(entry, dict) and not entry.get("ok", False) and entry.get("error"):
+            errors[symbol] = str(entry["error"])
+
+    return errors
+
+
 def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
     if not snapshot:
         return ["wallet=unknown", "balances=unknown", "open_orders=unknown"]
@@ -75,3 +93,104 @@ def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
 
     capabilities.append(f"open_orders={open_orders_status}")
     return capabilities
+
+
+def build_live_holdings_snapshot(
+    *,
+    account_snapshot: dict | None,
+    latest_prices: dict[str, float],
+    latest_filled_execution_orders: dict[str, dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    config = load_config()
+    rules = config.get("rules", {})
+    balances = {}
+
+    if account_snapshot:
+        balances = account_snapshot.get("balances", {})
+
+    balances_payload = {}
+    if isinstance(balances, dict) and balances.get("ok", False):
+        balances_payload = balances.get("data", {})
+        if isinstance(balances_payload, dict) and "result" in balances_payload:
+            balances_payload = balances_payload["result"]
+
+    rows: list[dict[str, Any]] = []
+    latest_filled_execution_orders = latest_filled_execution_orders or {}
+
+    for symbol in sorted(rules):
+        asset = symbol_to_asset(symbol)
+        balance_entry = balances_payload.get(asset, {}) if isinstance(balances_payload, dict) else {}
+        if isinstance(balance_entry, dict):
+            available_qty = float(balance_entry.get("available", 0.0) or 0.0)
+            reserved_qty = float(balance_entry.get("reserved", 0.0) or 0.0)
+        else:
+            available_qty = float(balance_entry or 0.0)
+            reserved_qty = 0.0
+
+        total_qty = available_qty + reserved_qty
+        if total_qty <= 0:
+            continue
+
+        latest_price = latest_prices.get(symbol)
+        latest_order = latest_filled_execution_orders.get(symbol)
+        last_order_rate = None
+        last_order_side = None
+        if latest_order:
+            response_payload = latest_order.get("response_payload", {})
+            result = response_payload.get("result", {}) if isinstance(response_payload, dict) else {}
+            try:
+                last_order_rate = float(result.get("rate"))
+            except (TypeError, ValueError):
+                last_order_rate = None
+            last_order_side = latest_order.get("side")
+
+        market_value_thb = float(latest_price) * total_qty if latest_price is not None else None
+        entry_rate = last_order_rate
+        stop_loss_price = None
+        take_profit_price = None
+        sell_above = None
+        auto_exit_status = "NO_BUY_REFERENCE"
+        if symbol in rules and last_order_side == "buy" and entry_rate is not None:
+            rule = rules[symbol]
+            stop_loss_price = float(entry_rate) * (
+                1 - float(rule["stop_loss_percent"]) / 100
+            )
+            take_profit_price = float(entry_rate) * (
+                1 + float(rule["take_profit_percent"]) / 100
+            )
+            sell_above = float(rule["sell_above"])
+
+            if reserved_qty > 0 and available_qty <= 0:
+                auto_exit_status = "RESERVED_BY_ORDER"
+            elif latest_price is None:
+                auto_exit_status = "PRICE_UNAVAILABLE"
+            elif float(latest_price) <= stop_loss_price:
+                auto_exit_status = "STOP_LOSS_TRIGGER"
+            elif float(latest_price) >= sell_above:
+                auto_exit_status = "SELL_ZONE_TRIGGER"
+            elif float(latest_price) >= take_profit_price:
+                auto_exit_status = "TAKE_PROFIT_TRIGGER"
+            else:
+                auto_exit_status = "WAIT"
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "asset": asset,
+                "available_qty": available_qty,
+                "reserved_qty": reserved_qty,
+                "total_qty": total_qty,
+                "latest_price": latest_price,
+                "market_value_thb": market_value_thb,
+                "entry_rate": entry_rate,
+                "stop_loss_price": stop_loss_price,
+                "take_profit_price": take_profit_price,
+                "sell_above": sell_above,
+                "auto_exit_status": auto_exit_status,
+                "last_execution_rate": last_order_rate,
+                "last_execution_side": last_order_side,
+                "last_execution_order_id": latest_order.get("exchange_order_id") if latest_order else None,
+            }
+        )
+
+    return rows
