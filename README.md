@@ -3,7 +3,8 @@
 Bitkub trading workspace with three clear layers:
 
 - `main.py` runs the console engine and auto loop.
-- `streamlit_app.py` provides a dashboard and control surface.
+- `ui/streamlit/app.py` contains the main dashboard and page routing.
+- `streamlit_app.py` is a thin compatibility launcher.
 - `data/bitkub.db` stores logs, reports, execution history, and diagnostics.
 
 Current direction:
@@ -51,7 +52,7 @@ Responsibilities:
 Run the UI with:
 
 ```powershell
-.venv\Scripts\python.exe -m streamlit run streamlit_app.py
+.venv\Scripts\python.exe -m streamlit run ui/streamlit/app.py
 ```
 
 If Streamlit is not installed:
@@ -344,30 +345,31 @@ Run console engine:
 Run Streamlit UI:
 
 ```powershell
-.venv\Scripts\python.exe -m streamlit run streamlit_app.py
+.venv\Scripts\python.exe -m streamlit run ui/streamlit/app.py
 ```
 
 Check syntax:
 
 ```powershell
-.venv\Scripts\python.exe -m py_compile main.py streamlit_app.py config.py
+.venv\Scripts\python.exe -m py_compile main.py streamlit_app.py ui\streamlit\app.py config.py
 ```
 
 Check more files:
 
 ```powershell
-.venv\Scripts\python.exe -m py_compile main.py streamlit_app.py streamlit_ui_pages.py streamlit_ui_data.py streamlit_ui_actions.py streamlit_ui_styles.py streamlit_ui_refresh.py
+.venv\Scripts\python.exe -m py_compile main.py streamlit_app.py ui\streamlit\app.py ui\streamlit\pages.py ui\streamlit\data.py ui\streamlit\actions.py ui\streamlit\styles.py ui\streamlit\refresh.py
 ```
 
 ## Important Files
 
 - [main.py](/d:/Project/Bitkub/main.py)
 - [streamlit_app.py](/d:/Project/Bitkub/streamlit_app.py)
-- [streamlit_ui_pages.py](/d:/Project/Bitkub/streamlit_ui_pages.py)
-- [streamlit_ui_data.py](/d:/Project/Bitkub/streamlit_ui_data.py)
-- [streamlit_ui_actions.py](/d:/Project/Bitkub/streamlit_ui_actions.py)
-- [streamlit_ui_styles.py](/d:/Project/Bitkub/streamlit_ui_styles.py)
-- [streamlit_ui_refresh.py](/d:/Project/Bitkub/streamlit_ui_refresh.py)
+- [app.py](/d:/Project/Bitkub/ui/streamlit/app.py)
+- [pages.py](/d:/Project/Bitkub/ui/streamlit/pages.py)
+- [data.py](/d:/Project/Bitkub/ui/streamlit/data.py)
+- [actions.py](/d:/Project/Bitkub/ui/streamlit/actions.py)
+- [styles.py](/d:/Project/Bitkub/ui/streamlit/styles.py)
+- [refresh.py](/d:/Project/Bitkub/ui/streamlit/refresh.py)
 - [config.py](/d:/Project/Bitkub/config.py)
 - [config.json](/d:/Project/Bitkub/config.json)
 - [services/db_service.py](/d:/Project/Bitkub/services/db_service.py)

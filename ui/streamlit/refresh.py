@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 PAGE_ORDER = (
@@ -48,19 +49,30 @@ def render_auto_refresh_controls(page_name: str) -> tuple[bool, int]:
     return enabled and safe_page, interval_seconds
 
 
-def maybe_auto_refresh(page_name: str, enabled: bool, interval_seconds: int) -> None:
+def get_auto_refresh_run_every(page_name: str, enabled: bool, interval_seconds: int) -> str | None:
+    if not enabled or page_name not in AUTO_REFRESH_SAFE_PAGES:
+        return None
+
+    return f"{int(interval_seconds)}s"
+
+
+def render_refreshable_fragment(run_every: str | None, render_fn: Callable[[], None]) -> None:
+    if run_every is None:
+        render_fn()
+        return
+
+    @st.fragment(run_every=run_every)
+    def _refresh_fragment() -> None:
+        render_fn()
+
+    _refresh_fragment()
+
+
+def render_auto_refresh_status(page_name: str, enabled: bool, interval_seconds: int) -> None:
     if not enabled or page_name not in AUTO_REFRESH_SAFE_PAGES:
         return
 
-    components.html(
-        f"""
-        <script>
-        window.setTimeout(function() {{
-          window.parent.location.reload();
-        }}, {int(interval_seconds) * 1000});
-        </script>
-        """,
-        height=0,
-        width=0,
+    st.caption(
+        f"Auto refresh every {interval_seconds}s on {page_name}. "
+        "Live data panels rerun without reloading the whole browser page."
     )
-    st.caption(f"Auto refresh every {interval_seconds}s on {page_name}.")

@@ -26,13 +26,13 @@ from services.reconciliation_service import (
     extract_available_balances,
     summarize_live_reconciliation,
 )
-from streamlit_ui_actions import (
+from ui.streamlit.actions import (
     persist_execution_order_update,
     submit_manual_order_from_ui,
 )
-from streamlit_ui_data import calc_daily_totals
-from streamlit_ui_refresh import PAGE_ORDER
-from streamlit_ui_styles import badge, render_metric_card
+from ui.streamlit.data import calc_daily_totals
+from ui.streamlit.refresh import PAGE_ORDER, render_refreshable_fragment
+from ui.streamlit.styles import badge, render_metric_card
 from utils.time_utils import now_text
 
 
@@ -279,6 +279,7 @@ def render_live_ops_page(
     runtime: dict[str, Any],
     private_ctx: dict[str, Any],
     latest_prices: dict[str, float],
+    auto_refresh_run_every: str | None = None,
 ) -> None:
     client = private_ctx["client"]
     account_snapshot = private_ctx["account_snapshot"]
@@ -286,110 +287,132 @@ def render_live_ops_page(
         st.warning("Private API is required for live operations.")
         return
 
-    _, _, _, total_pnl = calc_daily_totals(runtime["daily_stats"])
-    guardrails = build_live_execution_guardrails(
-        config=config,
-        trading_mode=str(config["mode"]),
-        private_client=client,
-        private_api_capabilities=private_ctx["private_api_capabilities"],
-        manual_pause=runtime["manual_pause"],
-        safety_pause=False,
-        total_realized_pnl_thb=total_pnl,
-        available_balances=extract_available_balances(account_snapshot),
-        strategy_execution_wired=False,
-    )
-    execution_summary = fetch_execution_console_summary()
-    open_execution_orders = execution_summary["open_orders"]
-    recent_execution_orders = execution_summary["recent_orders"]
-    recent_execution_events = execution_summary["recent_events"]
     available_balances = extract_available_balances(account_snapshot)
     thb_available = float(available_balances.get("THB", 0.0))
-    last_execution = recent_execution_orders[0] if recent_execution_orders else None
+    symbols = sorted(config["rules"].keys())
+    manual_defaults = dict(config.get("live_manual_order", {}))
+    default_symbol = str(manual_defaults.get("symbol", symbols[0]))
 
-    card1, card2, card3 = st.columns(3)
-    with card1:
-        render_metric_card(
-            "Execution Ready",
-            "YES" if guardrails.get("ready") else "NO",
-            "Kill switch ON" if guardrails.get("live_execution_enabled") else "Kill switch OFF",
+    def _load_live_ops_dynamic() -> dict[str, Any]:
+        _, _, _, total_pnl = calc_daily_totals(runtime["daily_stats"])
+        guardrails = build_live_execution_guardrails(
+            config=config,
+            trading_mode=str(config["mode"]),
+            private_client=client,
+            private_api_capabilities=private_ctx["private_api_capabilities"],
+            manual_pause=runtime["manual_pause"],
+            safety_pause=False,
+            total_realized_pnl_thb=total_pnl,
+            available_balances=extract_available_balances(account_snapshot),
+            strategy_execution_wired=False,
         )
-    with card2:
-        render_metric_card(
-            "Open Live Orders",
-            str(len(open_execution_orders)),
-            f"Recent events {len(recent_execution_events)}",
-        )
-    with card3:
-        render_metric_card(
-            "THB Available",
-            f"{thb_available:,.2f}",
-            f"Min balance {float(config['live_min_thb_balance']):,.2f}",
-        )
+        execution_summary = fetch_execution_console_summary()
+        return {
+            "guardrails": guardrails,
+            "execution_summary": execution_summary,
+            "open_execution_orders": execution_summary["open_orders"],
+            "recent_execution_orders": execution_summary["recent_orders"],
+            "recent_execution_events": execution_summary["recent_events"],
+        }
 
-    st.markdown('<div class="panel-title">Guardrail Snapshot</div>', unsafe_allow_html=True)
-    if guardrails.get("blocked_reasons"):
-        st.markdown(
-            " ".join(badge(reason, "warn") for reason in guardrails["blocked_reasons"]),
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(badge("No blocking reasons", "good"), unsafe_allow_html=True)
+    def _render_live_ops_dynamic_top() -> None:
+        dynamic = _load_live_ops_dynamic()
+        guardrails = dynamic["guardrails"]
+        open_execution_orders = dynamic["open_execution_orders"]
+        recent_execution_orders = dynamic["recent_execution_orders"]
+        recent_execution_events = dynamic["recent_execution_events"]
+        last_execution = recent_execution_orders[0] if recent_execution_orders else None
 
-    _show_live_ops_feedback()
+        card1, card2, card3 = st.columns(3)
+        with card1:
+            render_metric_card(
+                "Execution Ready",
+                "YES" if guardrails.get("ready") else "NO",
+                "Kill switch ON" if guardrails.get("live_execution_enabled") else "Kill switch OFF",
+            )
+        with card2:
+            render_metric_card(
+                "Open Live Orders",
+                str(len(open_execution_orders)),
+                f"Recent events {len(recent_execution_events)}",
+            )
+        with card3:
+            render_metric_card(
+                "THB Available",
+                f"{float(extract_available_balances(account_snapshot).get('THB', 0.0)):,.2f}",
+                f"Min balance {float(config['live_min_thb_balance']):,.2f}",
+            )
 
-    summary_left, summary_right = st.columns([0.95, 1.05])
-    with summary_left:
-        st.markdown('<div class="panel-title">Latest Action Snapshot</div>', unsafe_allow_html=True)
-        if last_execution:
+        st.markdown('<div class="panel-title">Guardrail Snapshot</div>', unsafe_allow_html=True)
+        if guardrails.get("blocked_reasons"):
             st.markdown(
-                " ".join(
-                    [
-                        badge(str(last_execution["symbol"]), "info"),
-                        badge(str(last_execution["side"]).upper(), "warn"),
-                        badge(str(last_execution["state"]).upper(), "good" if str(last_execution["state"]) in {"filled", "canceled"} else "info"),
-                    ]
-                ),
+                " ".join(badge(reason, "warn") for reason in guardrails["blocked_reasons"]),
                 unsafe_allow_html=True,
             )
-            st.caption(f"id={last_execution['id']} | updated={last_execution['updated_at']}")
-            if last_execution.get("message"):
-                st.caption(str(last_execution["message"]))
         else:
-            st.caption("No execution history yet.")
-    with summary_right:
-        st.markdown('<div class="panel-title">Open Order Focus</div>', unsafe_allow_html=True)
-        if open_execution_orders:
-            focus_options = {
-                f"id={order['id']} | {order['symbol']} | {order['side']} | {order['state']}": order
-                for order in open_execution_orders
-            }
-            current_focus = st.selectbox("Selected Open Order", list(focus_options.keys()), key="live_ops_selected_order")
-            focus_order = focus_options[current_focus]
-            st.markdown(
-                " ".join(
-                    [
-                        badge(focus_order["symbol"], "info"),
-                        badge(str(focus_order["side"]).upper(), "warn"),
-                        badge(str(focus_order["state"]).upper(), "info"),
-                    ]
-                ),
-                unsafe_allow_html=True,
-            )
-            st.caption(f"created={focus_order['created_at']}")
-            st.caption(f"updated={focus_order['updated_at']}")
-            if focus_order.get("exchange_order_id"):
-                st.caption(f"exchange_order_id={focus_order['exchange_order_id']}")
-            if focus_order.get("message"):
-                st.caption(str(focus_order["message"]))
-        else:
-            st.caption("No open live order is currently selected.")
+            st.markdown(badge("No blocking reasons", "good"), unsafe_allow_html=True)
+
+        _show_live_ops_feedback()
+
+        summary_left, summary_right = st.columns([0.95, 1.05])
+        with summary_left:
+            st.markdown('<div class="panel-title">Latest Action Snapshot</div>', unsafe_allow_html=True)
+            if last_execution:
+                st.markdown(
+                    " ".join(
+                        [
+                            badge(str(last_execution["symbol"]), "info"),
+                            badge(str(last_execution["side"]).upper(), "warn"),
+                            badge(
+                                str(last_execution["state"]).upper(),
+                                "good" if str(last_execution["state"]) in {"filled", "canceled"} else "info",
+                            ),
+                        ]
+                    ),
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"id={last_execution['id']} | updated={last_execution['updated_at']}")
+                if last_execution.get("message"):
+                    st.caption(str(last_execution["message"]))
+            else:
+                st.caption("No execution history yet.")
+        with summary_right:
+            st.markdown('<div class="panel-title">Open Order Focus</div>', unsafe_allow_html=True)
+            if open_execution_orders:
+                focus_options = {
+                    f"id={order['id']} | {order['symbol']} | {order['side']} | {order['state']}": order
+                    for order in open_execution_orders
+                }
+                current_focus = st.selectbox(
+                    "Selected Open Order",
+                    list(focus_options.keys()),
+                    key="live_ops_selected_order",
+                )
+                focus_order = focus_options[current_focus]
+                st.markdown(
+                    " ".join(
+                        [
+                            badge(focus_order["symbol"], "info"),
+                            badge(str(focus_order["side"]).upper(), "warn"),
+                            badge(str(focus_order["state"]).upper(), "info"),
+                        ]
+                    ),
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"created={focus_order['created_at']}")
+                st.caption(f"updated={focus_order['updated_at']}")
+                if focus_order.get("exchange_order_id"):
+                    st.caption(f"exchange_order_id={focus_order['exchange_order_id']}")
+                if focus_order.get("message"):
+                    st.caption(str(focus_order["message"]))
+            else:
+                st.caption("No open live order is currently selected.")
+
+    render_refreshable_fragment(auto_refresh_run_every, _render_live_ops_dynamic_top)
 
     left, right = st.columns([1.1, 0.9])
     with left:
         st.markdown('<div class="panel-title">Manual Live Order</div>', unsafe_allow_html=True)
-        symbols = sorted(config["rules"].keys())
-        manual_defaults = dict(config.get("live_manual_order", {}))
-        default_symbol = str(manual_defaults.get("symbol", symbols[0]))
         with st.form("manual_live_order_form"):
             symbol = st.selectbox(
                 "Symbol",
@@ -398,8 +421,18 @@ def render_live_ops_page(
             )
             side = st.selectbox("Side", ["buy", "sell"], index=0 if manual_defaults.get("side", "buy") == "buy" else 1)
             order_type = st.selectbox("Order Type", ["limit"], index=0)
-            amount_thb = st.number_input("Amount THB", min_value=0.0, value=float(manual_defaults.get("amount_thb", 100.0)), step=10.0)
-            amount_coin = st.number_input("Amount Coin", min_value=0.0, value=float(manual_defaults.get("amount_coin", 0.0)), format="%.8f")
+            amount_thb = st.number_input(
+                "Amount THB",
+                min_value=0.0,
+                value=float(manual_defaults.get("amount_thb", 100.0)),
+                step=10.0,
+            )
+            amount_coin = st.number_input(
+                "Amount Coin",
+                min_value=0.0,
+                value=float(manual_defaults.get("amount_coin", 0.0)),
+                format="%.8f",
+            )
             default_rate = float(latest_prices.get(symbol, manual_defaults.get("rate", 1.0)))
             rate = st.number_input("Rate", min_value=0.0, value=default_rate, format="%.8f")
             confirm = st.checkbox("I understand this can submit a real Bitkub order.")
@@ -431,10 +464,7 @@ def render_live_ops_page(
         if float(rate) <= 0:
             validation_badges.append(badge("Rate must be greater than 0", "bad"))
 
-        st.markdown(
-            '<div class="panel-title">Pre-flight Checks</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="panel-title">Pre-flight Checks</div>', unsafe_allow_html=True)
         if validation_badges:
             st.markdown(" ".join(validation_badges), unsafe_allow_html=True)
         else:
@@ -484,87 +514,126 @@ def render_live_ops_page(
                     st.rerun()
 
     with right:
-        st.markdown('<div class="panel-title">Live Controls</div>', unsafe_allow_html=True)
-        if st.button("Refresh Open Live Orders", use_container_width=True):
-            refreshed = 0
-            for order in open_execution_orders:
-                refreshed_record, events = refresh_live_order_from_exchange(
-                    client=client,
-                    order_record=order,
-                    occurred_at=now_text(),
+        def _render_live_controls() -> None:
+            dynamic = _load_live_ops_dynamic()
+            guardrails = dynamic["guardrails"]
+            open_execution_orders = dynamic["open_execution_orders"]
+
+            st.markdown('<div class="panel-title">Live Controls</div>', unsafe_allow_html=True)
+            if st.button("Refresh Open Live Orders", use_container_width=True):
+                refreshed = 0
+                for order in open_execution_orders:
+                    refreshed_record, events = refresh_live_order_from_exchange(
+                        client=client,
+                        order_record=order,
+                        occurred_at=now_text(),
+                    )
+                    persist_execution_order_update(int(order["id"]), refreshed_record, events)
+                    refreshed += 1
+                insert_runtime_event(
+                    created_at=now_text(),
+                    event_type="live_order_refresh_ui",
+                    severity="info",
+                    message="Live orders refreshed from Streamlit UI",
+                    details={"count": refreshed},
                 )
-                persist_execution_order_update(int(order["id"]), refreshed_record, events)
-                refreshed += 1
-            insert_runtime_event(
-                created_at=now_text(),
-                event_type="live_order_refresh_ui",
-                severity="info",
-                message="Live orders refreshed from Streamlit UI",
-                details={"count": refreshed},
-            )
-            _set_live_ops_feedback(
-                "Live order refresh completed",
-                [f"refreshed_open_orders={refreshed}"],
-            )
-            st.success(f"Refreshed {refreshed} open live order(s).")
-            st.rerun()
+                _set_live_ops_feedback(
+                    "Live order refresh completed",
+                    [f"refreshed_open_orders={refreshed}"],
+                )
+                st.success(f"Refreshed {refreshed} open live order(s).")
+                st.rerun()
 
-        if open_execution_orders:
-            option_map = {
-                f"id={order['id']} | {order['symbol']} | {order['side']} | {order['state']}": order
-                for order in open_execution_orders
-            }
-            selected_label = st.selectbox("Cancel Target", list(option_map.keys()))
-            confirm_cancel = st.checkbox("Confirm live cancel request")
-            if st.button("Cancel Selected Order", use_container_width=True):
-                if not confirm_cancel:
-                    st.error("Tick confirm before canceling a live order.")
-                else:
-                    target_order = option_map[selected_label]
-                    try:
-                        canceled_record, events = cancel_live_order(
-                            client=client,
-                            order_record=target_order,
-                            occurred_at=now_text(),
-                        )
-                        persist_execution_order_update(int(target_order["id"]), canceled_record, events)
-                        insert_runtime_event(
-                            created_at=now_text(),
-                            event_type="live_order_cancel_ui",
-                            severity="warning",
-                            message="Live order canceled from Streamlit UI",
-                            details={"execution_order_id": int(target_order["id"])},
-                        )
-                    except Exception as e:
-                        _set_live_ops_feedback(
-                            "Live cancel failed",
-                            [str(e)],
-                            tone="error",
-                        )
-                        st.error(str(e))
+            if open_execution_orders:
+                option_map = {
+                    f"id={order['id']} | {order['symbol']} | {order['side']} | {order['state']}": order
+                    for order in open_execution_orders
+                }
+                current_focus = st.session_state.get("live_ops_selected_order")
+                default_cancel_targets = [current_focus] if current_focus in option_map else []
+                selected_labels = st.multiselect(
+                    "Cancel Targets",
+                    list(option_map.keys()),
+                    default=default_cancel_targets,
+                    key="live_ops_cancel_targets",
+                    help="Choose one or more open execution orders to cancel in this round.",
+                )
+                confirm_cancel = st.checkbox("Confirm live cancel request", key="live_ops_confirm_cancel")
+                if st.button("Cancel Selected Orders", use_container_width=True):
+                    if not confirm_cancel:
+                        st.error("Tick confirm before canceling a live order.")
+                    elif not selected_labels:
+                        st.error("Select at least one order to cancel.")
                     else:
-                        _set_live_ops_feedback(
-                            "Live cancel completed",
-                            [
-                                f"id={target_order['id']} | symbol={target_order['symbol']}",
-                                f"new_state={canceled_record['state']}",
-                            ],
-                        )
-                        st.success(f"Order id={target_order['id']} is now {canceled_record['state']}.")
+                        success_lines: list[str] = []
+                        error_lines: list[str] = []
+                        for selected_label in selected_labels:
+                            target_order = option_map[selected_label]
+                            try:
+                                canceled_record, events = cancel_live_order(
+                                    client=client,
+                                    order_record=target_order,
+                                    occurred_at=now_text(),
+                                )
+                                persist_execution_order_update(int(target_order["id"]), canceled_record, events)
+                                insert_runtime_event(
+                                    created_at=now_text(),
+                                    event_type="live_order_cancel_ui",
+                                    severity="warning",
+                                    message="Live order canceled from Streamlit UI",
+                                    details={"execution_order_id": int(target_order["id"])} ,
+                                )
+                                success_lines.append(
+                                    f"id={target_order['id']} | symbol={target_order['symbol']} | state={canceled_record['state']}"
+                                )
+                            except Exception as e:
+                                error_lines.append(
+                                    f"id={target_order['id']} | symbol={target_order['symbol']} | error={e}"
+                                )
+
+                        if error_lines and success_lines:
+                            _set_live_ops_feedback(
+                                "Live cancel completed with partial failures",
+                                success_lines + error_lines,
+                                tone="warning",
+                            )
+                            st.warning("Some cancel requests failed. See feedback panel above.")
+                        elif error_lines:
+                            _set_live_ops_feedback(
+                                "Live cancel failed",
+                                error_lines,
+                                tone="error",
+                            )
+                            st.error("All selected cancel requests failed.")
+                        else:
+                            _set_live_ops_feedback(
+                                "Live cancel completed",
+                                success_lines,
+                            )
+                            st.success(f"Canceled {len(success_lines)} live order(s).")
                         st.rerun()
-        else:
-            st.caption("No open live orders are available for cancel.")
+            else:
+                st.caption("No open live orders are available for cancel.")
 
-        with st.expander("Guardrails JSON", expanded=False):
-            st.json(guardrails, expanded=False)
+            with st.expander("Guardrails JSON", expanded=False):
+                st.json(guardrails, expanded=False)
 
-    history_left, history_right = st.columns([1.0, 1.0])
-    with history_left:
-        st.markdown('<div class="panel-title">Recent Execution Orders</div>', unsafe_allow_html=True)
-        st.dataframe(recent_execution_orders, use_container_width=True, hide_index=True)
-    with history_right:
-        st.markdown('<div class="panel-title">Recent Execution Events</div>', unsafe_allow_html=True)
-        st.dataframe(recent_execution_events, use_container_width=True, hide_index=True)
+        render_refreshable_fragment(auto_refresh_run_every, _render_live_controls)
+
+    def _render_live_ops_history() -> None:
+        dynamic = _load_live_ops_dynamic()
+        recent_execution_orders = dynamic["recent_execution_orders"]
+        recent_execution_events = dynamic["recent_execution_events"]
+
+        history_left, history_right = st.columns([1.0, 1.0])
+        with history_left:
+            st.markdown('<div class="panel-title">Recent Execution Orders</div>', unsafe_allow_html=True)
+            st.dataframe(recent_execution_orders, use_container_width=True, hide_index=True)
+        with history_right:
+            st.markdown('<div class="panel-title">Recent Execution Events</div>', unsafe_allow_html=True)
+            st.dataframe(recent_execution_events, use_container_width=True, hide_index=True)
+
+    render_refreshable_fragment(auto_refresh_run_every, _render_live_ops_history)
 
 
 def render_reports_page(*, today: str, config: dict[str, Any]) -> None:

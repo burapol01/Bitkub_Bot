@@ -14,7 +14,7 @@ from services.execution_service import (
     submit_manual_live_order,
 )
 from services.reconciliation_service import extract_available_balances
-from streamlit_ui_data import calc_daily_totals
+from ui.streamlit.data import calc_daily_totals
 from utils.time_utils import now_text
 
 
