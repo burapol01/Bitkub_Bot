@@ -231,6 +231,10 @@ def render_account_page(
         latest_prices=latest_prices,
         latest_filled_execution_orders=fetch_latest_filled_execution_orders_by_symbol(),
     )
+    total_holdings_value = sum(float(row.get("market_value_thb", 0.0)) for row in holdings)
+    reserved_rows = sum(
+        1 for row in holdings if float(row.get("reserved_qty", 0.0)) > 0
+    )
 
     open_orders = account_snapshot.get("open_orders", {})
     open_rows: list[dict[str, Any]] = []
@@ -246,13 +250,27 @@ def render_account_page(
             else:
                 open_rows.append({"symbol": symbol, "status": "ERROR", "open_orders": entry.get("error")})
 
+    metric1, metric2, metric3 = st.columns(3)
+    with metric1:
+        render_metric_card("Holdings Rows", str(len(holdings)), f"Reserved rows {reserved_rows}")
+    with metric2:
+        render_metric_card("Total Holding Value", f"{total_holdings_value:,.2f} THB", "Mark-to-market estimate")
+    with metric3:
+        render_metric_card("Open Order Symbols", str(len(open_rows)), "Exchange snapshot summary")
+
     left, right = st.columns([1.15, 0.85])
     with left:
         st.markdown('<div class="panel-title">Live Holdings</div>', unsafe_allow_html=True)
-        st.dataframe(holdings, use_container_width=True, hide_index=True)
+        if holdings:
+            st.dataframe(holdings, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No live holdings found in the current account snapshot.")
     with right:
         st.markdown('<div class="panel-title">Exchange Open Orders</div>', unsafe_allow_html=True)
-        st.dataframe(open_rows, use_container_width=True, hide_index=True)
+        if open_rows:
+            st.dataframe(open_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No open-order rows were returned by the exchange snapshot.")
 
 
 def render_live_ops_page(
@@ -582,20 +600,35 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
     left, right = st.columns([1.15, 0.85])
     with left:
         st.markdown('<div class="panel-title">Symbol Summary</div>', unsafe_allow_html=True)
-        st.dataframe(symbol_summary, use_container_width=True, hide_index=True)
+        if symbol_summary:
+            st.dataframe(symbol_summary, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No symbol summary rows for the current filter and date.")
     with right:
         st.markdown('<div class="panel-title">Recent Paper Trades</div>', unsafe_allow_html=True)
-        st.dataframe(recent_trades, use_container_width=True, hide_index=True)
+        if recent_trades:
+            st.dataframe(recent_trades, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No paper trades stored for this filter yet.")
 
     bottom_left, bottom_right = st.columns([1.0, 1.0])
     with bottom_left:
         st.markdown('<div class="panel-title">Recent Execution Orders</div>', unsafe_allow_html=True)
-        st.dataframe(recent_execution_orders, use_container_width=True, hide_index=True)
+        if recent_execution_orders:
+            st.dataframe(recent_execution_orders, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No execution orders stored for this filter yet.")
         st.markdown('<div class="panel-title">Recent Auto Exit Events</div>', unsafe_allow_html=True)
-        st.dataframe(recent_auto_exit_events, use_container_width=True, hide_index=True)
+        if recent_auto_exit_events:
+            st.dataframe(recent_auto_exit_events, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No auto-exit events stored for this filter yet.")
     with bottom_right:
         st.markdown('<div class="panel-title">Recent Runtime Errors</div>', unsafe_allow_html=True)
-        st.dataframe(recent_errors, use_container_width=True, hide_index=True)
+        if recent_errors:
+            st.dataframe(recent_errors, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No recent runtime errors recorded.")
 
 
 def render_diagnostics_page(
