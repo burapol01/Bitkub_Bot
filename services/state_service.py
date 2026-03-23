@@ -1,10 +1,14 @@
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 STATE_FILE_PATH = Path(__file__).resolve().parent.parent / "runtime_state.json"
+STATE_PENDING_PATH = Path(__file__).resolve().parent.parent / "runtime_state.pending.json"
+_STATE_WRITE_RETRIES = 10
+_STATE_WRITE_RETRY_SECONDS = 0.1
 
 
 def _replace_dict_contents(target: dict, source: dict):
@@ -27,27 +31,50 @@ def _deserialize_cooldowns(raw_cooldowns: dict[str, Any]) -> dict[str, datetime]
     return cooldowns
 
 
+def _candidate_state_paths() -> list[Path]:
+    candidates = [path for path in [STATE_PENDING_PATH, STATE_FILE_PATH] if path.exists()]
+    return sorted(candidates, key=lambda item: item.stat().st_mtime, reverse=True)
+
+
+def _read_state_payload(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except json.JSONDecodeError as e:
+        return None, f"Runtime state file {path.name} is invalid JSON at line {e.lineno}, column {e.colno}."
+    except OSError as e:
+        return None, f"Unable to read runtime state file {path.name}: {e}"
+
+    if not isinstance(payload, dict):
+        return None, f"Runtime state file {path.name} must contain a JSON object."
+    return payload, None
+
+
 def load_runtime_state(
     last_zones: dict,
     positions: dict,
     daily_stats: dict,
     cooldowns: dict,
 ) -> tuple[bool, list[str]]:
-    if not STATE_FILE_PATH.exists():
+    state_paths = _candidate_state_paths()
+    if not state_paths:
         return False, []
 
-    try:
-        with open(STATE_FILE_PATH, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except json.JSONDecodeError as e:
-        return False, [
-            f"Runtime state file is invalid JSON at line {e.lineno}, column {e.colno}; starting with empty runtime state."
-        ]
-    except OSError as e:
-        return False, [f"Unable to read runtime state file: {e}"]
+    payload: dict[str, Any] | None = None
+    source_path: Path | None = None
+    messages: list[str] = []
 
-    if not isinstance(payload, dict):
-        return False, ["Runtime state file must contain a JSON object; starting with empty runtime state."]
+    for candidate in state_paths:
+        candidate_payload, error_message = _read_state_payload(candidate)
+        if candidate_payload is not None:
+            payload = candidate_payload
+            source_path = candidate
+            break
+        messages.append(error_message or f"Unable to load runtime state from {candidate.name}.")
+
+    if payload is None or source_path is None:
+        messages.append("Starting with empty runtime state.")
+        return False, messages
 
     raw_last_zones = payload.get("last_zones", {})
     raw_positions = payload.get("positions", {})
@@ -69,10 +96,13 @@ def load_runtime_state(
     _replace_dict_contents(daily_stats, raw_daily_stats)
     _replace_dict_contents(cooldowns, _deserialize_cooldowns(raw_cooldowns))
 
-    messages = [
-        "Restored runtime state from runtime_state.json",
-        f"open_positions={len(positions)} cooldowns={len(cooldowns)} tracked_days={len(daily_stats)}",
-    ]
+    if source_path == STATE_PENDING_PATH:
+        messages.append("Restored runtime state from runtime_state.pending.json")
+    else:
+        messages.append("Restored runtime state from runtime_state.json")
+    messages.append(
+        f"open_positions={len(positions)} cooldowns={len(cooldowns)} tracked_days={len(daily_stats)}"
+    )
     if manual_pause:
         messages.append("manual pause flag was restored")
 
@@ -96,8 +126,34 @@ def save_runtime_state(
         "cooldowns": _serialize_cooldowns(cooldowns),
     }
 
-    tmp_path = STATE_FILE_PATH.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=True)
+    tmp_path = STATE_FILE_PATH.with_suffix('.tmp')
+    serialized = json.dumps(payload, indent=2, ensure_ascii=True)
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(serialized)
+        f.flush()
+        os.fsync(f.fileno())
 
-    os.replace(tmp_path, STATE_FILE_PATH)
+    for _ in range(_STATE_WRITE_RETRIES):
+        try:
+            os.replace(tmp_path, STATE_FILE_PATH)
+            if STATE_PENDING_PATH.exists():
+                try:
+                    STATE_PENDING_PATH.unlink()
+                except OSError:
+                    pass
+            return
+        except PermissionError:
+            time.sleep(_STATE_WRITE_RETRY_SECONDS)
+        except OSError:
+            time.sleep(_STATE_WRITE_RETRY_SECONDS)
+
+    with open(STATE_PENDING_PATH, 'w', encoding='utf-8') as f:
+        f.write(serialized)
+        f.flush()
+        os.fsync(f.fileno())
+
+    try:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    except OSError:
+        pass

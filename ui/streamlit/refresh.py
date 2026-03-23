@@ -9,7 +9,9 @@ PAGE_ORDER = (
     "Overview",
     "Account",
     "Live Ops",
+    "Strategy",
     "Reports",
+    "Logs",
     "Diagnostics",
     "Config",
 )
@@ -18,7 +20,9 @@ AUTO_REFRESH_SAFE_PAGES = {
     "Overview",
     "Account",
     "Live Ops",
+    "Strategy",
     "Reports",
+    "Logs",
     "Diagnostics",
 }
 

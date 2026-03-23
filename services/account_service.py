@@ -12,6 +12,16 @@ def _capture_result(fetcher) -> dict[str, Any]:
         return {"ok": False, "data": None, "error": str(e)}
 
 
+def _is_unsupported_open_orders_error(error: str | None) -> bool:
+    if not error:
+        return False
+    normalized = str(error)
+    return (
+        "Endpoint not found for path /api/market/my-open-orders" in normalized
+        or "Endpoint not found for path /api/v3/market/my-open-orders" in normalized
+    )
+
+
 def fetch_account_snapshot(client: BitkubPrivateClient) -> dict[str, Any]:
     config = load_config()
     rules = config.get("rules", {})
@@ -44,6 +54,8 @@ def account_snapshot_errors(snapshot: dict[str, Any]) -> list[str]:
         for symbol in sorted(open_orders):
             entry = open_orders[symbol]
             if isinstance(entry, dict) and not entry.get("ok", False) and entry.get("error"):
+                if _is_unsupported_open_orders_error(str(entry["error"])):
+                    continue
                 errors.append(f"open_orders[{symbol}]: {entry['error']}")
 
     return errors
@@ -61,6 +73,8 @@ def open_orders_error_map(snapshot: dict[str, Any] | None) -> dict[str, str]:
     for symbol in sorted(open_orders):
         entry = open_orders[symbol]
         if isinstance(entry, dict) and not entry.get("ok", False) and entry.get("error"):
+            if _is_unsupported_open_orders_error(str(entry["error"])):
+                continue
             errors[symbol] = str(entry["error"])
 
     return errors
@@ -82,11 +96,20 @@ def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
         list(open_orders.values()) if isinstance(open_orders, dict) else []
     )
 
+    unsupported_entries = [
+        entry
+        for entry in open_order_entries
+        if isinstance(entry, dict) and _is_unsupported_open_orders_error(str(entry.get("error") or ""))
+    ]
+    supported_entries = [entry for entry in open_order_entries if entry not in unsupported_entries]
+
     if not open_order_entries:
         open_orders_status = "UNKNOWN"
-    elif all(isinstance(entry, dict) and entry.get("ok", False) for entry in open_order_entries):
-        open_orders_status = "OK"
+    elif supported_entries and all(isinstance(entry, dict) and entry.get("ok", False) for entry in supported_entries):
+        open_orders_status = "PARTIAL" if unsupported_entries else "OK"
     elif any(isinstance(entry, dict) and entry.get("ok", False) for entry in open_order_entries):
+        open_orders_status = "PARTIAL"
+    elif unsupported_entries:
         open_orders_status = "PARTIAL"
     else:
         open_orders_status = "UNAVAILABLE"
@@ -116,10 +139,11 @@ def build_live_holdings_snapshot(
 
     rows: list[dict[str, Any]] = []
     latest_filled_execution_orders = latest_filled_execution_orders or {}
+    asset_rows: list[tuple[str, Any]] = []
+    if isinstance(balances_payload, dict):
+        asset_rows = sorted(balances_payload.items(), key=lambda item: (item[0] != "THB", str(item[0])))
 
-    for symbol in sorted(rules):
-        asset = symbol_to_asset(symbol)
-        balance_entry = balances_payload.get(asset, {}) if isinstance(balances_payload, dict) else {}
+    for asset, balance_entry in asset_rows:
         if isinstance(balance_entry, dict):
             available_qty = float(balance_entry.get("available", 0.0) or 0.0)
             reserved_qty = float(balance_entry.get("reserved", 0.0) or 0.0)
@@ -131,7 +155,8 @@ def build_live_holdings_snapshot(
         if total_qty <= 0:
             continue
 
-        latest_price = latest_prices.get(symbol)
+        symbol = "THB" if asset == "THB" else f"THB_{asset}"
+        latest_price = 1.0 if asset == "THB" else latest_prices.get(symbol)
         latest_order = latest_filled_execution_orders.get(symbol)
         last_order_rate = None
         last_order_side = None
@@ -149,7 +174,13 @@ def build_live_holdings_snapshot(
         stop_loss_price = None
         take_profit_price = None
         sell_above = None
-        auto_exit_status = "NO_BUY_REFERENCE"
+        if asset == "THB":
+            auto_exit_status = "CASH"
+        elif symbol not in rules:
+            auto_exit_status = "UNTRACKED"
+        else:
+            auto_exit_status = "NO_BUY_REFERENCE"
+
         if symbol in rules and last_order_side == "buy" and entry_rate is not None:
             rule = rules[symbol]
             stop_loss_price = float(entry_rate) * (

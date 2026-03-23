@@ -10,9 +10,11 @@ from ui.streamlit.pages import (
     render_config_page,
     render_diagnostics_page,
     render_live_ops_page,
+    render_logs_page,
     render_overview_page,
     render_reports_page,
     render_sidebar,
+    render_strategy_page,
 )
 from ui.streamlit.refresh import (
     PAGE_ORDER,
@@ -92,8 +94,12 @@ def main() -> None:
                 latest_prices=latest_prices,
                 auto_refresh_run_every=run_every,
             )
+        elif selected_page == "Strategy":
+            render_strategy_page(config=config)
         elif selected_page == "Reports":
             render_reports_page(today=today, config=config)
+        elif selected_page == "Logs":
+            render_logs_page(private_ctx=private_ctx)
         elif selected_page == "Diagnostics":
             render_diagnostics_page(
                 today=today,

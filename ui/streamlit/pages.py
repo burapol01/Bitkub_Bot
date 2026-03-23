@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 import streamlit as st
+
+from clients.bitkub_client import get_market_symbols_v3
 
 from config import CONFIG_PATH, save_config, summarize_config_changes
 from services.account_service import build_live_holdings_snapshot
@@ -14,6 +17,7 @@ from services.db_service import (
     fetch_latest_filled_execution_orders_by_symbol,
     fetch_open_execution_orders,
     fetch_reporting_summary,
+    fetch_runtime_event_log,
     insert_runtime_event,
 )
 from services.execution_service import (
@@ -25,6 +29,15 @@ from services.execution_service import (
 from services.reconciliation_service import (
     extract_available_balances,
     summarize_live_reconciliation,
+)
+
+from services.strategy_lab_service import (
+    build_coin_ranking,
+    fetch_market_snapshot_coverage,
+    fetch_trade_analytics,
+    run_market_candle_replay,
+    run_market_snapshot_replay,
+    sync_candles_for_symbols,
 )
 from ui.streamlit.actions import (
     persist_execution_order_update,
@@ -93,6 +106,162 @@ def _show_live_ops_feedback() -> None:
 
     for line in lines:
         st.caption(line)
+
+
+def _normalize_market_symbol(raw_symbol: Any) -> str | None:
+    value = str(raw_symbol or "").strip().upper().replace("-", "_")
+    if not value:
+        return None
+    parts = value.split("_")
+    if len(parts) != 2:
+        return value
+    left, right = parts
+    if left == "THB":
+        return f"THB_{right}"
+    if right == "THB":
+        return f"THB_{left}"
+    return value
+
+
+def _summarize_text_lines(lines: list[str]) -> list[dict[str, Any]]:
+    grouped: dict[str, int] = defaultdict(int)
+    for line in lines:
+        grouped[str(line)] += 1
+    return [
+        {"message": message, "count": count}
+        for message, count in sorted(grouped.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _classify_runtime_event(row: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(row.get("event_type") or "")
+    severity = str(row.get("severity") or "")
+    message = str(row.get("message") or "")
+    details = row.get("details") if isinstance(row.get("details"), dict) else {}
+    normalized = f"{event_type} {message}".lower()
+
+    category = "General"
+    topic = event_type or "event"
+    hint = "Review the message and related runtime context."
+
+    if "runtime_state" in normalized or "access is denied" in normalized:
+        category = "State File"
+        topic = "runtime_state.json write lock"
+        hint = "Close any editor/preview that may lock runtime_state.json, then restart the engine."
+    elif "endpoint not found for path /api/market/my-open-orders" in normalized or "error=61" in normalized:
+        category = "Unsupported Symbol"
+        topic = "broker coin or unsupported order endpoint"
+        hint = "Do not rely on open_orders/order_history for this symbol. Remove it from live shortlist or mark it unsupported."
+    elif event_type in {"live_order_cancel", "auto_live_exit", "execution_reconciliation"} or "execution" in normalized or "live order" in normalized:
+        category = "Execution"
+        topic = event_type or "execution"
+        hint = "Check order state, exchange_order_id, and open orders before retrying the action."
+    elif event_type in {"private_api_status", "account_snapshot"} or "bitkub api" in normalized or "wallet/" in normalized:
+        category = "Private API"
+        topic = event_type or "private_api"
+        hint = "Verify credentials, permissions, and whether the endpoint is supported for the target symbol."
+    elif "config" in normalized or event_type == "trading_mode":
+        category = "Config / Mode"
+        topic = event_type or "config"
+        hint = "Check config.json values and reload the engine after saving changes."
+    elif severity == "error":
+        category = "Runtime"
+        topic = event_type or "runtime_error"
+        hint = "Inspect the stack-facing message and latest runtime events around this timestamp."
+
+    return {
+        **row,
+        "category": category,
+        "topic": topic,
+        "hint": hint,
+        "details": details,
+    }
+
+
+def _current_private_api_issues(private_ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for error in private_ctx.get("errors", []):
+        message = str(error)
+        category = "Private API"
+        topic = "snapshot error"
+        hint = "Verify private API access and endpoint support."
+        if "Endpoint not found for path /api/market/my-open-orders" in message:
+            category = "Unsupported Symbol"
+            topic = "open_orders unsupported"
+            hint = "This symbol likely belongs to a broker-coin group or unsupported order endpoint path."
+        rows.append(
+            {
+                "created_at": "current",
+                "event_type": "account_snapshot",
+                "severity": "warning",
+                "message": message,
+                "category": category,
+                "topic": topic,
+                "hint": hint,
+            }
+        )
+
+    snapshot = private_ctx.get("account_snapshot")
+    open_orders = snapshot.get("open_orders", {}) if isinstance(snapshot, dict) else {}
+    if isinstance(open_orders, dict):
+        for symbol, entry in sorted(open_orders.items()):
+            if not isinstance(entry, dict) or entry.get("ok", False):
+                continue
+            error = str(entry.get("error") or "")
+            if not error:
+                continue
+            category = "Private API"
+            topic = f"open_orders[{symbol}]"
+            hint = "Review endpoint support and open-order capability for this symbol."
+            if "Endpoint not found for path /api/market/my-open-orders" in error:
+                category = "Unsupported Symbol"
+                topic = f"open_orders[{symbol}] unsupported"
+                hint = "This symbol likely cannot use the standard my-open-orders endpoint."
+            rows.append(
+                {
+                    "created_at": "current",
+                    "event_type": "open_orders",
+                    "severity": "warning",
+                    "message": f"{symbol}: {error}",
+                    "category": category,
+                    "topic": topic,
+                    "hint": hint,
+                }
+            )
+    return rows
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_market_symbol_universe() -> dict[str, Any]:
+    try:
+        payload = get_market_symbols_v3()
+        symbols: list[str] = []
+        for row in payload:
+            if isinstance(row, dict):
+                raw_symbol = row.get("symbol") or row.get("id") or row.get("name")
+            else:
+                raw_symbol = row
+            normalized = _normalize_market_symbol(raw_symbol)
+            if normalized and normalized not in symbols:
+                symbols.append(normalized)
+        symbols.sort()
+        return {"symbols": symbols, "error": None}
+    except Exception as e:
+        return {"symbols": [], "error": str(e)}
+
+
+def _build_rule_seed(config: dict[str, Any], symbol: str) -> dict[str, Any]:
+    existing = config["rules"].get(symbol)
+    if existing:
+        return dict(existing)
+    return {
+        "buy_below": 1.0,
+        "sell_above": 1.1,
+        "budget_thb": 100.0,
+        "stop_loss_percent": 1.0,
+        "take_profit_percent": 1.2,
+        "max_trades_per_day": 1,
+    }
 
 
 def render_sidebar(
@@ -248,7 +417,11 @@ def render_account_page(
                 count = len(rows) if isinstance(rows, list) else 0
                 open_rows.append({"symbol": symbol, "status": "OK", "open_orders": count})
             else:
-                open_rows.append({"symbol": symbol, "status": "ERROR", "open_orders": entry.get("error")})
+                error_message = str(entry.get("error") or "")
+                if "Endpoint not found for path /api/market/my-open-orders" in error_message or "Endpoint not found for path /api/v3/market/my-open-orders" in error_message:
+                    open_rows.append({"symbol": symbol, "status": "UNSUPPORTED", "open_orders": "n/a"})
+                else:
+                    open_rows.append({"symbol": symbol, "status": "ERROR", "open_orders": error_message})
 
     metric1, metric2, metric3 = st.columns(3)
     with metric1:
@@ -636,6 +809,324 @@ def render_live_ops_page(
     render_refreshable_fragment(auto_refresh_run_every, _render_live_ops_history)
 
 
+def render_strategy_page(*, config: dict[str, Any]) -> None:
+    st.markdown('<div class="panel-title">Strategy Lab</div>', unsafe_allow_html=True)
+    st.caption(
+        "Use actual paper-trade logs, stored market snapshots, and stored candles to evaluate whether the current rule set has edge. "
+        "Coin ranking and replay now support the broader Bitkub market universe; config rules remain the live trading shortlist."
+    )
+
+    analytics = fetch_trade_analytics()
+    totals = analytics["totals"]
+    coverage_days = int(config.get("market_snapshot_retention_days", 30))
+    coverage_rows = fetch_market_snapshot_coverage(days=coverage_days)
+
+    card1, card2, card3, card4 = st.columns(4)
+    with card1:
+        render_metric_card("Actual Trades", str(totals["trades"]), f"Win rate {totals['win_rate_percent']:.2f}%")
+    with card2:
+        render_metric_card("Actual PnL", f"{totals['total_pnl_thb']:,.2f} THB", f"Avg/trade {totals['avg_pnl_thb']:,.2f}")
+    with card3:
+        render_metric_card("Profit Factor", f"{totals['profit_factor']:.2f}", f"Avg win {totals['avg_win_thb']:,.2f}")
+    with card4:
+        render_metric_card("Hold Time", f"{totals['avg_hold_minutes']:.1f} min", f"Losses {totals['losses']}")
+
+    top_left, top_right = st.columns([1.15, 0.85])
+    with top_left:
+        st.markdown('<div class="panel-title">Actual Trade Analytics by Symbol</div>', unsafe_allow_html=True)
+        if analytics["by_symbol"]:
+            st.dataframe(analytics["by_symbol"], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No paper trade history exists yet. Run the paper bot longer or import prior trade logs first.")
+    with top_right:
+        st.markdown('<div class="panel-title">Exit Reason Breakdown</div>', unsafe_allow_html=True)
+        if analytics["by_exit_reason"]:
+            st.dataframe(analytics["by_exit_reason"], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No exit reasons are available because no paper trades have been stored yet.")
+
+    with st.expander("Recent Actual Paper Trades", expanded=False):
+        if analytics["recent_trades"]:
+            st.dataframe(analytics["recent_trades"], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No recent paper trades available.")
+
+    st.markdown('<div class="panel-title">Candle Sync & Coin Ranking</div>', unsafe_allow_html=True)
+    st.caption(
+        "Sync TradingView history into SQLite first, then rank coins by recent momentum, range position, stability, and average volume."
+    )
+
+    market_universe = _fetch_market_symbol_universe()
+    configured_symbols = sorted(config["rules"].keys())
+    market_symbols = list(market_universe.get("symbols", []))
+    symbols = market_symbols or configured_symbols
+    if market_universe.get("error"):
+        st.warning(f"Bitkub market symbols unavailable right now: {market_universe['error']}")
+    if market_symbols:
+        st.caption(
+            f"Market universe loaded: {len(market_symbols)} symbol(s) | configured rules: {len(configured_symbols)}"
+        )
+
+    rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
+    default_rank_resolution = str(st.session_state.get("strategy_rank_resolution", "240"))
+    if default_rank_resolution not in rank_resolution_options:
+        default_rank_resolution = "240"
+    default_rank_days = int(st.session_state.get("strategy_rank_days", 14))
+
+    with st.form("strategy_candle_sync_form"):
+        sync_col1, sync_col2, sync_col3 = st.columns([0.4, 0.3, 0.3])
+        with sync_col1:
+            selected_sync_symbols = st.multiselect(
+                "Symbols to Sync",
+                symbols,
+                default=configured_symbols or symbols[: min(len(symbols), 10)],
+                help="This list comes from Bitkub market symbols when available. Stored candles are used by the ranking table below.",
+            )
+        with sync_col2:
+            ranking_resolution = st.selectbox(
+                "Candle Resolution",
+                rank_resolution_options,
+                index=rank_resolution_options.index(default_rank_resolution),
+            )
+        with sync_col3:
+            ranking_days = st.number_input(
+                "Lookback Days",
+                min_value=1,
+                max_value=90,
+                value=default_rank_days,
+                step=1,
+            )
+        run_candle_sync = st.form_submit_button("Sync Candles", type="primary", use_container_width=True)
+
+    if run_candle_sync:
+        sync_result = sync_candles_for_symbols(
+            symbols=selected_sync_symbols or symbols,
+            resolution=str(ranking_resolution),
+            days=int(ranking_days),
+        )
+        st.session_state["strategy_candle_sync_result"] = sync_result
+        st.session_state["strategy_rank_resolution"] = str(ranking_resolution)
+        st.session_state["strategy_rank_days"] = int(ranking_days)
+
+    sync_feedback = st.session_state.get("strategy_candle_sync_result")
+    if sync_feedback:
+        if sync_feedback.get("synced"):
+            st.success(
+                f"Synced candles for {len(sync_feedback['synced'])} symbol(s) | resolution={sync_feedback['resolution']} | days={sync_feedback['days']}"
+            )
+            with st.expander("Sync Result Details", expanded=False):
+                st.dataframe(sync_feedback["synced"], use_container_width=True, hide_index=True)
+        if sync_feedback.get("errors"):
+            summarized_sync_errors = _summarize_text_lines(list(sync_feedback["errors"]))
+            no_data_count = sum(row["count"] for row in summarized_sync_errors if "history status=no_data" in str(row["message"]))
+            st.warning(
+                f"Sync warnings: {len(sync_feedback['errors'])} total | no_data {no_data_count}"
+            )
+            with st.expander("Sync Warning Summary", expanded=False):
+                st.dataframe(summarized_sync_errors, use_container_width=True, hide_index=True)
+
+    ranking_resolution = str(st.session_state.get("strategy_rank_resolution", default_rank_resolution))
+    ranking_days = int(st.session_state.get("strategy_rank_days", default_rank_days))
+    ranking = build_coin_ranking(
+        symbols=symbols,
+        resolution=ranking_resolution,
+        lookback_days=ranking_days,
+    )
+
+    rank_card1, rank_card2, rank_card3 = st.columns(3)
+    with rank_card1:
+        render_metric_card("Ranking Resolution", ranking_resolution, f"Lookback {ranking_days} day(s)")
+    with rank_card2:
+        render_metric_card("Ranked Symbols", str(len(ranking["rows"])), f"Coverage rows {len(ranking['coverage'])}")
+    with rank_card3:
+        top_score = ranking["rows"][0]["score"] if ranking["rows"] else 0.0
+        render_metric_card("Top Score", f"{top_score:.2f}", "Higher = stronger trend shortlist")
+
+    rank_left, rank_right = st.columns([1.15, 0.85])
+    with rank_left:
+        st.markdown('<div class="panel-title">Coin Ranking</div>', unsafe_allow_html=True)
+        if ranking["rows"]:
+            st.dataframe(ranking["rows"], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No ranked symbols yet. Sync candles first or widen the lookback window.")
+    with rank_right:
+        st.markdown('<div class="panel-title">Stored Candle Coverage</div>', unsafe_allow_html=True)
+        if ranking["coverage"]:
+            st.dataframe(ranking["coverage"], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No stored candles available yet.")
+        if ranking.get("errors"):
+            summarized_ranking_errors = _summarize_text_lines(list(ranking["errors"]))
+            no_data_count = sum(row["count"] for row in summarized_ranking_errors if "not enough stored candles" in str(row["message"]))
+            st.markdown('<div class="panel-title">Ranking Notes</div>', unsafe_allow_html=True)
+            st.caption(f"{len(ranking['errors'])} note(s) | insufficient-candle rows {no_data_count}")
+            with st.expander("Ranking Note Summary", expanded=False):
+                st.dataframe(summarized_ranking_errors, use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="panel-title">Replay Lab</div>', unsafe_allow_html=True)
+    st.caption(
+        "Replay can now run on stored candles or stored market snapshots. "
+        "Use candles for ranked symbols first; snapshots remain available for the older console-style feed."
+    )
+
+    default_symbol = st.session_state.get("strategy_replay_symbol", symbols[0])
+    if default_symbol not in symbols:
+        default_symbol = symbols[0]
+    replay_source_options = ["candles", "snapshots"]
+    default_replay_source = str(st.session_state.get("strategy_replay_source", "candles"))
+    if default_replay_source not in replay_source_options:
+        default_replay_source = "candles"
+    default_replay_resolution = str(st.session_state.get("strategy_replay_resolution", ranking_resolution))
+    if default_replay_resolution not in rank_resolution_options:
+        default_replay_resolution = ranking_resolution
+
+    with st.form("strategy_replay_form"):
+        replay_meta_left, replay_meta_right = st.columns(2)
+        with replay_meta_left:
+            replay_symbol = st.selectbox(
+                "Replay Symbol",
+                symbols,
+                index=symbols.index(default_symbol),
+            )
+            replay_source = st.selectbox(
+                "Replay Source",
+                replay_source_options,
+                index=replay_source_options.index(default_replay_source),
+                help="Candles use TradingView history stored in SQLite. Snapshots use the older market_snapshots feed.",
+            )
+        with replay_meta_right:
+            replay_resolution = st.selectbox(
+                "Replay Candle Resolution",
+                rank_resolution_options,
+                index=rank_resolution_options.index(default_replay_resolution),
+                help="Used only when Replay Source = candles.",
+            )
+            lookback_days = st.number_input(
+                "Replay Lookback Days",
+                min_value=1,
+                max_value=90,
+                value=int(st.session_state.get("strategy_replay_days", min(14, max(14, coverage_days)))),
+                step=1,
+            )
+        active_rule = _build_rule_seed(config, replay_symbol)
+        form_left, form_right = st.columns(2)
+        with form_left:
+            buy_below = st.number_input("Buy Below", min_value=0.0, value=float(active_rule["buy_below"]), format="%.8f")
+            sell_above = st.number_input("Sell Above", min_value=0.0, value=float(active_rule["sell_above"]), format="%.8f")
+            budget_thb = st.number_input("Budget THB", min_value=1.0, value=float(active_rule["budget_thb"]), step=10.0)
+            max_trades_per_day = st.number_input(
+                "Max Trades / Day",
+                min_value=1,
+                value=int(active_rule["max_trades_per_day"]),
+                step=1,
+            )
+        with form_right:
+            stop_loss_percent = st.number_input(
+                "Stop Loss %",
+                min_value=0.01,
+                value=float(active_rule["stop_loss_percent"]),
+                format="%.2f",
+            )
+            take_profit_percent = st.number_input(
+                "Take Profit %",
+                min_value=0.01,
+                value=float(active_rule["take_profit_percent"]),
+                format="%.2f",
+            )
+            cooldown_seconds = st.number_input(
+                "Cooldown Seconds",
+                min_value=0,
+                value=int(config["cooldown_seconds"]),
+                step=1,
+            )
+            fee_rate = st.number_input(
+                "Fee Rate",
+                min_value=0.0,
+                max_value=0.9999,
+                value=float(config["fee_rate"]),
+                format="%.6f",
+            )
+        run_replay = st.form_submit_button("Run Replay", type="primary", use_container_width=True)
+
+    if run_replay or "strategy_replay_result" not in st.session_state:
+        replay_rule = {
+            "buy_below": float(buy_below),
+            "sell_above": float(sell_above),
+            "budget_thb": float(budget_thb),
+            "stop_loss_percent": float(stop_loss_percent),
+            "take_profit_percent": float(take_profit_percent),
+            "max_trades_per_day": int(max_trades_per_day),
+        }
+        if replay_source == "candles":
+            replay_result = run_market_candle_replay(
+                symbol=replay_symbol,
+                resolution=str(replay_resolution),
+                rule=replay_rule,
+                fee_rate=float(fee_rate),
+                cooldown_seconds=int(cooldown_seconds),
+                days=int(lookback_days),
+            )
+        else:
+            replay_result = run_market_snapshot_replay(
+                symbol=replay_symbol,
+                rule=replay_rule,
+                fee_rate=float(fee_rate),
+                cooldown_seconds=int(cooldown_seconds),
+                days=int(lookback_days),
+            )
+        st.session_state["strategy_replay_result"] = replay_result
+        st.session_state["strategy_replay_symbol"] = replay_symbol
+        st.session_state["strategy_replay_days"] = int(lookback_days)
+        st.session_state["strategy_replay_source"] = replay_source
+        st.session_state["strategy_replay_resolution"] = str(replay_resolution)
+
+    replay = st.session_state.get("strategy_replay_result")
+    if replay:
+        metrics = replay["metrics"]
+        replay_card1, replay_card2, replay_card3, replay_card4 = st.columns(4)
+        with replay_card1:
+            render_metric_card("Replay Trades", str(metrics["trades"]), f"{replay.get('source', 'replay')} rows {replay.get('candles', replay.get('snapshots', replay.get('bars', 0)))}")
+        with replay_card2:
+            render_metric_card("Replay PnL", f"{metrics['total_pnl_thb']:,.2f} THB", f"Win rate {metrics['win_rate_percent']:.2f}%")
+        with replay_card3:
+            render_metric_card("Replay Avg/Trade", f"{metrics['avg_pnl_thb']:,.2f}", f"Profit factor {metrics['profit_factor']:.2f}")
+        with replay_card4:
+            render_metric_card("Replay Hold", f"{metrics['avg_hold_minutes']:.1f} min", f"W {metrics['wins']} / L {metrics['losses']}")
+
+        replay_left, replay_right = st.columns([1.05, 0.95])
+        with replay_left:
+            st.markdown('<div class="panel-title">Replay Trades</div>', unsafe_allow_html=True)
+            if replay["trades"]:
+                st.dataframe(replay["trades"], use_container_width=True, hide_index=True)
+            else:
+                st.caption("No replay exits were generated for this symbol and parameter set.")
+        with replay_right:
+            st.markdown('<div class="panel-title">Replay Coverage</div>', unsafe_allow_html=True)
+            coverage = replay.get("coverage")
+            if coverage:
+                st.caption(f"first_seen={coverage['first_seen']}")
+                st.caption(f"last_seen={coverage['last_seen']}")
+                st.caption(f"min_price={float(coverage['min_price']):,.8f}")
+                st.caption(f"max_price={float(coverage['max_price']):,.8f}")
+            else:
+                st.caption("No snapshot coverage available.")
+
+            if replay.get("open_position"):
+                st.markdown('<div class="panel-title">Open Position at Replay End</div>', unsafe_allow_html=True)
+                st.json(replay["open_position"], expanded=False)
+
+            if replay.get("notes"):
+                st.markdown('<div class="panel-title">Replay Notes</div>', unsafe_allow_html=True)
+                for note in replay["notes"]:
+                    st.caption(note)
+
+    st.markdown('<div class="panel-title">Snapshot Coverage by Symbol</div>', unsafe_allow_html=True)
+    if coverage_rows:
+        st.dataframe(coverage_rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No market snapshot coverage was found in SQLite yet.")
+
+
 def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
     symbols = ["ALL"] + sorted(config["rules"].keys())
     selected_symbol = st.selectbox("Report Filter", symbols, index=0)
@@ -698,6 +1189,100 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
             st.dataframe(recent_errors, use_container_width=True, hide_index=True)
         else:
             st.caption("No recent runtime errors recorded.")
+
+
+def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
+    st.markdown('<div class="panel-title">Logs & Errors</div>', unsafe_allow_html=True)
+    st.caption(
+        "Use this page to separate current issues from historical runtime events. Categories and hints are there to speed up troubleshooting."
+    )
+
+    current_issue_rows = _current_private_api_issues(private_ctx)
+    historical_rows = [_classify_runtime_event(row) for row in fetch_runtime_event_log(limit=200)]
+
+    category_counts: dict[str, int] = defaultdict(int)
+    for row in current_issue_rows + historical_rows:
+        category_counts[str(row.get("category") or "General")] += 1
+
+    card1, card2, card3, card4 = st.columns(4)
+    with card1:
+        render_metric_card("Current Issues", str(len(current_issue_rows)), "Current snapshot only")
+    with card2:
+        render_metric_card("Historical Events", str(len(historical_rows)), "Last 200 runtime events")
+    with card3:
+        render_metric_card("Error Events", str(sum(1 for row in historical_rows if row.get("severity") == "error")), "Persisted runtime severity=error")
+    with card4:
+        top_category = max(category_counts, key=category_counts.get) if category_counts else "None"
+        render_metric_card("Top Category", top_category, f"Unique categories {len(category_counts)}")
+
+    current_left, current_right = st.columns([1.0, 1.0])
+    with current_left:
+        st.markdown('<div class="panel-title">Current Issues</div>', unsafe_allow_html=True)
+        if current_issue_rows:
+            st.dataframe(current_issue_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No current snapshot issues detected.")
+    with current_right:
+        st.markdown('<div class="panel-title">Category Summary</div>', unsafe_allow_html=True)
+        if category_counts:
+            st.dataframe(
+                [
+                    {"category": category, "count": count}
+                    for category, count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("No runtime categories recorded yet.")
+
+    log_categories = ["ALL"] + sorted({str(row.get("category") or "General") for row in historical_rows})
+    selected_category = st.selectbox("Log Category Filter", log_categories, index=0, key="logs_category_filter")
+    filtered_rows = [
+        row
+        for row in historical_rows
+        if selected_category == "ALL" or str(row.get("category")) == selected_category
+    ]
+
+    st.markdown('<div class="panel-title">Historical Runtime Events</div>', unsafe_allow_html=True)
+    if filtered_rows:
+        st.dataframe(
+            [
+                {
+                    "created_at": row.get("created_at"),
+                    "severity": row.get("severity"),
+                    "category": row.get("category"),
+                    "topic": row.get("topic"),
+                    "event_type": row.get("event_type"),
+                    "message": row.get("message"),
+                    "hint": row.get("hint"),
+                }
+                for row in filtered_rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("No runtime events match the selected category.")
+
+    with st.expander("Event Details", expanded=False):
+        detailed_rows = [
+            {
+                "created_at": row.get("created_at"),
+                "event_type": row.get("event_type"),
+                "severity": row.get("severity"),
+                "category": row.get("category"),
+                "topic": row.get("topic"),
+                "message": row.get("message"),
+                "hint": row.get("hint"),
+                "details": row.get("details", {}),
+            }
+            for row in filtered_rows[:50]
+        ]
+        if detailed_rows:
+            st.json(detailed_rows, expanded=False)
+        else:
+            st.caption("No detailed events to show.")
 
 
 def render_diagnostics_page(
@@ -848,6 +1433,11 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     st.caption(f"Source of truth: `{CONFIG_PATH}`")
     _show_config_save_feedback()
 
+    market_universe = _fetch_market_symbol_universe()
+    configured_symbols = sorted(config["rules"].keys())
+    market_symbols = list(market_universe.get("symbols", []))
+    available_new_symbols = [symbol for symbol in market_symbols if symbol not in config["rules"]]
+
     st.markdown(
         """
         <div class="note-strip">
@@ -863,7 +1453,11 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     with summary_col1:
         render_metric_card("Mode", str(config["mode"]).upper(), f"Base URL {config['base_url']}")
     with summary_col2:
-        render_metric_card("Rules", str(len(config["rules"])), f"Interval {int(config['interval_seconds'])}s")
+        render_metric_card(
+            "Rules",
+            str(len(config["rules"])),
+            f"Market symbols {len(market_symbols) if market_symbols else 'n/a'} | Interval {int(config['interval_seconds'])}s",
+        )
     with summary_col3:
         render_metric_card(
             "Live Controls",
@@ -966,7 +1560,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     with right:
         st.markdown("#### Manual Live Order Preset")
         st.caption("This preset is used by manual live execution actions, not by the auto loop.")
-        symbols = sorted(config["rules"].keys())
+        symbols = configured_symbols
         manual_order = dict(config.get("live_manual_order", {}))
         default_symbol = str(manual_order.get("symbol", symbols[0]))
         with st.form("config_manual_order_form"):
@@ -1035,25 +1629,41 @@ def render_config_page(*, config: dict[str, Any]) -> None:
 
         st.markdown("#### Add / Remove Rule")
         st.caption("Use this section only for symbol lifecycle changes. It is riskier than normal rule edits.")
-        new_symbol = st.text_input("New Symbol", value="", help="Example: THB_XRP").strip().upper()
+        if market_universe.get("error"):
+            st.warning(f"Bitkub market symbols unavailable right now: {market_universe['error']}")
+            new_symbol = st.text_input(
+                "New Symbol",
+                value="",
+                help="Fallback manual entry when the Bitkub market-symbol endpoint is unavailable.",
+            ).strip().upper()
+        elif market_symbols:
+            st.caption(
+                f"Bitkub market symbols loaded: {len(market_symbols)} | already configured: {len(configured_symbols)} | available to add: {len(available_new_symbols)}"
+            )
+            if available_new_symbols:
+                new_symbol = st.selectbox(
+                    "New Symbol",
+                    available_new_symbols,
+                    help="Symbols already configured are hidden from this list.",
+                    key="config_new_rule_symbol",
+                )
+            else:
+                new_symbol = ""
+                st.info("All currently loaded Bitkub market symbols are already present in bot rules.")
+        else:
+            new_symbol = ""
+            st.info("No Bitkub market symbols were returned right now.")
         add_col, remove_col = st.columns(2)
         with add_col:
             if st.button("Add New Rule", use_container_width=True):
                 if not new_symbol:
-                    st.error("Enter a symbol before adding a new rule.")
+                    st.error("No market symbol is available to add right now.")
                 elif new_symbol in config["rules"]:
                     st.error("That symbol already exists in rules.")
                 else:
                     updated = dict(config)
                     updated_rules = dict(config["rules"])
-                    updated_rules[new_symbol] = {
-                        "buy_below": 1.0,
-                        "sell_above": 1.1,
-                        "budget_thb": 100.0,
-                        "stop_loss_percent": 1.0,
-                        "take_profit_percent": 1.2,
-                        "max_trades_per_day": 1,
-                    }
+                    updated_rules[new_symbol] = _build_rule_seed(config, new_symbol)
                     updated["rules"] = updated_rules
                     if _save_config_with_feedback(config, updated, f"Added new rule {new_symbol}"):
                         st.rerun()

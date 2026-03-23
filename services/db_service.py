@@ -51,6 +51,20 @@ def init_db():
                 trading_mode TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS market_candles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                resolution TEXT NOT NULL,
+                open_time INTEGER NOT NULL,
+                open_at TEXT NOT NULL,
+                open_price REAL NOT NULL,
+                high_price REAL NOT NULL,
+                low_price REAL NOT NULL,
+                close_price REAL NOT NULL,
+                volume REAL NOT NULL,
+                UNIQUE(symbol, resolution, open_time)
+            );
+
             CREATE TABLE IF NOT EXISTS paper_trade_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 buy_time TEXT NOT NULL,
@@ -220,6 +234,91 @@ def insert_market_snapshot(
                 trading_mode,
             ),
         )
+
+
+def upsert_market_candles(
+    *,
+    symbol: str,
+    resolution: str,
+    candles: list[dict[str, Any]],
+):
+    if not candles:
+        return
+
+    with _connect() as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO market_candles (
+                symbol,
+                resolution,
+                open_time,
+                open_at,
+                open_price,
+                high_price,
+                low_price,
+                close_price,
+                volume
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    symbol,
+                    resolution,
+                    int(candle["open_time"]),
+                    candle["open_at"],
+                    float(candle["open_price"]),
+                    float(candle["high_price"]),
+                    float(candle["low_price"]),
+                    float(candle["close_price"]),
+                    float(candle["volume"]),
+                )
+                for candle in candles
+            ],
+        )
+
+
+def fetch_market_candles(
+    *,
+    symbol: str,
+    resolution: str,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    cutoff_text = (
+        datetime.now() - timedelta(days=lookback_days)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT symbol, resolution, open_time, open_at, open_price, high_price,
+                   low_price, close_price, volume
+            FROM market_candles
+            WHERE symbol = ? AND resolution = ? AND open_at >= ?
+            ORDER BY open_time ASC
+            """,
+            (symbol, resolution, cutoff_text),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_market_candle_coverage(*, resolution: str | None = None) -> list[dict[str, Any]]:
+    resolution_clause = "WHERE resolution = ?" if resolution else ""
+    params = (resolution,) if resolution else ()
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT symbol, resolution, COUNT(*) AS candles,
+                   MIN(open_at) AS first_seen,
+                   MAX(open_at) AS last_seen,
+                   MIN(low_price) AS min_price,
+                   MAX(high_price) AS max_price
+            FROM market_candles
+            {resolution_clause}
+            GROUP BY symbol, resolution
+            ORDER BY symbol, resolution
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def insert_paper_trade_log(
@@ -532,6 +631,7 @@ def fetch_db_maintenance_summary() -> dict[str, Any]:
         "runtime_events",
         "signal_logs",
         "market_snapshots",
+        "market_candles",
         "paper_trade_logs",
         "account_snapshots",
         "reconciliation_results",
@@ -1072,6 +1172,50 @@ def fetch_reporting_summary(
         "recent_auto_exit_events": [dict(row) for row in recent_auto_exit_events],
         "recent_errors": [dict(row) for row in recent_errors],
     }
+
+
+def fetch_runtime_event_log(
+    *,
+    limit: int = 200,
+    severity: str | None = None,
+    event_type: str | None = None,
+) -> list[dict[str, Any]]:
+    where_clauses: list[str] = []
+    params: list[Any] = []
+
+    if severity:
+        where_clauses.append("severity = ?")
+        params.append(severity)
+    if event_type:
+        where_clauses.append("event_type = ?")
+        params.append(event_type)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    params.append(int(limit))
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, event_type, severity, message, details_json
+            FROM runtime_events
+            {where_sql}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+    return [
+        {
+            "id": int(row["id"]),
+            "created_at": row["created_at"],
+            "event_type": row["event_type"],
+            "severity": row["severity"],
+            "message": row["message"],
+            "details": _load_json(row["details_json"], {}),
+        }
+        for row in rows
+    ]
 
 
 def fetch_open_execution_orders() -> list[dict[str, Any]]:

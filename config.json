@@ -17,7 +17,7 @@
     "order_type": "limit",
     "amount_thb": 100,
     "amount_coin": 3.41413451,
-    "rate": 30.00
+    "rate": 30.0
   },
   "market_snapshot_retention_days": 30,
   "signal_log_retention_days": 30,
@@ -45,7 +45,7 @@
     },
     "THB_KUB": {
       "buy_below": 29.12,
-      "sell_above": 30.00,
+      "sell_above": 30.0,
       "budget_thb": 100,
       "stop_loss_percent": 1.0,
       "take_profit_percent": 1.2,
@@ -64,6 +64,30 @@
       "sell_above": 0.00129,
       "budget_thb": 100,
       "stop_loss_percent": 1.5,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DOGE": {
+      "buy_below": 2.7,
+      "sell_above": 3.2,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.4,
+      "max_trades_per_day": 1
+    },
+    "THB_FET": {
+      "buy_below": 6.7,
+      "sell_above": 7.4,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.5,
+      "take_profit_percent": 2.5,
+      "max_trades_per_day": 1
+    },
+    "THB_LINK": {
+      "buy_below": 289.0,
+      "sell_above": 305.0,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
       "take_profit_percent": 2.0,
       "max_trades_per_day": 1
     }
