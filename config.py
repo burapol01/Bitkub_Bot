@@ -288,6 +288,23 @@ def reload_config() -> tuple[dict[str, Any] | None, list[str]]:
     return candidate, []
 
 
+def save_config(config: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+    errors = validate_config(config)
+    if errors:
+        return None, errors
+
+    tmp_path = CONFIG_PATH.with_suffix(".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=True)
+        tmp_path.replace(CONFIG_PATH)
+    except OSError as e:
+        return None, [f"unable to write config.json: {e}"]
+
+    activate_config(config)
+    return config, []
+
+
 def _format_scalar(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:,.8f}".rstrip("0").rstrip(".")

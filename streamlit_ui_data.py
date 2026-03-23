@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+from typing import Any
+
+from clients.bitkub_client import get_ticker
+from clients.bitkub_private_client import (
+    BitkubMissingCredentialsError,
+    BitkubPrivateClient,
+    BitkubPrivateClientError,
+)
+from services.account_service import (
+    account_snapshot_errors,
+    fetch_account_snapshot,
+    summarize_account_capabilities,
+)
+from services.state_service import load_runtime_state
+from utils.time_utils import today_key
+
+
+def runtime_snapshot() -> dict[str, Any]:
+    runtime_last_zones: dict[str, Any] = {}
+    runtime_positions: dict[str, Any] = {}
+    runtime_daily_stats: dict[str, Any] = {}
+    runtime_cooldowns: dict[str, Any] = {}
+    manual_pause, messages = load_runtime_state(
+        runtime_last_zones,
+        runtime_positions,
+        runtime_daily_stats,
+        runtime_cooldowns,
+    )
+    return {
+        "manual_pause": manual_pause,
+        "messages": messages,
+        "last_zones": runtime_last_zones,
+        "positions": runtime_positions,
+        "daily_stats": runtime_daily_stats,
+        "cooldowns": runtime_cooldowns,
+    }
+
+
+def calc_daily_totals(daily_stats: dict[str, Any]) -> tuple[int, int, int, float]:
+    today_stats = daily_stats.get(today_key(), {})
+    total_trades = 0
+    total_wins = 0
+    total_losses = 0
+    total_pnl = 0.0
+
+    for stats in today_stats.values():
+        total_trades += int(stats["trades"])
+        total_wins += int(stats["wins"])
+        total_losses += int(stats["losses"])
+        total_pnl += float(stats["realized_pnl_thb"])
+
+    return total_trades, total_wins, total_losses, total_pnl
+
+
+def private_context() -> dict[str, Any]:
+    private_api_status = "not configured"
+    private_api_capabilities: list[str] = ["wallet=OFF", "balances=OFF", "open_orders=OFF"]
+    client: BitkubPrivateClient | None = None
+    account_snapshot: dict[str, Any] | None = None
+    errors: list[str] = []
+
+    try:
+        candidate = BitkubPrivateClient.from_env()
+        if candidate.is_configured():
+            client = candidate
+            account_snapshot = fetch_account_snapshot(candidate)
+            private_api_capabilities = summarize_account_capabilities(account_snapshot)
+            snapshot_errors = account_snapshot_errors(account_snapshot)
+            if snapshot_errors:
+                private_api_status = "wallet/balance ready, some order endpoints unavailable"
+                errors = snapshot_errors
+            else:
+                private_api_status = "wallet/balance/open-orders ready"
+    except BitkubMissingCredentialsError:
+        private_api_status = "missing credentials"
+    except BitkubPrivateClientError as e:
+        private_api_status = "private API error"
+        errors = [str(e)]
+
+    return {
+        "client": client,
+        "account_snapshot": account_snapshot,
+        "private_api_status": private_api_status,
+        "private_api_capabilities": private_api_capabilities,
+        "errors": errors,
+    }
+
+
+def market_rows(config: dict[str, Any], ticker: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for symbol, rule in sorted(config["rules"].items()):
+        ticker_entry = ticker.get(symbol, {})
+        last_price = (
+            float(ticker_entry["last"])
+            if isinstance(ticker_entry, dict) and "last" in ticker_entry
+            else None
+        )
+        current_zone = "n/a"
+        if last_price is not None:
+            buy_below = float(rule["buy_below"])
+            sell_above = float(rule["sell_above"])
+            if last_price <= buy_below:
+                current_zone = "BUY"
+            elif last_price >= sell_above:
+                current_zone = "SELL"
+            else:
+                current_zone = "WAIT"
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "last_price": last_price,
+                "buy_below": float(rule["buy_below"]),
+                "sell_above": float(rule["sell_above"]),
+                "zone": current_zone,
+            }
+        )
+    return rows
+
+
+def build_dashboard_context(config: dict[str, Any]) -> dict[str, Any]:
+    runtime = runtime_snapshot()
+    private_ctx = private_context()
+    ticker = get_ticker()
+    latest_prices = {
+        symbol: float(payload["last"])
+        for symbol, payload in ticker.items()
+        if isinstance(payload, dict) and "last" in payload
+    }
+
+    return {
+        "today": today_key(),
+        "runtime": runtime,
+        "private_ctx": private_ctx,
+        "latest_prices": latest_prices,
+        "ticker_rows": market_rows(config, ticker),
+    }
