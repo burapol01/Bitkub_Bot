@@ -1,4 +1,5 @@
 import msvcrt
+import secrets
 import time
 from collections.abc import Callable
 
@@ -26,22 +27,27 @@ from services.db_service import (
     fetch_latest_filled_execution_orders_by_symbol,
     fetch_open_execution_orders,
     fetch_reporting_summary,
+    fetch_recent_telegram_command_log,
     init_db,
     insert_account_snapshot,
     insert_execution_order,
     insert_execution_order_event,
     insert_market_snapshot,
     insert_reconciliation_result,
+    insert_telegram_command_log,
     insert_runtime_event,
     prune_sqlite_retention,
+    update_telegram_command_log,
     update_execution_order,
 )
 from services.execution_service import (
     LiveExecutionGuardrailError,
     build_live_execution_guardrails,
     cancel_live_order,
+    evaluate_live_entry_candidates,
     evaluate_live_exit_candidates,
     refresh_live_order_from_exchange,
+    submit_auto_live_entry_order,
     submit_auto_live_exit_order,
     submit_manual_live_order,
 )
@@ -63,6 +69,14 @@ from services.state_service import (
     STATE_FILE_PATH,
     load_runtime_state,
     save_runtime_state,
+)
+from services.telegram_service import (
+    fetch_telegram_command_updates,
+    flush_telegram_outbox,
+    queue_telegram_notification,
+    send_telegram_direct_message,
+    telegram_chat_is_authorized,
+    telegram_settings_snapshot,
 )
 from services.ui_service import (
     divider,
@@ -118,7 +132,13 @@ def missing_position_symbols(rules: dict, active_positions: dict) -> list[str]:
     return sorted(symbol for symbol in active_positions if symbol not in rules)
 
 
-def mode_notice(mode: str, active_positions: dict) -> tuple[str | None, list[str] | None]:
+def mode_notice(
+    mode: str,
+    active_positions: dict,
+    *,
+    strategy_execution_wired: bool,
+    live_auto_exit_enabled: bool,
+) -> tuple[str | None, list[str] | None]:
     if mode == "paper":
         return None, None
 
@@ -131,17 +151,35 @@ def mode_notice(mode: str, active_positions: dict) -> tuple[str | None, list[str
         return "Read-only mode is active", lines
 
     if mode == "live":
-        lines = [
-            "Live mode foundation is loaded for guardrail and execution testing.",
-            "Strategy-driven live entry remains disconnected from the market loop.",
-            "Auto live exit can be enabled separately for exchange holdings.",
-            "Use hotkey M only if you intentionally want to submit the configured manual live order preset.",
-        ]
+        if strategy_execution_wired:
+            lines = [
+                "Live mode is wired for guarded strategy-driven entries.",
+                "Only symbols in config rules can auto-enter; watchlist symbols remain research-only.",
+                "Auto live exit can run separately for exchange holdings when enabled.",
+                "Use hotkey M only if you intentionally want to submit the configured manual live order preset.",
+            ]
+            title = "Live mode is running with guarded auto entry"
+        elif live_auto_exit_enabled:
+            lines = [
+                "Live mode foundation is loaded for guardrail and execution testing.",
+                "Strategy-driven live entry remains disconnected from the market loop.",
+                "Auto live exit can be enabled separately for exchange holdings.",
+                "Use hotkey M only if you intentionally want to submit the configured manual live order preset.",
+            ]
+            title = "Live mode is in guarded foundation-only state"
+        else:
+            lines = [
+                "Live mode foundation is loaded for guardrail and execution testing.",
+                "Strategy-driven live entry remains disconnected from the market loop.",
+                "Auto live exit can be enabled separately for exchange holdings.",
+                "Use hotkey M only if you intentionally want to submit the configured manual live order preset.",
+            ]
+            title = "Live mode is in guarded foundation-only state"
         if active_positions:
             lines.append(
                 "Existing paper positions remain visible, but they are not managed as live orders."
             )
-        return "Live mode is in guarded foundation-only state", lines
+        return title, lines
 
     lines = [
         "Live execution is intentionally disabled in this build.",
@@ -154,10 +192,19 @@ def mode_notice(mode: str, active_positions: dict) -> tuple[str | None, list[str
     return "Live mode is disabled in this build", lines
 
 
-def execution_guardrail_message(mode: str) -> str | None:
+def execution_guardrail_message(
+    mode: str,
+    *,
+    strategy_execution_wired: bool,
+    live_auto_exit_enabled: bool,
+) -> str | None:
     if mode == "read-only":
         return "Trading engine is locked by read-only mode"
     if mode == "live":
+        if strategy_execution_wired:
+            return "Live mode selected; guarded strategy-driven live entry is wired in this build"
+        if live_auto_exit_enabled:
+            return "Live mode selected; auto live exit is wired while strategy-driven live entry remains disconnected"
         return "Live mode selected; execution guardrails are active and strategy-driven live orders remain disconnected"
     if mode == "live-disabled":
         return "Trading engine is locked because live mode is disabled in this build"
@@ -240,6 +287,7 @@ def main():
     last_market_cleanup_day: str | None = None
     notice: str | None = None
     notice_lines: list[str] | None = restore_messages or None
+    pending_telegram_confirms: dict[str, dict] = {}
     private_api_status = "not configured"
     private_api_capabilities: list[str] | None = None
     selected_execution_order_id: int | None = None
@@ -295,8 +343,12 @@ def main():
         private_api_capabilities = ["wallet=OFF", "balances=OFF", "open_orders=OFF"]
 
     startup_mode = str(config.get("mode", "paper"))
-    strategy_execution_wired = False
-    startup_guardrail_message = execution_guardrail_message(startup_mode)
+    strategy_execution_wired = bool(config.get("live_auto_entry_enabled", False))
+    startup_guardrail_message = execution_guardrail_message(
+        startup_mode,
+        strategy_execution_wired=strategy_execution_wired,
+        live_auto_exit_enabled=bool(config.get("live_auto_exit_enabled", False)),
+    )
     if startup_guardrail_message:
         insert_runtime_event(
             created_at=now_text(),
@@ -386,6 +438,459 @@ def main():
             manual_pause=manual_pause,
         )
 
+    def notify_telegram(event_type: str, title: str, lines: list[str] | None = None, *, payload: dict | None = None):
+        queue_telegram_notification(
+            config=config,
+            created_at=now_text(),
+            event_type=event_type,
+            title=title,
+            lines=lines,
+            payload=payload,
+        )
+
+    def flush_telegram_notifications():
+        delivery = flush_telegram_outbox(config=config, max_messages=10)
+        if delivery["failed"] > 0:
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="telegram_delivery",
+                severity="warning",
+                message="Telegram delivery failed for one or more queued notifications",
+                details=delivery,
+            )
+
+    def telegram_status_lines() -> list[str]:
+        return [
+            f"mode={trading_mode}",
+            f"state={'SAFETY PAUSE' if safety_pause else 'MANUAL PAUSE' if manual_pause else 'RUNNING'}",
+            f"live_execution_enabled={'ON' if bool(config.get('live_execution_enabled', False)) else 'OFF'}",
+            f"live_auto_entry_enabled={'ON' if bool(config.get('live_auto_entry_enabled', False)) else 'OFF'}",
+            f"live_auto_exit_enabled={'ON' if bool(config.get('live_auto_exit_enabled', False)) else 'OFF'}",
+            f"watchlist={len(config.get('watchlist_symbols', []))}",
+            f"live_rules={len(config['rules'])}",
+            f"open_positions={len(positions)} cooldowns={len(active_cooldown_rows())}",
+            f"private_api={private_api_status}",
+        ]
+
+    def telegram_positions_lines() -> list[str]:
+        if not positions:
+            return ["No local paper positions."]
+
+        lines: list[str] = []
+        for symbol in sorted(positions)[:8]:
+            lines.append(f"{symbol}: {position_detail_text(symbol, positions[symbol], latest_prices)}")
+        if len(positions) > 8:
+            lines.append(f"... and {len(positions) - 8} more position(s)")
+        return lines
+
+    def telegram_health_lines() -> list[str]:
+        total_trades, total_wins, total_losses, total_pnl = daily_totals()
+        guardrails = build_live_execution_guardrails(
+            config=config,
+            trading_mode=trading_mode,
+            private_client=private_client,
+            private_api_capabilities=private_api_capabilities,
+            manual_pause=manual_pause,
+            safety_pause=safety_pause,
+            total_realized_pnl_thb=total_pnl,
+            available_balances=extract_available_balances(account_snapshot),
+            strategy_execution_wired=strategy_execution_wired,
+        )
+        lines = [
+            f"ready={'YES' if guardrails['ready'] else 'NO'}",
+            f"kill_switch={'ON' if guardrails['live_execution_enabled'] else 'OFF'}",
+            f"auto_entry={'ON' if guardrails.get('live_auto_entry_enabled') else 'OFF'}",
+            f"auto_exit={'ON' if guardrails.get('live_auto_exit_enabled') else 'OFF'}",
+            f"open_orders_capability={guardrails.get('open_orders_capability')}",
+            f"thb_available={float(guardrails.get('thb_available_balance', 0.0)):,.2f}",
+            f"realized_today={total_pnl:,.2f} THB",
+        ]
+        blocked_reasons = list(guardrails.get("blocked_reasons", []))
+        if blocked_reasons:
+            lines.append("blocked_reasons:")
+            lines.extend(f"- {reason}" for reason in blocked_reasons[:5])
+        return lines
+
+    def telegram_live_lines() -> list[str]:
+        total_trades, total_wins, total_losses, total_pnl = daily_totals()
+        guardrails = build_live_execution_guardrails(
+            config=config,
+            trading_mode=trading_mode,
+            private_client=private_client,
+            private_api_capabilities=private_api_capabilities,
+            manual_pause=manual_pause,
+            safety_pause=safety_pause,
+            total_realized_pnl_thb=total_pnl,
+            available_balances=extract_available_balances(account_snapshot),
+            strategy_execution_wired=strategy_execution_wired,
+        )
+        return [
+            f"mode={trading_mode}",
+            f"ready={'YES' if guardrails['ready'] else 'NO'}",
+            f"kill_switch={'ON' if guardrails['live_execution_enabled'] else 'OFF'}",
+            f"auto_entry={'ON' if guardrails.get('live_auto_entry_enabled') else 'OFF'}",
+            f"auto_exit={'ON' if guardrails.get('live_auto_exit_enabled') else 'OFF'}",
+            f"strategy_wired={'YES' if strategy_execution_wired else 'NO'}",
+            f"thb_available={float(guardrails.get('thb_available_balance', 0.0)):,.2f}",
+            f"blocked_reasons={len(guardrails.get('blocked_reasons', []))}",
+        ]
+
+    def telegram_config_lines() -> list[str]:
+        return [
+            f"mode={config.get('mode')}",
+            f"interval_seconds={config.get('interval_seconds')}",
+            f"fee_rate={config.get('fee_rate')}",
+            f"live_execution_enabled={'ON' if bool(config.get('live_execution_enabled', False)) else 'OFF'}",
+            f"live_auto_entry_enabled={'ON' if bool(config.get('live_auto_entry_enabled', False)) else 'OFF'}",
+            f"live_auto_exit_enabled={'ON' if bool(config.get('live_auto_exit_enabled', False)) else 'OFF'}",
+            f"rules={len(config.get('rules', {}))}",
+            f"watchlist_symbols={len(config.get('watchlist_symbols', []))}",
+            f"telegram_enabled={'ON' if bool(config.get('telegram_enabled', False)) else 'OFF'}",
+            f"telegram_control_enabled={'ON' if bool(config.get('telegram_control_enabled', False)) else 'OFF'}",
+        ]
+
+    def telegram_holdings_lines() -> list[str]:
+        if private_client is None:
+            return ["Private API credentials are not configured."]
+
+        snapshot = fetch_account_snapshot(private_client)
+        holdings_rows = build_live_holdings_snapshot(
+            account_snapshot=snapshot,
+            latest_prices=latest_prices,
+            latest_filled_execution_orders=fetch_latest_filled_execution_orders_by_symbol(),
+        )
+        if not holdings_rows:
+            return ["No live holdings found."]
+
+        lines: list[str] = []
+        for row in holdings_rows[:8]:
+            symbol = str(row.get("symbol"))
+            available_qty = float(row.get("available_qty", 0.0) or 0.0)
+            reserved_qty = float(row.get("reserved_qty", 0.0) or 0.0)
+            market_value = float(row.get("market_value_thb", 0.0) or 0.0)
+            auto_status = str(row.get("auto_exit_status") or "n/a")
+            lines.append(
+                f"{symbol}: avail={available_qty:,.8f} reserved={reserved_qty:,.8f} value={market_value:,.2f} THB auto={auto_status}"
+            )
+        if len(holdings_rows) > 8:
+            lines.append(f"... and {len(holdings_rows) - 8} more row(s)")
+        return lines
+
+    def telegram_orders_lines() -> list[str]:
+        open_orders = fetch_open_execution_orders()
+        if not open_orders:
+            return ["No open execution orders."]
+        lines = []
+        for row in open_orders[:8]:
+            lines.append(
+                f"id={row['id']} {row['symbol']} {row['side']} state={row['state']} updated={row['updated_at']}"
+            )
+        if len(open_orders) > 8:
+            lines.append(f"... and {len(open_orders) - 8} more order(s)")
+        return lines
+
+    def cleanup_pending_telegram_confirms():
+        now_ts = time.time()
+        expired_chat_ids = [
+            chat_id
+            for chat_id, pending in pending_telegram_confirms.items()
+            if float(pending.get("expires_at", 0.0)) <= now_ts
+        ]
+        for chat_id in expired_chat_ids:
+            pending_telegram_confirms.pop(chat_id, None)
+
+    def create_telegram_confirmation(*, chat_id: str, action: str, payload: dict, summary_lines: list[str]) -> list[str]:
+        cleanup_pending_telegram_confirms()
+        code = secrets.token_hex(3).upper()
+        pending_telegram_confirms[str(chat_id)] = {
+            "code": code,
+            "action": action,
+            "payload": payload,
+            "expires_at": time.time() + 120,
+        }
+        return [
+            f"Confirmation required for {action}.",
+            *summary_lines,
+            f"Reply with: /confirm {code}",
+            "This code expires in 120 seconds.",
+        ]
+
+    def execute_telegram_confirmation(*, chat_id: str, code: str) -> tuple[str, list[str], str]:
+        cleanup_pending_telegram_confirms()
+        pending = pending_telegram_confirms.get(str(chat_id))
+        if not pending:
+            return (
+                "Telegram confirmation not found",
+                ["There is no pending command for this chat."],
+                "rejected",
+            )
+        if str(pending.get("code")) != str(code).strip().upper():
+            return (
+                "Telegram confirmation rejected",
+                ["Confirmation code is invalid or expired."],
+                "rejected",
+            )
+
+        pending_telegram_confirms.pop(str(chat_id), None)
+        action = str(pending.get("action") or "")
+        payload = dict(pending.get("payload") or {})
+
+        if action == "reload":
+            reload_config_action()
+            return notice or "Config reload completed", notice_lines or ["Config reload finished."], "processed"
+        if action == "pause":
+            set_manual_pause_action(True)
+            return notice or "Manual pause enabled", notice_lines or ["Trading loop is manually paused."], "processed"
+        if action == "resume":
+            set_manual_pause_action(False)
+            return notice or "Manual pause cleared", notice_lines or ["Trading loop resumed."], "processed"
+        if action == "cancel":
+            execution_order_id = int(payload.get("execution_order_id", 0) or 0)
+            open_execution_orders = sync_selected_execution_order()
+            target_order = next(
+                (
+                    order
+                    for order in open_execution_orders
+                    if int(order["id"]) == execution_order_id
+                ),
+                None,
+            )
+            if target_order is None:
+                return (
+                    "Live order cancel rejected",
+                    [f"id={execution_order_id} is no longer open."],
+                    "rejected",
+                )
+            success, result_title, result_lines = cancel_specific_live_order(
+                target_order,
+                source="telegram_cancel_command",
+            )
+            return result_title, result_lines, "processed" if success else "failed"
+
+        return (
+            "Telegram confirmation failed",
+            [f"Unsupported pending action: {action}"],
+            "failed",
+        )
+
+    def process_telegram_commands():
+        cleanup_pending_telegram_confirms()
+        updates_result = fetch_telegram_command_updates(config=config, limit=10)
+        if updates_result.get("errors"):
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="telegram_delivery",
+                severity="warning",
+                message="Telegram command polling failed",
+                details=updates_result,
+            )
+            return
+
+        for update in updates_result.get("updates", []):
+            command_text = str(update.get("command_text") or "").strip()
+            if not command_text:
+                continue
+
+            command_log_id = insert_telegram_command_log(
+                created_at=now_text(),
+                update_id=int(update["update_id"]),
+                chat_id=str(update["chat_id"]),
+                username=str(update.get("username") or ""),
+                command_text=command_text,
+                status="received",
+            )
+            if command_log_id is None:
+                continue
+
+            authorized = telegram_chat_is_authorized(
+                config=config,
+                chat_id=str(update["chat_id"]),
+            )
+            command_parts = command_text.split()
+            command_name = command_parts[0].split("@")[0].lower()
+            response_lines: list[str]
+            response_title: str
+            response_status = "processed"
+
+            try:
+                if command_name in {"/start", "/help"}:
+                    response_title = "Bitkub Telegram Commands"
+                    response_lines = [
+                        "/status",
+                        "/health",
+                        "/positions",
+                        "/holdings",
+                        "/orders",
+                        "/live",
+                        "/config",
+                        "/pause",
+                        "/resume",
+                        "/cancel <id>",
+                        "/reload",
+                        "/confirm <code>",
+                    ]
+                elif command_name == "/status":
+                    response_title = "Bitkub Bot Status"
+                    response_lines = telegram_status_lines()
+                elif command_name == "/health":
+                    response_title = "Bitkub Bot Health"
+                    response_lines = telegram_health_lines()
+                elif command_name == "/positions":
+                    response_title = "Bitkub Local Positions"
+                    response_lines = telegram_positions_lines()
+                elif command_name == "/holdings":
+                    response_title = "Bitkub Live Holdings"
+                    response_lines = telegram_holdings_lines()
+                elif command_name == "/orders":
+                    response_title = "Bitkub Open Orders"
+                    response_lines = telegram_orders_lines()
+                elif command_name == "/live":
+                    response_title = "Bitkub Live Execution"
+                    response_lines = telegram_live_lines()
+                elif command_name == "/config":
+                    response_title = "Bitkub Config Summary"
+                    response_lines = telegram_config_lines()
+                elif command_name == "/pause":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /pause."]
+                        response_status = "rejected"
+                    else:
+                        response_title = "Telegram confirmation required"
+                        response_lines = create_telegram_confirmation(
+                            chat_id=str(update["chat_id"]),
+                            action="pause",
+                            payload={},
+                            summary_lines=["Requested action: manual pause"],
+                        )
+                        response_status = "pending_confirmation"
+                elif command_name == "/resume":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /resume."]
+                        response_status = "rejected"
+                    else:
+                        response_title = "Telegram confirmation required"
+                        response_lines = create_telegram_confirmation(
+                            chat_id=str(update["chat_id"]),
+                            action="resume",
+                            payload={},
+                            summary_lines=["Requested action: manual resume"],
+                        )
+                        response_status = "pending_confirmation"
+                elif command_name == "/cancel":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /cancel."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 2:
+                        response_title = "Telegram cancel usage"
+                        response_lines = [
+                            "Use /cancel <execution_order_id>",
+                            *telegram_orders_lines()[:5],
+                        ]
+                        response_status = "rejected"
+                    else:
+                        try:
+                            execution_order_id = int(command_parts[1])
+                        except ValueError:
+                            response_title = "Telegram cancel usage"
+                            response_lines = ["Execution order id must be an integer."]
+                            response_status = "rejected"
+                        else:
+                            target_order = next(
+                                (
+                                    order
+                                    for order in fetch_open_execution_orders()
+                                    if int(order["id"]) == execution_order_id
+                                ),
+                                None,
+                            )
+                            if target_order is None:
+                                response_title = "Live order cancel rejected"
+                                response_lines = [f"id={execution_order_id} is not currently open."]
+                                response_status = "rejected"
+                            else:
+                                response_title = "Telegram confirmation required"
+                                response_lines = create_telegram_confirmation(
+                                    chat_id=str(update["chat_id"]),
+                                    action="cancel",
+                                    payload={"execution_order_id": execution_order_id},
+                                    summary_lines=[
+                                        f"id={execution_order_id}",
+                                        f"symbol={target_order['symbol']}",
+                                        f"side={target_order['side']}",
+                                        f"state={target_order['state']}",
+                                    ],
+                                )
+                                response_status = "pending_confirmation"
+                elif command_name == "/reload":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /reload."]
+                        response_status = "rejected"
+                    else:
+                        response_title = "Telegram confirmation required"
+                        response_lines = create_telegram_confirmation(
+                            chat_id=str(update["chat_id"]),
+                            action="reload",
+                            payload={},
+                            summary_lines=["Requested action: config reload"],
+                        )
+                        response_status = "pending_confirmation"
+                elif command_name == "/confirm":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /confirm."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 2:
+                        response_title = "Telegram confirmation usage"
+                        response_lines = ["Use /confirm <code>"]
+                        response_status = "rejected"
+                    else:
+                        response_title, response_lines, response_status = execute_telegram_confirmation(
+                            chat_id=str(update["chat_id"]),
+                            code=command_parts[1],
+                        )
+                else:
+                    response_title = "Unknown Telegram command"
+                    response_lines = [
+                        "Supported commands: /start, /help, /status, /health, /positions, /holdings, /orders, /live, /config, /pause, /resume, /cancel <id>, /reload, /confirm <code>"
+                    ]
+                    response_status = "rejected"
+            except Exception as e:
+                response_title = "Telegram command failed"
+                response_lines = [f"{command_name}: {e}"]
+                response_status = "failed"
+
+            response_text = "\n".join([response_title] + response_lines)
+            try:
+                send_telegram_direct_message(
+                    config=config,
+                    chat_id=str(update["chat_id"]),
+                    text=response_text,
+                )
+            except Exception as e:
+                response_status = "failed"
+                response_text = f"{response_text}\nTelegram send failed: {e}"
+                insert_runtime_event(
+                    created_at=now_text(),
+                    event_type="telegram_delivery",
+                    severity="warning",
+                    message="Telegram command response failed to send",
+                    details={
+                        "chat_id": str(update["chat_id"]),
+                        "command_text": command_text,
+                        "exception": str(e),
+                    },
+                )
+
+            update_telegram_command_log(
+                command_log_id=command_log_id,
+                status=response_status,
+                response_text=response_text,
+            )
+
     def run_sqlite_retention_cleanup(*, source: str, force: bool):
         nonlocal last_market_cleanup_day
         retention_days = {
@@ -443,7 +948,9 @@ def main():
             rules = config["rules"]
             trading_mode = str(config.get("mode", "paper"))
             trading_enabled = trading_mode == "paper"
+            live_auto_entry_enabled = bool(config.get("live_auto_entry_enabled", False))
             live_auto_exit_enabled = bool(config.get("live_auto_exit_enabled", False))
+            strategy_execution_wired = trading_mode == "live" and live_auto_entry_enabled
             interval_seconds = int(config["interval_seconds"])
             fee_rate = float(config["fee_rate"])
 
@@ -459,6 +966,12 @@ def main():
                     severity="warning",
                     message=reason,
                     details={"lines": safety_pause_lines, "immediate": immediate},
+                )
+                notify_telegram(
+                    "safety_pause",
+                    reason,
+                    safety_pause_lines,
+                    payload={"immediate": immediate},
                 )
                 persist_state()
 
@@ -524,8 +1037,18 @@ def main():
                     message=notice,
                     details={"changes": change_lines},
                 )
+                notify_telegram(
+                    "config_reload",
+                    notice,
+                    change_lines[:8],
+                    payload={"changes": change_lines},
+                )
                 new_mode = str(new_config.get("mode", "paper"))
-                guardrail_message = execution_guardrail_message(new_mode)
+                guardrail_message = execution_guardrail_message(
+                    new_mode,
+                    strategy_execution_wired=bool(new_config.get("live_auto_entry_enabled", False)),
+                    live_auto_exit_enabled=bool(new_config.get("live_auto_exit_enabled", False)),
+                )
                 if guardrail_message:
                     insert_runtime_event(
                         created_at=now_text(),
@@ -539,15 +1062,28 @@ def main():
                 return True
 
             def toggle_pause_action():
+                target_state = not manual_pause
+                return set_manual_pause_action(target_state)
+
+            def set_manual_pause_action(target_state: bool):
                 nonlocal manual_pause, notice, notice_lines
-                if safety_pause:
+                if not target_state and safety_pause:
                     notice = "Manual resume blocked while safety pause is active"
                     notice_lines = safety_pause_lines or [
                         "Fix the safety condition and press R to clear the safety pause."
                     ]
                     return True
 
-                manual_pause = not manual_pause
+                if manual_pause == target_state:
+                    notice = (
+                        "Manual pause already enabled"
+                        if manual_pause
+                        else "Manual pause already cleared"
+                    )
+                    notice_lines = None
+                    return True
+
+                manual_pause = target_state
                 notice = "Manual pause enabled" if manual_pause else "Manual pause cleared"
                 notice_lines = None
                 insert_runtime_event(
@@ -974,6 +1510,7 @@ def main():
                         message=notice,
                         details={"errors": notice_lines},
                     )
+                    notify_telegram("manual_live_order", notice, notice_lines)
                     return True
 
                 snapshot_errors = account_snapshot_errors(account_snapshot)
@@ -1038,6 +1575,12 @@ def main():
                         message=notice,
                         details={"errors": notice_lines, "guardrails": live_guardrails},
                     )
+                    notify_telegram(
+                        "manual_live_order",
+                        notice,
+                        notice_lines,
+                        payload={"guardrails": live_guardrails},
+                    )
                     return True
                 except Exception as e:
                     notice = "Manual live order submission failed"
@@ -1049,6 +1592,7 @@ def main():
                         message=notice,
                         details={"errors": notice_lines},
                     )
+                    notify_telegram("manual_live_order", notice, notice_lines)
                     return True
 
                 execution_order_id = insert_execution_order(
@@ -1099,6 +1643,17 @@ def main():
                     severity="warning",
                     message=notice,
                     details={
+                        "execution_order_id": execution_order_id,
+                        "symbol": order_record["symbol"],
+                        "side": order_record["side"],
+                        "state": order_record["state"],
+                    },
+                )
+                notify_telegram(
+                    "manual_live_order",
+                    notice,
+                    notice_lines,
+                    payload={
                         "execution_order_id": execution_order_id,
                         "symbol": order_record["symbol"],
                         "side": order_record["side"],
@@ -1177,6 +1732,12 @@ def main():
                             "errors": notice_lines,
                         },
                     )
+                    notify_telegram(
+                        "auto_live_exit",
+                        notice,
+                        [f"symbol={candidate['symbol']}"] + notice_lines,
+                        payload={"symbol": candidate["symbol"], "exit_reason": candidate["exit_reason"]},
+                    )
                     return False
                 except Exception as e:
                     notice = "Auto live exit submission failed"
@@ -1191,6 +1752,12 @@ def main():
                             "exit_reason": candidate["exit_reason"],
                             "errors": notice_lines,
                         },
+                    )
+                    notify_telegram(
+                        "auto_live_exit",
+                        notice,
+                        [f"symbol={candidate['symbol']}", str(e)],
+                        payload={"symbol": candidate["symbol"], "exit_reason": candidate["exit_reason"]},
                     )
                     return False
 
@@ -1233,6 +1800,144 @@ def main():
                         "symbol": order_record["symbol"],
                         "state": order_record["state"],
                         "exit_reason": candidate["exit_reason"],
+                    },
+                )
+                notify_telegram(
+                    "auto_live_exit",
+                    notice,
+                    notice_lines,
+                    payload={
+                        "execution_order_id": execution_order_id,
+                        "symbol": order_record["symbol"],
+                        "state": order_record["state"],
+                        "exit_reason": candidate["exit_reason"],
+                    },
+                )
+                return True
+
+            def submit_auto_live_entry_action(candidate: dict) -> bool:
+                nonlocal account_snapshot, notice, notice_lines
+                if private_client is None:
+                    return False
+
+                available_balances = extract_available_balances(account_snapshot)
+                live_guardrails = build_live_execution_guardrails(
+                    config=config,
+                    trading_mode=trading_mode,
+                    private_client=private_client,
+                    private_api_capabilities=private_api_capabilities,
+                    manual_pause=manual_pause,
+                    safety_pause=safety_pause,
+                    total_realized_pnl_thb=total_pnl,
+                    available_balances=available_balances,
+                    strategy_execution_wired=strategy_execution_wired,
+                )
+
+                try:
+                    order_record, order_events = submit_auto_live_entry_order(
+                        client=private_client,
+                        symbol=str(candidate["symbol"]),
+                        amount_thb=float(candidate["amount_thb"]),
+                        rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        signal_reason=str(candidate["signal_reason"]),
+                        guardrails=live_guardrails,
+                        available_balances=available_balances,
+                        created_at=now_text(),
+                    )
+                except LiveExecutionGuardrailError as e:
+                    notice = "Auto live entry blocked by guardrails"
+                    notice_lines = str(e).split("; ")
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="auto_live_entry",
+                        severity="warning",
+                        message=notice,
+                        details={
+                            "symbol": candidate["symbol"],
+                            "signal_reason": candidate["signal_reason"],
+                            "errors": notice_lines,
+                        },
+                    )
+                    notify_telegram(
+                        "auto_live_entry",
+                        notice,
+                        [f"symbol={candidate['symbol']}"] + notice_lines,
+                        payload={"symbol": candidate["symbol"], "signal_reason": candidate["signal_reason"]},
+                    )
+                    return False
+                except Exception as e:
+                    notice = "Auto live entry submission failed"
+                    notice_lines = [str(e)]
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="auto_live_entry",
+                        severity="error",
+                        message=notice,
+                        details={
+                            "symbol": candidate["symbol"],
+                            "signal_reason": candidate["signal_reason"],
+                            "errors": notice_lines,
+                        },
+                    )
+                    notify_telegram(
+                        "auto_live_entry",
+                        notice,
+                        [f"symbol={candidate['symbol']}", str(e)],
+                        payload={"symbol": candidate["symbol"], "signal_reason": candidate["signal_reason"]},
+                    )
+                    return False
+
+                execution_order_id = insert_execution_order(
+                    created_at=order_record["created_at"],
+                    updated_at=order_record["updated_at"],
+                    symbol=order_record["symbol"],
+                    side=order_record["side"],
+                    order_type=order_record["order_type"],
+                    state=order_record["state"],
+                    request_payload=order_record["request_payload"],
+                    response_payload=order_record.get("response_payload"),
+                    guardrails=order_record.get("guardrails"),
+                    exchange_order_id=order_record.get("exchange_order_id"),
+                    exchange_client_id=order_record.get("exchange_client_id"),
+                    message=order_record["message"],
+                )
+                persist_execution_order_changes(
+                    execution_order_id=execution_order_id,
+                    order_record=order_record,
+                    order_events=order_events,
+                )
+
+                notice = "Auto live entry order submitted"
+                notice_lines = [
+                    f"id={execution_order_id} symbol={order_record['symbol']} reason={candidate['signal_reason']} state={order_record['state']}",
+                    f"amount_thb={float(candidate['amount_thb']):,.2f} rate={float(candidate['rate']):,.8f} latest={float(candidate['latest_price']):,.8f}",
+                ]
+                if order_record.get("exchange_order_id"):
+                    notice_lines.append(
+                        f"exchange_order_id={order_record['exchange_order_id']}"
+                    )
+                insert_runtime_event(
+                    created_at=now_text(),
+                    event_type="auto_live_entry",
+                    severity="warning",
+                    message=notice,
+                    details={
+                        "execution_order_id": execution_order_id,
+                        "symbol": order_record["symbol"],
+                        "state": order_record["state"],
+                        "signal_reason": candidate["signal_reason"],
+                    },
+                )
+                notify_telegram(
+                    "auto_live_entry",
+                    notice,
+                    notice_lines,
+                    payload={
+                        "execution_order_id": execution_order_id,
+                        "symbol": order_record["symbol"],
+                        "state": order_record["state"],
+                        "signal_reason": candidate["signal_reason"],
                     },
                 )
                 return True
@@ -1319,6 +2024,90 @@ def main():
                 sync_selected_execution_order()
                 return True
 
+            def cancel_specific_live_order(target_order: dict, *, source: str):
+                nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
+                execution_order_id = int(target_order["id"])
+
+                try:
+                    account_snapshot = fetch_account_snapshot(private_client)
+                except BitkubPrivateClientError as e:
+                    notice = "Live order cancel failed while refreshing account snapshot"
+                    notice_lines = [str(e)]
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="live_order_cancel",
+                        severity="error",
+                        message=notice,
+                        details={"errors": notice_lines, "source": source},
+                    )
+                    return False, notice, notice_lines
+
+                snapshot_errors = account_snapshot_errors(account_snapshot)
+                private_api_capabilities = summarize_account_capabilities(account_snapshot)
+                private_api_status = (
+                    "wallet/balance ready, some order endpoints unavailable"
+                    if snapshot_errors
+                    else "wallet/balance/open-orders ready"
+                )
+                insert_account_snapshot(
+                    created_at=now_text(),
+                    source=source,
+                    private_api_status=private_api_status,
+                    capabilities=private_api_capabilities,
+                    snapshot=account_snapshot,
+                )
+
+                try:
+                    canceled_record, cancel_events = cancel_live_order(
+                        client=private_client,
+                        order_record=target_order,
+                        occurred_at=now_text(),
+                    )
+                except Exception as e:
+                    notice = "Live order cancel failed"
+                    notice_lines = [str(e)]
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="live_order_cancel",
+                        severity="error",
+                        message=notice,
+                        details={
+                            "execution_order_id": execution_order_id,
+                            "errors": notice_lines,
+                            "source": source,
+                        },
+                    )
+                    return False, notice, notice_lines
+
+                persist_execution_order_changes(
+                    execution_order_id=execution_order_id,
+                    order_record=canceled_record,
+                    order_events=cancel_events,
+                )
+                notice = "Live order cancel request completed"
+                notice_lines = [
+                    f"id={execution_order_id} symbol={canceled_record['symbol']} side={canceled_record['side']} state={canceled_record['state']}"
+                ]
+                if canceled_record.get("exchange_order_id"):
+                    notice_lines.append(
+                        f"exchange_order_id={canceled_record['exchange_order_id']}"
+                    )
+                insert_runtime_event(
+                    created_at=now_text(),
+                    event_type="live_order_cancel",
+                    severity="warning",
+                    message=notice,
+                    details={
+                        "execution_order_id": execution_order_id,
+                        "symbol": canceled_record["symbol"],
+                        "side": canceled_record["side"],
+                        "state": canceled_record["state"],
+                        "source": source,
+                    },
+                )
+                sync_selected_execution_order()
+                return True, notice, notice_lines
+
             def cancel_live_order_action():
                 nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
                 if private_client is None:
@@ -1360,82 +2149,7 @@ def main():
                     notice_lines = [f"id={execution_order_id} was not canceled."]
                     return True
 
-                try:
-                    account_snapshot = fetch_account_snapshot(private_client)
-                except BitkubPrivateClientError as e:
-                    notice = "Live order cancel failed while refreshing account snapshot"
-                    notice_lines = [str(e)]
-                    insert_runtime_event(
-                        created_at=now_text(),
-                        event_type="live_order_cancel",
-                        severity="error",
-                        message=notice,
-                        details={"errors": notice_lines},
-                    )
-                    return True
-
-                snapshot_errors = account_snapshot_errors(account_snapshot)
-                private_api_capabilities = summarize_account_capabilities(account_snapshot)
-                private_api_status = (
-                    "wallet/balance ready, some order endpoints unavailable"
-                    if snapshot_errors
-                    else "wallet/balance/open-orders ready"
-                )
-                insert_account_snapshot(
-                    created_at=now_text(),
-                    source="live_order_cancel_hotkey",
-                    private_api_status=private_api_status,
-                    capabilities=private_api_capabilities,
-                    snapshot=account_snapshot,
-                )
-
-                try:
-                    canceled_record, cancel_events = cancel_live_order(
-                        client=private_client,
-                        order_record=target_order,
-                        occurred_at=now_text(),
-                    )
-                except Exception as e:
-                    notice = "Live order cancel failed"
-                    notice_lines = [str(e)]
-                    insert_runtime_event(
-                        created_at=now_text(),
-                        event_type="live_order_cancel",
-                        severity="error",
-                        message=notice,
-                        details={
-                            "execution_order_id": execution_order_id,
-                            "errors": notice_lines,
-                        },
-                    )
-                    return True
-
-                persist_execution_order_changes(
-                    execution_order_id=execution_order_id,
-                    order_record=canceled_record,
-                    order_events=cancel_events,
-                )
-                notice = "Live order cancel request completed"
-                notice_lines = [
-                    f"id={execution_order_id} symbol={canceled_record['symbol']} side={canceled_record['side']} state={canceled_record['state']}"
-                ]
-                if canceled_record.get("exchange_order_id"):
-                    notice_lines.append(
-                        f"exchange_order_id={canceled_record['exchange_order_id']}"
-                    )
-                insert_runtime_event(
-                    created_at=now_text(),
-                    event_type="live_order_cancel",
-                    severity="warning",
-                    message=notice,
-                    details={
-                        "execution_order_id": execution_order_id,
-                        "symbol": canceled_record["symbol"],
-                        "side": canceled_record["side"],
-                        "state": canceled_record["state"],
-                    },
-                )
-                sync_selected_execution_order()
+                cancel_specific_live_order(target_order, source="live_order_cancel_hotkey")
                 return True
 
             def cycle_execution_order_action():
@@ -1553,7 +2267,12 @@ def main():
             cooldown_rows = active_cooldown_rows()
             total_trades, total_wins, total_losses, total_pnl = daily_totals()
             timestamp = now_text()
-            mode_notice_text, mode_notice_lines = mode_notice(trading_mode, positions)
+            mode_notice_text, mode_notice_lines = mode_notice(
+                trading_mode,
+                positions,
+                strategy_execution_wired=strategy_execution_wired,
+                live_auto_exit_enabled=live_auto_exit_enabled,
+            )
             render_header(
                 timestamp=timestamp,
                 trading_mode=trading_mode,
@@ -1578,6 +2297,8 @@ def main():
 
             if manual_pause or safety_pause:
                 run_sqlite_retention_cleanup(source="paused_loop", force=False)
+                flush_telegram_notifications()
+                process_telegram_commands()
                 section_title("SYSTEM STATUS")
 
                 if safety_pause:
@@ -1609,6 +2330,7 @@ def main():
             ticker = get_ticker()
             run_sqlite_retention_cleanup(source="market_loop", force=False)
             market_rows: list[dict] = []
+            entry_signal_rows: list[dict] = []
 
             for symbol, rule in rules.items():
                 if symbol not in ticker:
@@ -1677,6 +2399,14 @@ def main():
                         cooldowns=cooldowns,
                         timestamp=timestamp,
                     )
+                elif trading_mode == "live" and live_auto_entry_enabled and changed and current_zone == "BUY":
+                    entry_signal_rows.append(
+                        {
+                            "symbol": symbol,
+                            "latest_price": last_price,
+                            "signal_reason": "BUY_ZONE_ENTRY",
+                        }
+                    )
 
                 insert_market_snapshot(
                     created_at=timestamp,
@@ -1710,7 +2440,14 @@ def main():
             print_market_table(market_rows)
             if not trading_enabled:
                 if trading_mode == "live":
-                    if live_auto_exit_enabled:
+                    if live_auto_entry_enabled:
+                        print(
+                            "Live trading active: guarded strategy-driven entries are enabled for config rules."
+                        )
+                        print(
+                            "Market scan continues and one guarded live buy may be submitted per loop when a fresh BUY zone entry appears."
+                        )
+                    elif live_auto_exit_enabled:
                         print(
                             "Live foundation active: strategy-driven live entries are disconnected, but auto live exit is enabled."
                         )
@@ -1769,7 +2506,7 @@ def main():
                             order_events=refresh_events,
                         )
 
-                if live_auto_exit_enabled and not manual_pause and not safety_pause:
+                if (live_auto_exit_enabled or live_auto_entry_enabled) and not manual_pause and not safety_pause:
                     try:
                         account_snapshot = fetch_account_snapshot(private_client)
                         snapshot_errors = account_snapshot_errors(account_snapshot)
@@ -1787,24 +2524,89 @@ def main():
                             latest_prices=latest_prices,
                             latest_filled_execution_orders=latest_filled_orders,
                         )
-                        exit_candidates = evaluate_live_exit_candidates(
-                            rules=rules,
-                            live_holdings_rows=live_holdings_rows,
-                            open_execution_orders=fetch_open_execution_orders(),
-                            exchange_open_orders_by_symbol=extract_open_orders_by_symbol(
-                                account_snapshot
-                            ),
+                        current_open_execution_orders = fetch_open_execution_orders()
+                        exchange_open_orders_by_symbol = extract_open_orders_by_symbol(
+                            account_snapshot
                         )
-                        if exit_candidates:
-                            submit_auto_live_exit_action(exit_candidates[0])
+                        live_order_submitted = False
+
+                        if live_auto_exit_enabled:
+                            exit_candidates = evaluate_live_exit_candidates(
+                                rules=rules,
+                                live_holdings_rows=live_holdings_rows,
+                                open_execution_orders=current_open_execution_orders,
+                                exchange_open_orders_by_symbol=exchange_open_orders_by_symbol,
+                            )
+                            if exit_candidates:
+                                live_order_submitted = submit_auto_live_exit_action(exit_candidates[0])
+
+                        if live_auto_entry_enabled and not live_order_submitted:
+                            entry_review = evaluate_live_entry_candidates(
+                                config=config,
+                                rules=rules,
+                                entry_signal_rows=entry_signal_rows,
+                                live_holdings_rows=live_holdings_rows,
+                                open_execution_orders=current_open_execution_orders,
+                                exchange_open_orders_by_symbol=exchange_open_orders_by_symbol,
+                            )
+                            entry_candidates = list(entry_review.get("candidates", []))
+                            rejected_entry_candidates = list(entry_review.get("rejected", []))
+                            ranking_errors = list(entry_review.get("ranking_errors", []))
+                            if entry_candidates or rejected_entry_candidates or ranking_errors:
+                                insert_runtime_event(
+                                    created_at=now_text(),
+                                    event_type="auto_live_entry_review",
+                                    severity="info",
+                                    message="Auto live entry candidate review completed",
+                                    details={
+                                        "candidates": [
+                                            {
+                                                "symbol": row.get("symbol"),
+                                                "ranking_score": row.get("ranking_score"),
+                                                "trend_bias": row.get("trend_bias"),
+                                                "signal_reason": row.get("signal_reason"),
+                                                "entry_discount_percent": row.get("entry_discount_percent"),
+                                            }
+                                            for row in entry_candidates[:5]
+                                        ],
+                                        "rejected": [
+                                            {
+                                                "symbol": row.get("symbol"),
+                                                "ranking_score": row.get("ranking_score"),
+                                                "trend_bias": row.get("trend_bias"),
+                                                "reasons": row.get("reasons"),
+                                            }
+                                            for row in rejected_entry_candidates[:8]
+                                        ],
+                                        "ranking_errors": ranking_errors[:8],
+                                        "ranking_context": entry_review.get("ranking_context", {}),
+                                    },
+                                )
+                            if entry_candidates:
+                                submit_auto_live_entry_action(entry_candidates[0])
                     except Exception as e:
+                        event_type = "auto_live_entry" if live_auto_entry_enabled else "auto_live_exit"
+                        message = (
+                            "Auto live entry evaluation failed"
+                            if live_auto_entry_enabled
+                            else "Auto live exit evaluation failed"
+                        )
                         insert_runtime_event(
                             created_at=now_text(),
-                            event_type="auto_live_exit",
+                            event_type=event_type,
                             severity="error",
-                            message="Auto live exit evaluation failed",
+                            message=message,
                             details={"exception": str(e)},
                         )
+                        notify_telegram(
+                            event_type,
+                            message,
+                            [str(e)],
+                            payload={"exception": str(e)},
+                        )
+
+            flush_telegram_notifications()
+            process_telegram_commands()
 
             print(
                 f"Waiting {interval_seconds}s for next refresh... "
@@ -1833,6 +2635,12 @@ def main():
                 severity="error",
                 message=notice,
                 details={"exception": str(e)},
+            )
+            notify_telegram(
+                "runtime_error",
+                notice,
+                [str(e)],
+                payload={"exception": str(e)},
             )
             print(f"\nRuntime error: {e}")
             time.sleep(5)

@@ -18,14 +18,14 @@ Current direction:
 
 - `paper` mode: usable
 - `read-only` mode: usable
-- `live` mode: guarded foundation plus manual live controls
+- `live` mode: guarded auto entry, guarded auto exit, and manual live controls
 - Private API: wallet, balances, open orders, and order history are working
 - Streamlit UI: available and improving
 
 What is still intentionally limited:
 
-- Strategy-driven live entry is not wired into the market loop.
-- Auto live exit exists as a guarded foundation only.
+- Watchlist symbols are separate from live tradable rules.
+- Strategy-driven live entry is wired only when `live_auto_entry_enabled` is on.
 - Streamlit does not replace the console engine.
 
 ## Architecture
@@ -43,7 +43,7 @@ Responsibilities:
 - market polling
 - paper strategy loop
 - live execution foundation
-- auto live exit evaluation
+- auto live entry / exit evaluation
 - hotkeys
 - runtime safety handling
 
@@ -117,9 +117,11 @@ Important:
 ### Config
 
 - system settings
+- watchlist editor
+- Telegram foundation settings
 - retention settings
 - manual live order preset
-- rule editor
+- live rule editor
 - add/remove rules
 - applied config change summary after save
 
@@ -172,12 +174,15 @@ Important fields:
 - `interval_seconds`
 - `cooldown_seconds`
 - `live_execution_enabled`
+- `live_auto_entry_enabled`
 - `live_auto_exit_enabled`
 - `live_max_order_thb`
 - `live_min_thb_balance`
 - `live_slippage_tolerance_percent`
 - `live_daily_loss_limit_thb`
 - `live_manual_order`
+- `watchlist_symbols`
+- `telegram_enabled` / `telegram_control_enabled` / `telegram_notify_events`
 - retention fields
 - `rules`
 
@@ -191,6 +196,7 @@ Example:
   "interval_seconds": 10,
   "cooldown_seconds": 60,
   "live_execution_enabled": false,
+  "live_auto_entry_enabled": false,
   "live_auto_exit_enabled": false,
   "live_max_order_thb": 500,
   "live_min_thb_balance": 100,
@@ -205,6 +211,16 @@ Example:
     "amount_coin": 0.0001,
     "rate": 29.30
   },
+  "watchlist_symbols": ["THB_KUB", "THB_BCH", "THB_FET"],
+  "telegram_enabled": false,
+  "telegram_control_enabled": false,
+  "telegram_notify_events": [
+    "safety_pause",
+    "manual_live_order",
+    "auto_live_entry",
+    "auto_live_exit",
+    "runtime_error"
+  ],
   "market_snapshot_retention_days": 30,
   "signal_log_retention_days": 30,
   "runtime_event_retention_days": 30,
@@ -238,6 +254,17 @@ Before using manual live order:
 - set `live_manual_order.enabled = true`
 - confirm symbol, side, size, and rate carefully
 
+### Auto Live Entry
+
+`live_auto_entry_enabled` allows guarded buy evaluation for symbols already present in `rules`.
+
+Current behavior:
+
+- at most one auto entry per loop
+- only uses the live tradable shortlist in `rules`
+- requires a fresh BUY-zone transition in the market loop
+- skips symbols with holdings, open execution orders, or exchange open orders
+
 ### Auto Live Exit
 
 `live_auto_exit_enabled` allows guarded sell evaluation for real holdings.
@@ -249,7 +276,10 @@ Current behavior:
 - requires matching live holding context
 - skips symbols with active open orders
 
-Strategy-driven live entry is still disconnected.
+### Watchlist vs Rules
+
+- `watchlist_symbols` = research universe for candle sync, ranking, and replay
+- `rules` = live tradable shortlist used by the console engine
 
 ## Private API
 
@@ -380,5 +410,43 @@ Check more files:
 ## Next Likely Steps
 
 - keep polishing Streamlit UX
-- add Telegram notifications/control later
+- add richer Telegram control and confirmation flows
 - keep console as the engine even if cloud deployment is added later
+
+## Telegram Foundation
+
+The codebase now includes a Telegram notifications-and-control foundation:
+
+- critical events are queued into SQLite `telegram_outbox`
+- the console engine flushes queued notifications to Telegram when delivery settings are ready
+- Telegram commands are polled from `getUpdates` and logged into `telegram_command_log`
+- enabling Telegram in config does not start a webhook server or separate bot process by itself
+
+Supported Telegram commands now include:
+
+- `/start`
+- `/help`
+- `/status`
+- `/health`
+- `/positions`
+- `/holdings`
+- `/orders`
+- `/live`
+- `/config`
+- `/pause`
+- `/resume`
+- `/cancel <execution_order_id>`
+- `/reload`
+- `/confirm <code>`
+
+Dangerous commands use a confirmation code flow. The bot replies with `/confirm <code>` instructions before it applies `/pause`, `/resume`, `/cancel`, or `/reload`.
+
+Required `.env` values for delivery:
+
+```env
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_CHAT_IDS=123456789,987654321
+TELEGRAM_ALLOWED_CHAT_IDS=123456789
+```
+
+You can use `TELEGRAM_CHAT_ID` instead when only one chat should receive notifications. If `TELEGRAM_ALLOWED_CHAT_IDS` is omitted, command authorization falls back to the notify chat ids.

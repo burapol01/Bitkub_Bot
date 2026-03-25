@@ -7,7 +7,7 @@ import streamlit as st
 
 from clients.bitkub_client import get_market_symbols_v3
 
-from config import CONFIG_PATH, save_config, summarize_config_changes
+from config import CONFIG_PATH, reload_config, save_config, summarize_config_changes
 from services.account_service import build_live_holdings_snapshot
 from services.db_service import (
     DB_PATH,
@@ -16,6 +16,8 @@ from services.db_service import (
     fetch_execution_console_summary,
     fetch_latest_filled_execution_orders_by_symbol,
     fetch_open_execution_orders,
+    fetch_recent_telegram_command_log,
+    fetch_recent_telegram_outbox,
     fetch_reporting_summary,
     fetch_runtime_event_log,
     insert_runtime_event,
@@ -42,6 +44,10 @@ from services.strategy_lab_service import (
 from ui.streamlit.actions import (
     persist_execution_order_update,
     submit_manual_order_from_ui,
+)
+from services.telegram_service import (
+    DEFAULT_TELEGRAM_NOTIFY_EVENTS,
+    telegram_settings_snapshot,
 )
 from ui.streamlit.data import calc_daily_totals
 from ui.streamlit.refresh import PAGE_ORDER, render_refreshable_fragment
@@ -152,7 +158,11 @@ def _classify_runtime_event(row: dict[str, Any]) -> dict[str, Any]:
         category = "Unsupported Symbol"
         topic = "broker coin or unsupported order endpoint"
         hint = "Do not rely on open_orders/order_history for this symbol. Remove it from live shortlist or mark it unsupported."
-    elif event_type in {"live_order_cancel", "auto_live_exit", "execution_reconciliation"} or "execution" in normalized or "live order" in normalized:
+    elif event_type == "telegram_delivery" or "telegram" in normalized:
+        category = "Runtime"
+        topic = "telegram delivery"
+        hint = "Check TELEGRAM_BOT_TOKEN plus TELEGRAM_CHAT_IDS / TELEGRAM_CHAT_ID / TELEGRAM_ALLOWED_CHAT_IDS in .env and review telegram logs."
+    elif event_type in {"live_order_cancel", "auto_live_exit", "auto_live_entry", "auto_live_entry_review", "execution_reconciliation"} or "execution" in normalized or "live order" in normalized:
         category = "Execution"
         topic = event_type or "execution"
         hint = "Check order state, exchange_order_id, and open orders before retrying the action."
@@ -813,7 +823,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
     st.markdown('<div class="panel-title">Strategy Lab</div>', unsafe_allow_html=True)
     st.caption(
         "Use actual paper-trade logs, stored market snapshots, and stored candles to evaluate whether the current rule set has edge. "
-        "Coin ranking and replay now support the broader Bitkub market universe; config rules remain the live trading shortlist."
+        "Watchlist symbols act as the research universe, while config rules remain the live trading shortlist."
     )
 
     analytics = fetch_trade_analytics()
@@ -858,13 +868,18 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
 
     market_universe = _fetch_market_symbol_universe()
     configured_symbols = sorted(config["rules"].keys())
+    watchlist_symbols = [
+        str(symbol)
+        for symbol in config.get("watchlist_symbols", configured_symbols)
+        if isinstance(symbol, str) and str(symbol).strip()
+    ]
     market_symbols = list(market_universe.get("symbols", []))
-    symbols = market_symbols or configured_symbols
+    symbols = watchlist_symbols or market_symbols or configured_symbols
     if market_universe.get("error"):
         st.warning(f"Bitkub market symbols unavailable right now: {market_universe['error']}")
     if market_symbols:
         st.caption(
-            f"Market universe loaded: {len(market_symbols)} symbol(s) | configured rules: {len(configured_symbols)}"
+            f"Market universe loaded: {len(market_symbols)} symbol(s) | watchlist: {len(watchlist_symbols)} | live rules: {len(configured_symbols)}"
         )
 
     rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
@@ -879,8 +894,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
             selected_sync_symbols = st.multiselect(
                 "Symbols to Sync",
                 symbols,
-                default=configured_symbols or symbols[: min(len(symbols), 10)],
-                help="This list comes from Bitkub market symbols when available. Stored candles are used by the ranking table below.",
+                default=watchlist_symbols or configured_symbols or symbols[: min(len(symbols), 10)],
+                help="This list defaults to the watchlist. Stored candles are used by the ranking table below.",
             )
         with sync_col2:
             ranking_resolution = st.selectbox(
@@ -942,11 +957,77 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         top_score = ranking["rows"][0]["score"] if ranking["rows"] else 0.0
         render_metric_card("Top Score", f"{top_score:.2f}", "Higher = stronger trend shortlist")
 
+    auto_entry_min_score = float(config.get("live_auto_entry_min_score", 50.0))
+    auto_entry_allowed_biases = {
+        str(value).strip().lower()
+        for value in config.get("live_auto_entry_allowed_biases", ["bullish", "mixed"])
+        if str(value).strip()
+    } or {"bullish", "mixed"}
+    shortlist_rows = []
+    for row in ranking["rows"]:
+        row_bias = str(row.get("trend_bias") or "").lower()
+        passes = float(row.get("score", 0.0) or 0.0) >= auto_entry_min_score and row_bias in auto_entry_allowed_biases
+        in_live_rules = row["symbol"] in config["rules"]
+        shortlist_rows.append(
+            {
+                "symbol": row["symbol"],
+                "score": row["score"],
+                "trend_bias": row["trend_bias"],
+                "in_live_rules": in_live_rules,
+                "recommendation": "LIVE_READY" if passes and in_live_rules else "PROMOTE" if passes else "REVIEW",
+                "last_close": row["last_close"],
+                "position_in_range": row["position_in_range"],
+                "momentum_pct": row["momentum_pct"],
+            }
+        )
+
+    recommended_promotions = [
+        row["symbol"]
+        for row in shortlist_rows
+        if row["recommendation"] == "PROMOTE"
+    ]
+
     rank_left, rank_right = st.columns([1.15, 0.85])
     with rank_left:
         st.markdown('<div class="panel-title">Coin Ranking</div>', unsafe_allow_html=True)
         if ranking["rows"]:
             st.dataframe(ranking["rows"], use_container_width=True, hide_index=True)
+
+            promotable_symbols = [
+                row["symbol"]
+                for row in ranking["rows"]
+                if row["symbol"] not in config["rules"]
+            ]
+            with st.form("strategy_promote_ranked_symbols_form"):
+                selected_promotions = st.multiselect(
+                    "Promote ranked symbols into live rules",
+                    promotable_symbols,
+                    default=(recommended_promotions or promotable_symbols)[: min(len(recommended_promotions or promotable_symbols), 5)],
+                    help="Adds a conservative starter rule for each selected ranked symbol and keeps them in the watchlist.",
+                )
+                submitted_promotions = st.form_submit_button(
+                    "Add Selected Ranked Symbols",
+                    use_container_width=True,
+                )
+            if submitted_promotions:
+                if not selected_promotions:
+                    st.warning("Select at least one ranked symbol to promote.")
+                else:
+                    updated = dict(config)
+                    updated_rules = dict(config["rules"])
+                    for promoted_symbol in selected_promotions:
+                        if promoted_symbol not in updated_rules:
+                            updated_rules[promoted_symbol] = _build_rule_seed(config, promoted_symbol)
+                    updated["rules"] = updated_rules
+                    updated["watchlist_symbols"] = sorted(
+                        set(config.get("watchlist_symbols", configured_symbols)) | set(selected_promotions)
+                    )
+                    if _save_config_with_feedback(
+                        config,
+                        updated,
+                        f"Promoted {len(selected_promotions)} ranked symbol(s) into live rules",
+                    ):
+                        st.rerun()
         else:
             st.caption("No ranked symbols yet. Sync candles first or widen the lookback window.")
     with rank_right:
@@ -962,6 +1043,24 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
             st.caption(f"{len(ranking['errors'])} note(s) | insufficient-candle rows {no_data_count}")
             with st.expander("Ranking Note Summary", expanded=False):
                 st.dataframe(summarized_ranking_errors, use_container_width=True, hide_index=True)
+
+    st.markdown('<div class="panel-title">Auto Entry Shortlist</div>', unsafe_allow_html=True)
+    st.caption(
+        f"Shortlist uses current config filters: min_score >= {auto_entry_min_score:.1f}, biases = {', '.join(sorted(auto_entry_allowed_biases))}."
+    )
+    shortlist_left, shortlist_right = st.columns([1.0, 1.0])
+    with shortlist_left:
+        live_ready_rows = [row for row in shortlist_rows if row["recommendation"] == "LIVE_READY"]
+        if live_ready_rows:
+            st.dataframe(live_ready_rows[:12], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No current live rules pass the auto-entry shortlist filters.")
+    with shortlist_right:
+        promote_rows = [row for row in shortlist_rows if row["recommendation"] == "PROMOTE"]
+        if promote_rows:
+            st.dataframe(promote_rows[:12], use_container_width=True, hide_index=True)
+        else:
+            st.caption("No extra watchlist symbols are currently strong enough to promote.")
 
     st.markdown('<div class="panel-title">Replay Lab</div>', unsafe_allow_html=True)
     st.caption(
@@ -1199,6 +1298,9 @@ def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
 
     current_issue_rows = _current_private_api_issues(private_ctx)
     historical_rows = [_classify_runtime_event(row) for row in fetch_runtime_event_log(limit=200)]
+    telegram_rows = fetch_recent_telegram_outbox(limit=50)
+    telegram_command_rows = fetch_recent_telegram_command_log(limit=50)
+    telegram_settings = telegram_settings_snapshot(reload_config()[0] or {})
 
     category_counts: dict[str, int] = defaultdict(int)
     for row in current_issue_rows + historical_rows:
@@ -1213,7 +1315,7 @@ def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
         render_metric_card("Error Events", str(sum(1 for row in historical_rows if row.get("severity") == "error")), "Persisted runtime severity=error")
     with card4:
         top_category = max(category_counts, key=category_counts.get) if category_counts else "None"
-        render_metric_card("Top Category", top_category, f"Unique categories {len(category_counts)}")
+        render_metric_card("Top Category", top_category, f"Telegram queued {len(telegram_rows)}")
 
     current_left, current_right = st.columns([1.0, 1.0])
     with current_left:
@@ -1235,6 +1337,57 @@ def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
             )
         else:
             st.caption("No runtime categories recorded yet.")
+
+    st.markdown('<div class="panel-title">Telegram Delivery Readiness</div>', unsafe_allow_html=True)
+    readiness_cols = st.columns(4)
+    with readiness_cols[0]:
+        render_metric_card("Telegram Enabled", "ON" if telegram_settings["enabled"] else "OFF", "config.json toggle")
+    with readiness_cols[1]:
+        render_metric_card("Bot Token", "PRESENT" if telegram_settings["bot_token_present"] else "MISSING", "from .env")
+    with readiness_cols[2]:
+        render_metric_card("Chat IDs", str(len(telegram_settings["chat_ids"])), "from .env")
+    with readiness_cols[3]:
+        render_metric_card("Delivery Ready", "YES" if telegram_settings["ready"] else "NO", "control YES" if telegram_settings["control_ready"] else "control NO")
+    st.caption("Telegram sender uses TELEGRAM_BOT_TOKEN plus TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_ID. Telegram commands can be restricted with TELEGRAM_ALLOWED_CHAT_IDS.")
+
+    latest_auto_entry_review = next(
+        (
+            row
+            for row in historical_rows
+            if str(row.get("event_type") or "") == "auto_live_entry_review"
+        ),
+        None,
+    )
+
+    st.markdown('<div class="panel-title">Latest Auto Entry Review</div>', unsafe_allow_html=True)
+    if latest_auto_entry_review:
+        review_details = dict(latest_auto_entry_review.get("details") or {})
+        review_candidates = list(review_details.get("candidates") or [])
+        review_rejected = list(review_details.get("rejected") or [])
+        review_context = dict(review_details.get("ranking_context") or {})
+        review_cards = st.columns(4)
+        with review_cards[0]:
+            render_metric_card("Review Time", str(latest_auto_entry_review.get("created_at") or "n/a"), str(review_details.get("ranking_context", {}).get("resolution") or "n/a"))
+        with review_cards[1]:
+            render_metric_card("Candidates", str(len(review_candidates)), f"Rejected {len(review_rejected)}")
+        with review_cards[2]:
+            render_metric_card("Min Score", f"{float(review_context.get('min_score', 0.0)):.1f}", f"Require ranking {'ON' if review_context.get('require_ranking') else 'OFF'}")
+        with review_cards[3]:
+            render_metric_card("Allowed Biases", ", ".join(review_context.get("allowed_biases", [])) or "n/a", f"Lookback {review_context.get('lookback_days', 'n/a')}")
+
+        review_left, review_right = st.columns([1.0, 1.0])
+        with review_left:
+            if review_candidates:
+                st.dataframe(review_candidates, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No auto-entry candidates passed the current filters in the latest review.")
+        with review_right:
+            if review_rejected:
+                st.dataframe(review_rejected, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No rejected candidates were recorded in the latest review.")
+    else:
+        st.caption("No auto-entry review has been recorded yet.")
 
     log_categories = ["ALL"] + sorted({str(row.get("category") or "General") for row in historical_rows})
     selected_category = st.selectbox("Log Category Filter", log_categories, index=0, key="logs_category_filter")
@@ -1283,6 +1436,48 @@ def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
             st.json(detailed_rows, expanded=False)
         else:
             st.caption("No detailed events to show.")
+
+    st.markdown('<div class="panel-title">Telegram Outbox</div>', unsafe_allow_html=True)
+    if telegram_rows:
+        st.dataframe(
+            [
+                {
+                    "created_at": row.get("created_at"),
+                    "event_type": row.get("event_type"),
+                    "status": row.get("status"),
+                    "title": row.get("title"),
+                }
+                for row in telegram_rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        with st.expander("Telegram Outbox Details", expanded=False):
+            st.json(telegram_rows[:25], expanded=False)
+    else:
+        st.caption("No Telegram notifications have been queued yet.")
+
+
+    st.markdown('<div class="panel-title">Telegram Command Log</div>', unsafe_allow_html=True)
+    if telegram_command_rows:
+        st.dataframe(
+            [
+                {
+                    "created_at": row.get("created_at"),
+                    "update_id": row.get("update_id"),
+                    "chat_id": row.get("chat_id"),
+                    "command": row.get("command_text"),
+                    "status": row.get("status"),
+                }
+                for row in telegram_command_rows
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        with st.expander("Telegram Command Details", expanded=False):
+            st.json(telegram_command_rows[:25], expanded=False)
+    else:
+        st.caption("No Telegram commands have been processed yet.")
 
 
 def render_diagnostics_page(
@@ -1435,6 +1630,11 @@ def render_config_page(*, config: dict[str, Any]) -> None:
 
     market_universe = _fetch_market_symbol_universe()
     configured_symbols = sorted(config["rules"].keys())
+    watchlist_symbols = [
+        str(symbol)
+        for symbol in config.get("watchlist_symbols", configured_symbols)
+        if isinstance(symbol, str) and str(symbol).strip()
+    ]
     market_symbols = list(market_universe.get("symbols", []))
     available_new_symbols = [symbol for symbol in market_symbols if symbol not in config["rules"]]
 
@@ -1454,15 +1654,19 @@ def render_config_page(*, config: dict[str, Any]) -> None:
         render_metric_card("Mode", str(config["mode"]).upper(), f"Base URL {config['base_url']}")
     with summary_col2:
         render_metric_card(
-            "Rules",
-            str(len(config["rules"])),
-            f"Market symbols {len(market_symbols) if market_symbols else 'n/a'} | Interval {int(config['interval_seconds'])}s",
+            "Watchlist",
+            str(len(watchlist_symbols)),
+            f"Live rules {len(config['rules'])} | Market {len(market_symbols) if market_symbols else 'n/a'}",
         )
     with summary_col3:
         render_metric_card(
             "Live Controls",
             "ON" if bool(config["live_execution_enabled"]) else "OFF",
-            "Auto exit ON" if bool(config.get("live_auto_exit_enabled", False)) else "Auto exit OFF",
+            (
+                "Auto entry ON" if bool(config.get("live_auto_entry_enabled", False)) else "Auto entry OFF"
+            ) + " | " + (
+                "Auto exit ON" if bool(config.get("live_auto_exit_enabled", False)) else "Auto exit OFF"
+            ),
         )
     with summary_col4:
         render_metric_card(
@@ -1471,7 +1675,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             str(config.get("live_manual_order", {}).get("side", "n/a")).upper(),
         )
 
-    with st.expander("Rule Summary", expanded=False):
+    with st.expander("Live Rule Summary", expanded=False):
         st.dataframe(
             [
                 {
@@ -1502,7 +1706,39 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             interval_seconds = st.number_input("Interval Seconds", min_value=1, value=int(config["interval_seconds"]), step=1)
             cooldown_seconds = st.number_input("Cooldown Seconds", min_value=0, value=int(config["cooldown_seconds"]), step=1)
             live_execution_enabled = st.checkbox("Live Execution Enabled", value=bool(config["live_execution_enabled"]))
+            live_auto_entry_enabled = st.checkbox("Live Auto Entry Enabled", value=bool(config.get("live_auto_entry_enabled", False)))
             live_auto_exit_enabled = st.checkbox("Live Auto Exit Enabled", value=bool(config.get("live_auto_exit_enabled", False)))
+            live_auto_entry_require_ranking = st.checkbox(
+                "Auto Entry Require Ranking",
+                value=bool(config.get("live_auto_entry_require_ranking", True)),
+            )
+            live_auto_entry_rank_resolution = st.selectbox(
+                "Auto Entry Rank Resolution",
+                ["1", "5", "15", "60", "240", "1D"],
+                index=["1", "5", "15", "60", "240", "1D"].index(str(config.get("live_auto_entry_rank_resolution", "240")) if str(config.get("live_auto_entry_rank_resolution", "240")) in {"1", "5", "15", "60", "240", "1D"} else "240"),
+            )
+            live_auto_entry_rank_lookback_days = st.number_input(
+                "Auto Entry Rank Lookback Days",
+                min_value=1,
+                value=int(config.get("live_auto_entry_rank_lookback_days", 14)),
+                step=1,
+            )
+            live_auto_entry_min_score = st.number_input(
+                "Auto Entry Minimum Score",
+                min_value=0.0,
+                max_value=100.0,
+                value=float(config.get("live_auto_entry_min_score", 50.0)),
+                step=1.0,
+            )
+            live_auto_entry_allowed_biases = st.multiselect(
+                "Auto Entry Allowed Biases",
+                ["bullish", "mixed", "weak"],
+                default=[
+                    bias
+                    for bias in list(config.get("live_auto_entry_allowed_biases", ["bullish", "mixed"]))
+                    if bias in {"bullish", "mixed", "weak"}
+                ] or ["bullish", "mixed"],
+            )
             live_max_order_thb = st.number_input("Live Max Order THB", min_value=1.0, value=float(config["live_max_order_thb"]), step=10.0)
             live_min_thb_balance = st.number_input("Live Min THB Balance", min_value=0.0, value=float(config["live_min_thb_balance"]), step=10.0)
             live_slippage_tolerance_percent = st.number_input(
@@ -1524,7 +1760,13 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     "interval_seconds": int(interval_seconds),
                     "cooldown_seconds": int(cooldown_seconds),
                     "live_execution_enabled": bool(live_execution_enabled),
+                    "live_auto_entry_enabled": bool(live_auto_entry_enabled),
                     "live_auto_exit_enabled": bool(live_auto_exit_enabled),
+                    "live_auto_entry_require_ranking": bool(live_auto_entry_require_ranking),
+                    "live_auto_entry_rank_resolution": str(live_auto_entry_rank_resolution),
+                    "live_auto_entry_rank_lookback_days": int(live_auto_entry_rank_lookback_days),
+                    "live_auto_entry_min_score": float(live_auto_entry_min_score),
+                    "live_auto_entry_allowed_biases": list(live_auto_entry_allowed_biases) or ["bullish", "mixed"],
                     "live_max_order_thb": float(live_max_order_thb),
                     "live_min_thb_balance": float(live_min_thb_balance),
                     "live_slippage_tolerance_percent": float(live_slippage_tolerance_percent),
@@ -1558,6 +1800,57 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                 st.rerun()
 
     with right:
+        st.markdown("#### Watchlist")
+        st.caption("Watchlist symbols drive research, candle sync, and ranking. Live auto-entry still uses config rules only.")
+        watchlist_options = market_symbols or sorted(set(watchlist_symbols) | set(configured_symbols))
+        with st.form("config_watchlist_form"):
+            selected_watchlist = st.multiselect(
+                "Watchlist Symbols",
+                watchlist_options,
+                default=[symbol for symbol in watchlist_symbols if symbol in watchlist_options],
+                help="Use this to keep a wider research universe than the live tradable shortlist.",
+            )
+            watchlist_fallback = st.text_input(
+                "Add Watchlist Symbols (comma-separated fallback)",
+                value="",
+                help="Only needed when the Bitkub market universe is unavailable or you want to paste symbols quickly.",
+            )
+            submitted_watchlist = st.form_submit_button("Save Watchlist", use_container_width=True)
+        if submitted_watchlist:
+            extra_symbols = [
+                entry.strip().upper()
+                for entry in str(watchlist_fallback).split(",")
+                if entry.strip()
+            ]
+            updated = dict(config)
+            updated["watchlist_symbols"] = sorted(set(selected_watchlist) | set(extra_symbols) | set(configured_symbols))
+            if _save_config_with_feedback(config, updated, "Saved watchlist symbols"):
+                st.rerun()
+
+        st.markdown("#### Telegram Foundation")
+        st.caption("Telegram notifications use TELEGRAM_BOT_TOKEN plus TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_ID from .env. Telegram commands are allowed only for TELEGRAM_ALLOWED_CHAT_IDS when set; otherwise they fall back to the notify chat ids.")
+        telegram_notify_defaults = [
+            event_name
+            for event_name in config.get("telegram_notify_events", DEFAULT_TELEGRAM_NOTIFY_EVENTS)
+            if event_name in DEFAULT_TELEGRAM_NOTIFY_EVENTS
+        ]
+        with st.form("config_telegram_form"):
+            telegram_enabled = st.checkbox("Telegram Notifications Enabled", value=bool(config.get("telegram_enabled", False)))
+            telegram_control_enabled = st.checkbox("Telegram Control Enabled", value=bool(config.get("telegram_control_enabled", False)))
+            telegram_notify_events = st.multiselect(
+                "Notify Events",
+                DEFAULT_TELEGRAM_NOTIFY_EVENTS,
+                default=telegram_notify_defaults or DEFAULT_TELEGRAM_NOTIFY_EVENTS,
+            )
+            submitted_telegram = st.form_submit_button("Save Telegram Settings", use_container_width=True)
+        if submitted_telegram:
+            updated = dict(config)
+            updated["telegram_enabled"] = bool(telegram_enabled)
+            updated["telegram_control_enabled"] = bool(telegram_control_enabled)
+            updated["telegram_notify_events"] = [str(event_name) for event_name in telegram_notify_events]
+            if _save_config_with_feedback(config, updated, "Saved Telegram foundation settings"):
+                st.rerun()
+
         st.markdown("#### Manual Live Order Preset")
         st.caption("This preset is used by manual live execution actions, not by the auto loop.")
         symbols = configured_symbols
@@ -1665,6 +1958,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     updated_rules = dict(config["rules"])
                     updated_rules[new_symbol] = _build_rule_seed(config, new_symbol)
                     updated["rules"] = updated_rules
+                    updated["watchlist_symbols"] = sorted(set(config.get("watchlist_symbols", configured_symbols)) | {new_symbol})
                     if _save_config_with_feedback(config, updated, f"Added new rule {new_symbol}"):
                         st.rerun()
         with remove_col:
@@ -1679,6 +1973,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     updated_rules = dict(config["rules"])
                     updated_rules.pop(selected_rule_symbol, None)
                     updated["rules"] = updated_rules
+                    updated["watchlist_symbols"] = sorted(set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()))
                     if _save_config_with_feedback(config, updated, f"Removed rule {selected_rule_symbol}"):
                         st.rerun()
 

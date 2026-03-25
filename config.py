@@ -11,12 +11,22 @@ ROOT_REQUIRED_FIELDS = {
     "interval_seconds",
     "cooldown_seconds",
     "live_execution_enabled",
+    "live_auto_entry_enabled",
     "live_auto_exit_enabled",
+    "live_auto_entry_require_ranking",
+    "live_auto_entry_rank_resolution",
+    "live_auto_entry_rank_lookback_days",
+    "live_auto_entry_min_score",
+    "live_auto_entry_allowed_biases",
     "live_max_order_thb",
     "live_min_thb_balance",
     "live_slippage_tolerance_percent",
     "live_daily_loss_limit_thb",
     "live_manual_order",
+    "watchlist_symbols",
+    "telegram_enabled",
+    "telegram_control_enabled",
+    "telegram_notify_events",
     "market_snapshot_retention_days",
     "signal_log_retention_days",
     "runtime_event_retention_days",
@@ -48,6 +58,15 @@ LIVE_MANUAL_ORDER_REQUIRED_FIELDS = {
     "rate",
 }
 
+SUPPORTED_TELEGRAM_NOTIFY_EVENTS = {
+    "config_reload",
+    "manual_live_order",
+    "auto_live_entry",
+    "auto_live_exit",
+    "safety_pause",
+    "runtime_error",
+}
+
 _ACTIVE_CONFIG: dict[str, Any] | None = None
 
 
@@ -62,8 +81,20 @@ def _read_config_file() -> dict[str, Any]:
         data["mode"] = "paper"
     if "live_execution_enabled" not in data:
         data["live_execution_enabled"] = False
+    if "live_auto_entry_enabled" not in data:
+        data["live_auto_entry_enabled"] = False
     if "live_auto_exit_enabled" not in data:
         data["live_auto_exit_enabled"] = False
+    if "live_auto_entry_require_ranking" not in data:
+        data["live_auto_entry_require_ranking"] = True
+    if "live_auto_entry_rank_resolution" not in data:
+        data["live_auto_entry_rank_resolution"] = "240"
+    if "live_auto_entry_rank_lookback_days" not in data:
+        data["live_auto_entry_rank_lookback_days"] = 14
+    if "live_auto_entry_min_score" not in data:
+        data["live_auto_entry_min_score"] = 50.0
+    if "live_auto_entry_allowed_biases" not in data:
+        data["live_auto_entry_allowed_biases"] = ["bullish", "mixed"]
     if "live_max_order_thb" not in data:
         data["live_max_order_thb"] = 500
     if "live_min_thb_balance" not in data:
@@ -82,6 +113,22 @@ def _read_config_file() -> dict[str, Any]:
             "amount_coin": 0.0001,
             "rate": 1,
         }
+    if "watchlist_symbols" not in data:
+        rules = data.get("rules") if isinstance(data.get("rules"), dict) else {}
+        data["watchlist_symbols"] = sorted(rules.keys())
+    if "telegram_enabled" not in data:
+        data["telegram_enabled"] = False
+    if "telegram_control_enabled" not in data:
+        data["telegram_control_enabled"] = False
+    if "telegram_notify_events" not in data:
+        data["telegram_notify_events"] = [
+            "config_reload",
+            "safety_pause",
+            "manual_live_order",
+            "auto_live_entry",
+            "auto_live_exit",
+            "runtime_error",
+        ]
     if "market_snapshot_retention_days" not in data:
         data["market_snapshot_retention_days"] = 30
     if "signal_log_retention_days" not in data:
@@ -121,8 +168,44 @@ def validate_config(config: dict[str, Any]) -> list[str]:
 
     if not isinstance(config["live_execution_enabled"], bool):
         errors.append("live_execution_enabled must be true or false")
+    if not isinstance(config["live_auto_entry_enabled"], bool):
+        errors.append("live_auto_entry_enabled must be true or false")
     if not isinstance(config["live_auto_exit_enabled"], bool):
         errors.append("live_auto_exit_enabled must be true or false")
+    if not isinstance(config["live_auto_entry_require_ranking"], bool):
+        errors.append("live_auto_entry_require_ranking must be true or false")
+
+    if (
+        not isinstance(config["live_auto_entry_rank_resolution"], str)
+        or not config["live_auto_entry_rank_resolution"].strip()
+    ):
+        errors.append("live_auto_entry_rank_resolution must be a non-empty string")
+    if (
+        not isinstance(config["live_auto_entry_rank_lookback_days"], int)
+        or config["live_auto_entry_rank_lookback_days"] <= 0
+    ):
+        errors.append("live_auto_entry_rank_lookback_days must be an integer greater than 0")
+    if (
+        not _is_number(config["live_auto_entry_min_score"])
+        or float(config["live_auto_entry_min_score"]) < 0
+    ):
+        errors.append("live_auto_entry_min_score must be a number >= 0")
+    allowed_biases = config["live_auto_entry_allowed_biases"]
+    if not isinstance(allowed_biases, list) or not allowed_biases:
+        errors.append("live_auto_entry_allowed_biases must be a non-empty array")
+    else:
+        normalized_biases = {
+            str(value).strip().lower()
+            for value in allowed_biases
+            if str(value).strip()
+        }
+        if not normalized_biases:
+            errors.append("live_auto_entry_allowed_biases must contain non-empty strings")
+        unsupported_biases = sorted(normalized_biases - {"bullish", "mixed", "weak"})
+        for value in unsupported_biases:
+            errors.append(
+                f"live_auto_entry_allowed_biases contains unsupported value: {value}"
+            )
 
     live_numeric_fields = (
         "live_max_order_thb",
@@ -164,6 +247,35 @@ def validate_config(config: dict[str, Any]) -> list[str]:
 
     if not isinstance(config["trade_log_file"], str) or not config["trade_log_file"].strip():
         errors.append("trade_log_file must be a non-empty string")
+
+    watchlist_symbols = config["watchlist_symbols"]
+    if not isinstance(watchlist_symbols, list) or not watchlist_symbols:
+        errors.append("watchlist_symbols must be a non-empty array")
+    else:
+        normalized_watchlist: set[str] = set()
+        for raw_symbol in watchlist_symbols:
+            if not isinstance(raw_symbol, str) or not raw_symbol.strip():
+                errors.append("watchlist_symbols must contain only non-empty strings")
+                continue
+            normalized_watchlist.add(raw_symbol.strip().upper())
+        if len(normalized_watchlist) != len(watchlist_symbols):
+            errors.append("watchlist_symbols must not contain duplicates")
+
+    if not isinstance(config["telegram_enabled"], bool):
+        errors.append("telegram_enabled must be true or false")
+    if not isinstance(config["telegram_control_enabled"], bool):
+        errors.append("telegram_control_enabled must be true or false")
+
+    telegram_notify_events = config["telegram_notify_events"]
+    if not isinstance(telegram_notify_events, list):
+        errors.append("telegram_notify_events must be an array")
+    else:
+        for event_name in telegram_notify_events:
+            if event_name not in SUPPORTED_TELEGRAM_NOTIFY_EVENTS:
+                errors.append(
+                    "telegram_notify_events contains unsupported value: "
+                    f"{event_name}"
+                )
 
     live_manual_order = config["live_manual_order"]
     if not isinstance(live_manual_order, dict):
@@ -335,12 +447,20 @@ def summarize_config_changes(
         "interval_seconds",
         "cooldown_seconds",
         "live_execution_enabled",
+        "live_auto_entry_enabled",
         "live_auto_exit_enabled",
+        "live_auto_entry_require_ranking",
+        "live_auto_entry_rank_resolution",
+        "live_auto_entry_rank_lookback_days",
+        "live_auto_entry_min_score",
+        "live_auto_entry_allowed_biases",
         "live_max_order_thb",
         "live_min_thb_balance",
         "live_slippage_tolerance_percent",
         "live_daily_loss_limit_thb",
         "live_manual_order",
+        "telegram_enabled",
+        "telegram_control_enabled",
         "market_snapshot_retention_days",
         "signal_log_retention_days",
         "runtime_event_retention_days",
@@ -357,6 +477,24 @@ def summarize_config_changes(
             lines.append(
                 f"{field}: {_format_scalar(old_value)} -> {_format_scalar(new_value)}"
             )
+
+    old_watchlist = [str(symbol) for symbol in old_config.get("watchlist_symbols", [])]
+    new_watchlist = [str(symbol) for symbol in new_config.get("watchlist_symbols", [])]
+    if old_watchlist != new_watchlist:
+        lines.append(
+            "watchlist_symbols: "
+            f"{', '.join(old_watchlist) if old_watchlist else 'none'} -> "
+            f"{', '.join(new_watchlist) if new_watchlist else 'none'}"
+        )
+
+    old_notify_events = [str(event_name) for event_name in old_config.get("telegram_notify_events", [])]
+    new_notify_events = [str(event_name) for event_name in new_config.get("telegram_notify_events", [])]
+    if old_notify_events != new_notify_events:
+        lines.append(
+            "telegram_notify_events: "
+            f"{', '.join(old_notify_events) if old_notify_events else 'none'} -> "
+            f"{', '.join(new_notify_events) if new_notify_events else 'none'}"
+        )
 
     old_rules = old_config.get("rules", {})
     new_rules = new_config.get("rules", {})

@@ -130,6 +130,27 @@ def init_db():
                 details_json TEXT,
                 FOREIGN KEY (execution_order_id) REFERENCES execution_orders(id)
             );
+
+            CREATE TABLE IF NOT EXISTS telegram_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                payload_json TEXT,
+                status TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS telegram_command_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                update_id INTEGER NOT NULL UNIQUE,
+                chat_id TEXT NOT NULL,
+                username TEXT,
+                command_text TEXT NOT NULL,
+                status TEXT NOT NULL,
+                response_text TEXT
+            );
             """
         )
 
@@ -160,6 +181,86 @@ def insert_runtime_event(
             ) VALUES (?, ?, ?, ?, ?)
             """,
             (created_at, event_type, severity, message, _to_json(details)),
+        )
+
+
+def insert_telegram_outbox(
+    *,
+    created_at: str,
+    event_type: str,
+    title: str,
+    body: str,
+    payload: Any = None,
+    status: str = "queued",
+):
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO telegram_outbox (
+                created_at,
+                event_type,
+                title,
+                body,
+                payload_json,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (created_at, event_type, title, body, _to_json(payload), status),
+        )
+
+
+def insert_telegram_command_log(
+    *,
+    created_at: str,
+    update_id: int,
+    chat_id: str,
+    username: str | None,
+    command_text: str,
+    status: str,
+    response_text: str | None = None,
+) -> int | None:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO telegram_command_log (
+                created_at,
+                update_id,
+                chat_id,
+                username,
+                command_text,
+                status,
+                response_text
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                created_at,
+                int(update_id),
+                str(chat_id),
+                username,
+                str(command_text),
+                str(status),
+                response_text,
+            ),
+        )
+        if int(cursor.rowcount or 0) <= 0:
+            return None
+        return int(cursor.lastrowid)
+
+
+def update_telegram_command_log(
+    *,
+    command_log_id: int,
+    status: str,
+    response_text: str | None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE telegram_command_log
+            SET status = ?, response_text = ?
+            WHERE id = ?
+            """,
+            (str(status), response_text, int(command_log_id)),
         )
 
 
@@ -637,6 +738,8 @@ def fetch_db_maintenance_summary() -> dict[str, Any]:
         "reconciliation_results",
         "execution_orders",
         "execution_order_events",
+        "telegram_outbox",
+        "telegram_command_log",
     )
 
     with _connect() as conn:
@@ -1172,6 +1275,69 @@ def fetch_reporting_summary(
         "recent_auto_exit_events": [dict(row) for row in recent_auto_exit_events],
         "recent_errors": [dict(row) for row in recent_errors],
     }
+
+
+def fetch_recent_telegram_outbox(
+    *,
+    limit: int = 50,
+    status: str | None = None,
+    newest_first: bool = True,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    order_sql = "DESC" if newest_first else "ASC"
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, event_type, title, body, payload_json, status
+            FROM telegram_outbox
+            {where_clause}
+            ORDER BY id {order_sql}
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = _load_json(item.pop("payload_json", None), {})
+        results.append(item)
+    return results
+
+
+def update_telegram_outbox_status(*, outbox_id: int, status: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE telegram_outbox
+            SET status = ?
+            WHERE id = ?
+            """,
+            (status, int(outbox_id)),
+        )
+
+
+def fetch_recent_telegram_command_log(*, limit: int = 50) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, update_id, chat_id, username, command_text, status, response_text
+            FROM telegram_command_log
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def fetch_runtime_event_log(
