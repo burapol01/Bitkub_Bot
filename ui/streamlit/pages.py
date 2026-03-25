@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 
 import streamlit as st
@@ -10,6 +11,7 @@ from config import CONFIG_PATH
 from services.db_service import (
     DB_PATH,
     fetch_reporting_summary,
+    fetch_runtime_event_log,
     insert_runtime_event,
 )
 from services.strategy_lab_service import (
@@ -44,6 +46,64 @@ def _summarize_text_lines(lines: list[str]) -> list[dict[str, Any]]:
         {"message": message, "count": count}
         for message, count in sorted(grouped.items(), key=lambda item: (-item[1], item[0]))
     ]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_trade_analytics(symbol_key: str = "") -> dict[str, Any]:
+    return fetch_trade_analytics(symbol=symbol_key or None)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_market_snapshot_coverage(days: int) -> list[dict[str, Any]]:
+    return fetch_market_snapshot_coverage(days=days)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_coin_ranking(
+    *,
+    symbols: tuple[str, ...],
+    resolution: str,
+    lookback_days: int,
+) -> dict[str, Any]:
+    return build_coin_ranking(
+        symbols=list(symbols),
+        resolution=resolution,
+        lookback_days=lookback_days,
+    )
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_strategy_tuning_history(limit: int = 8) -> list[dict[str, Any]]:
+    return fetch_runtime_event_log(limit=limit, event_type="strategy_tuning")
+
+
+def _build_pruned_live_rules_config(
+    *,
+    config: dict[str, Any],
+    symbols_to_prune: list[str],
+    remove_from_watchlist: bool,
+) -> dict[str, Any]:
+    prune_set = {str(symbol) for symbol in symbols_to_prune if str(symbol).strip()}
+    updated = dict(config)
+    updated_rules = {
+        symbol: rule
+        for symbol, rule in dict(config.get("rules", {})).items()
+        if symbol not in prune_set
+    }
+    updated["rules"] = updated_rules
+
+    watchlist_symbols = [
+        str(symbol)
+        for symbol in config.get("watchlist_symbols", sorted(config.get("rules", {}).keys()))
+        if isinstance(symbol, str) and str(symbol).strip()
+    ]
+    if remove_from_watchlist:
+        updated["watchlist_symbols"] = [
+            symbol for symbol in watchlist_symbols if symbol not in prune_set
+        ]
+    else:
+        updated["watchlist_symbols"] = sorted(set(watchlist_symbols) | set(updated_rules))
+    return updated
 
 
 def render_sidebar(
@@ -95,10 +155,10 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         "Recommended order: Coin Ranking -> Auto Entry Shortlist -> Live Rule Tuning -> Strategy Compare Lab -> Replay Lab for manual deep-dive."
     )
 
-    analytics = fetch_trade_analytics()
+    analytics = _cached_trade_analytics()
     totals = analytics["totals"]
     coverage_days = int(config.get("market_snapshot_retention_days", 30))
-    coverage_rows = fetch_market_snapshot_coverage(days=coverage_days)
+    coverage_rows = _cached_market_snapshot_coverage(days=coverage_days)
 
     card1, card2, card3, card4 = st.columns(4)
     with card1:
@@ -215,8 +275,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
 
     ranking_resolution = str(st.session_state.get("strategy_rank_resolution", default_rank_resolution))
     ranking_days = int(st.session_state.get("strategy_rank_days", default_rank_days))
-    ranking = build_coin_ranking(
-        symbols=symbols,
+    ranking = _cached_coin_ranking(
+        symbols=tuple(symbols),
         resolution=ranking_resolution,
         lookback_days=ranking_days,
     )
@@ -355,51 +415,183 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         ranking_resolution=ranking_resolution,
         ranking_days=ranking_days,
     )
-    keep_count = sum(1 for row in tuning_rows if row["recommendation"] == "KEEP")
-    review_count = sum(1 for row in tuning_rows if row["recommendation"] == "REVIEW")
-    prune_count = sum(1 for row in tuning_rows if row["recommendation"] == "PRUNE")
+    keep_rows = [row for row in tuning_rows if row["recommendation"] == "KEEP"]
+    monitor_rows = [row for row in tuning_rows if row["recommendation"] == "MONITOR"]
+    review_rows = [row for row in tuning_rows if row["recommendation"] == "REVIEW"]
+    prune_rows = [row for row in tuning_rows if row["recommendation"] == "PRUNE"]
+    strong_keep_count = sum(1 for row in keep_rows if row.get("confidence") == "STRONG_KEEP")
+    high_prune_count = sum(1 for row in prune_rows if row.get("confidence") == "HIGH_PRUNE")
+    keep_count = len(keep_rows)
+    monitor_count = len(monitor_rows)
+    review_count = len(review_rows)
+    prune_count = len(prune_rows)
+    actionable_rows = prune_rows + review_rows + monitor_rows
+
     tuning_cards = st.columns(4)
     with tuning_cards[0]:
         render_metric_card("Live Rules Reviewed", str(len(tuning_rows)), f"Resolution {ranking_resolution}")
     with tuning_cards[1]:
-        render_metric_card("Keep", str(keep_count), f"Monitor {sum(1 for row in tuning_rows if row['recommendation'] == 'MONITOR')}")
+        render_metric_card("Keep", str(keep_count), f"Strong keep {strong_keep_count} | Monitor {monitor_count}")
     with tuning_cards[2]:
-        render_metric_card("Review", str(review_count), f"Prune {prune_count}")
+        render_metric_card("Review", str(review_count), f"High prune {high_prune_count} | Prune {prune_count}")
     with tuning_cards[3]:
         total_replay_pnl = sum(float(row.get("replay_pnl_thb", 0.0) or 0.0) for row in tuning_rows)
         render_metric_card("Replay PnL Sum", f"{total_replay_pnl:,.2f} THB", f"Lookback {ranking_days} day(s)")
 
-    tuning_left, tuning_right = st.columns([1.1, 0.9])
+    if prune_rows:
+        st.warning(
+            f"{prune_count} live rule(s) are currently marked PRUNE. Default action is to remove them from live rules and leave them in watchlist for research unless you opt out."
+        )
+    elif review_rows:
+        st.info(
+            f"No hard prune candidates right now, but {review_count} symbol(s) need review before you widen live auto-entry."
+        )
+    else:
+        st.success("Live rules look stable right now. Focus on compare tests and auto-entry monitoring for incremental tuning.")
+
+    tuning_left, tuning_right = st.columns([1.15, 0.85])
     with tuning_left:
-        if tuning_rows:
-            st.dataframe(tuning_rows, width='stretch', hide_index=True)
-        else:
-            st.caption("No live rules configured yet. Promote ranked symbols or add rules first.")
+        tuning_tabs = st.tabs(["Action Queue", "Full Matrix"])
+        with tuning_tabs[0]:
+            if actionable_rows:
+                action_queue_rows = []
+                for row in actionable_rows:
+                    next_step = (
+                        "Remove from live rules; keep in watchlist if you still want research coverage."
+                        if row["recommendation"] == "PRUNE"
+                        else "Run Compare Lab and update the rule before trusting wider automation."
+                        if row["recommendation"] == "REVIEW"
+                        else "Gather more replay trades before promoting or pruning this rule."
+                    )
+                    action_queue_rows.append(
+                        {
+                            "symbol": row["symbol"],
+                            "recommendation": row["recommendation"],
+                            "confidence": row["confidence"],
+                            "market_context": row["market_context"],
+                            "entry_gap_percent": row["entry_gap_percent"],
+                            "target_gap_percent": row["target_gap_percent"],
+                            "gate_reason": row["gate_reason"],
+                            "replay_trades": row["replay_trades"],
+                            "replay_pnl_thb": row["replay_pnl_thb"],
+                            "replay_win_rate": row["replay_win_rate"],
+                            "next_step": next_step,
+                        }
+                    )
+                st.dataframe(action_queue_rows, width='stretch', hide_index=True)
+            else:
+                st.caption("No action queue right now. All current live rules are either stable or still accumulating evidence.")
+
+            if prune_rows:
+                prune_default_symbols = [row["symbol"] for row in prune_rows]
+                prune_option_symbols = [row["symbol"] for row in actionable_rows]
+                with st.form("strategy_prune_live_rules_form"):
+                    prune_selection = st.multiselect(
+                        "Prune From Live Rules",
+                        prune_option_symbols,
+                        default=prune_default_symbols,
+                        help="Default selection includes symbols currently marked PRUNE. You can also remove REVIEW/MONITOR symbols if you intentionally want a tighter shortlist.",
+                    )
+                    remove_from_watchlist = st.checkbox(
+                        "Also remove from watchlist",
+                        value=False,
+                        help="Leave this off if you still want ranking, replay, and research coverage for the symbol after pruning it from live rules.",
+                    )
+                    prune_submitted = st.form_submit_button(
+                        "Prune Selected Live Rules",
+                        type="primary",
+                        width='stretch',
+                    )
+                if prune_submitted:
+                    if not prune_selection:
+                        st.warning("Select at least one symbol before pruning live rules.")
+                    else:
+                        updated = _build_pruned_live_rules_config(
+                            config=config,
+                            symbols_to_prune=list(prune_selection),
+                            remove_from_watchlist=bool(remove_from_watchlist),
+                        )
+                        if save_config_with_feedback(
+                            config,
+                            updated,
+                            f"Pruned {len(prune_selection)} symbol(s) from live rules",
+                        ):
+                            insert_runtime_event(
+                                created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                event_type="strategy_tuning",
+                                severity="info",
+                                message=f"Pruned {len(prune_selection)} symbol(s) from live rules",
+                                details={
+                                    "action": "prune_live_rules",
+                                    "symbols": list(prune_selection),
+                                    "remove_from_watchlist": bool(remove_from_watchlist),
+                                },
+                            )
+                            _cached_strategy_tuning_history.clear()
+                            st.rerun()
+        with tuning_tabs[1]:
+            if tuning_rows:
+                st.dataframe(tuning_rows, width='stretch', hide_index=True)
+            else:
+                st.caption("No live rules configured yet. Promote ranked symbols or add rules first.")
+
     with tuning_right:
         tuning_focus_options = [row["symbol"] for row in tuning_rows]
         if tuning_focus_options:
+            default_focus_symbol = (
+                st.session_state.pop("strategy_tuning_focus_autorun", None)
+                or (
+                    prune_rows[0]["symbol"]
+                    if prune_rows
+                    else review_rows[0]["symbol"]
+                    if review_rows
+                    else monitor_rows[0]["symbol"]
+                    if monitor_rows
+                    else tuning_focus_options[0]
+                )
+            )
+            if default_focus_symbol not in tuning_focus_options:
+                default_focus_symbol = tuning_focus_options[0]
+            current_focus_symbol = st.session_state.get("strategy_tuning_focus_symbol", default_focus_symbol)
+            if current_focus_symbol not in tuning_focus_options:
+                current_focus_symbol = default_focus_symbol
+            focus_index = tuning_focus_options.index(current_focus_symbol)
             focus_symbol = st.selectbox(
                 "Rule Focus",
                 tuning_focus_options,
-                index=0,
+                index=focus_index,
                 key="strategy_tuning_focus_symbol",
             )
             focus_row = next(row for row in tuning_rows if row["symbol"] == focus_symbol)
             st.markdown(
                 badge(
-                    f"{focus_row['symbol']} -> {focus_row['recommendation']}",
+                    f"{focus_row['symbol']} -> {focus_row['recommendation']} | {focus_row['confidence']}",
                     "good" if focus_row["recommendation"] == "KEEP" else "warn" if focus_row["recommendation"] in {"MONITOR", "REVIEW"} else "bad",
                 ),
                 unsafe_allow_html=True,
             )
             st.caption(f"Auto-entry gate: {focus_row['auto_entry_pass']} | {focus_row['gate_reason']}")
             st.caption(
-                f"Replay: trades={focus_row['replay_trades']} pnl={focus_row['replay_pnl_thb']:,.2f} THB win_rate={focus_row['replay_win_rate']:.2f}%"
+                f"Replay: trades={focus_row['replay_trades']} pnl={focus_row['replay_pnl_thb']:,.2f} THB win_rate={focus_row['replay_win_rate']:.2f}% hold={focus_row['replay_avg_hold_min']:.1f} min"
             )
             st.caption(
-                f"Rule: buy_below={focus_row['buy_below']:,.8f} sell_above={focus_row['sell_above']:,.8f} stop={focus_row['stop_loss_percent']:.2f}% take={focus_row['take_profit_percent']:.2f}%"
+                f"Market: last={focus_row['last_close']:,.8f} | {focus_row['market_context']} | entry gap {focus_row['entry_gap_percent']:+.2f}% | target gap {focus_row['target_gap_percent']:+.2f}%"
+            )
+            st.caption(
+                f"Rule: buy_below={focus_row['buy_below']:,.8f} sell_above={focus_row['sell_above']:,.8f} stop_ref={focus_row['stop_reference']:,.8f} ({focus_row['stop_gap_percent']:+.2f}%) take={focus_row['take_profit_percent']:.2f}%"
             )
             st.caption(f"Tuning note: {focus_row['tuning_note']}")
+            st.caption(f"Confidence: {focus_row['confidence_note']}")
+            focus_next_step = (
+                "Next step: keep this symbol live and monitor Latest Auto Entry Review for execution quality."
+                if focus_row["recommendation"] == "KEEP"
+                else "Next step: run Strategy Compare Lab on this symbol before widening automation."
+                if focus_row["recommendation"] == "REVIEW"
+                else "Next step: gather more samples before changing the rule."
+                if focus_row["recommendation"] == "MONITOR"
+                else "Next step: prune this symbol from live rules unless you have a strong reason to keep it live."
+            )
+            st.info(focus_next_step)
         else:
             st.caption("No tuning focus available yet.")
 
@@ -450,7 +642,14 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         run_compare = st.form_submit_button("Run Compare", type="primary", width='stretch')
 
     if configured_symbols:
-        if run_compare or "strategy_compare_payload" not in st.session_state:
+        compare_autorun = st.session_state.pop("strategy_compare_autorun", None)
+        should_run_compare = run_compare or "strategy_compare_payload" not in st.session_state or bool(compare_autorun)
+        if should_run_compare:
+            if compare_autorun:
+                compare_symbol = str(compare_autorun.get("symbol", compare_symbol))
+                compare_source = str(compare_autorun.get("source", compare_source))
+                compare_resolution = str(compare_autorun.get("resolution", compare_resolution))
+                compare_days = int(compare_autorun.get("days", compare_days))
             compare_base_rule = build_rule_seed(config, compare_symbol)
             compare_variants = build_rule_compare_variants(base_rule=compare_base_rule)
             compare_rows = run_strategy_compare_rows(
@@ -551,11 +750,54 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                             updated,
                             f"Applied compared variant {apply_variant} to {compare_payload['symbol']}",
                         ):
+                            insert_runtime_event(
+                                created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                event_type="strategy_tuning",
+                                severity="info",
+                                message=f"Applied variant {apply_variant} to {compare_payload['symbol']}",
+                                details={
+                                    "action": "apply_compared_variant",
+                                    "symbol": str(compare_payload["symbol"]),
+                                    "variant": str(apply_variant),
+                                    "source": str(compare_payload.get("source", compare_source)),
+                                    "resolution": str(compare_payload.get("resolution", compare_resolution)),
+                                    "days": int(compare_payload.get("days", compare_days)),
+                                    "rule": chosen_rule,
+                                },
+                            )
+                            _cached_strategy_tuning_history.clear()
+                            st.session_state["strategy_compare_symbol"] = str(compare_payload["symbol"])
+                            st.session_state["strategy_tuning_focus_autorun"] = str(compare_payload["symbol"])
+                            st.session_state.pop("strategy_compare_payload", None)
+                            st.session_state["strategy_compare_autorun"] = {
+                                "symbol": str(compare_payload["symbol"]),
+                                "source": str(compare_payload.get("source", compare_source)),
+                                "resolution": str(compare_payload.get("resolution", compare_resolution)),
+                                "days": int(compare_payload.get("days", compare_days)),
+                            }
                             st.rerun()
         else:
             st.caption("Run Compare to evaluate multiple variants for one live-rule symbol.")
     else:
         st.caption("No live rules configured yet, so compare mode is unavailable.")
+
+    tuning_history = _cached_strategy_tuning_history(limit=8)
+    with st.expander("Recent Tuning Actions", expanded=False):
+        if tuning_history:
+            st.dataframe(
+                [
+                    {
+                        "created_at": row["created_at"],
+                        "message": row["message"],
+                        "action": str((row.get("details") or {}).get("action", "n/a")),
+                    }
+                    for row in tuning_history
+                ],
+                width='stretch',
+                hide_index=True,
+            )
+        else:
+            st.caption("No tuning actions recorded yet. Apply a variant or prune live rules to build history.")
 
     st.markdown('<div class="panel-title">Replay Lab</div>', unsafe_allow_html=True)
     st.caption(

@@ -77,6 +77,78 @@ def build_rule_seed(
     }
 
 
+def _percent_gap(reference: float, target: float) -> float:
+    if reference <= 0:
+        return 0.0
+    return ((target - reference) / reference) * 100.0
+
+
+def _build_market_context(*, last_close: float, rule: dict[str, Any]) -> dict[str, Any]:
+    buy_below = float(rule.get("buy_below", 0.0) or 0.0)
+    sell_above = float(rule.get("sell_above", 0.0) or 0.0)
+    stop_loss_percent = float(rule.get("stop_loss_percent", 0.0) or 0.0)
+    take_profit_percent = float(rule.get("take_profit_percent", 0.0) or 0.0)
+    if last_close <= 0 or buy_below <= 0:
+        return {
+            "market_context": "no market price",
+            "entry_gap_percent": 0.0,
+            "target_gap_percent": 0.0,
+            "stop_reference": 0.0,
+            "stop_gap_percent": 0.0,
+        }
+
+    stop_reference = buy_below * max(0.0, (1.0 - stop_loss_percent / 100.0))
+    entry_gap_percent = _percent_gap(last_close, buy_below)
+    target_reference = sell_above if sell_above > 0 else buy_below * (1.0 + max(take_profit_percent, 0.0) / 100.0)
+    target_gap_percent = _percent_gap(last_close, target_reference)
+    stop_gap_percent = _percent_gap(last_close, stop_reference) if stop_reference > 0 else 0.0
+
+    if last_close <= buy_below:
+        market_context = "at-or-below entry"
+    elif target_reference > 0 and last_close >= target_reference:
+        market_context = "at-or-above target"
+    elif last_close <= buy_below * 1.01:
+        market_context = "near entry"
+    elif target_reference > 0 and last_close >= target_reference * 0.985:
+        market_context = "near target"
+    else:
+        market_context = "between entry and target"
+
+    return {
+        "market_context": market_context,
+        "entry_gap_percent": entry_gap_percent,
+        "target_gap_percent": target_gap_percent,
+        "stop_reference": stop_reference,
+        "stop_gap_percent": stop_gap_percent,
+    }
+
+
+def build_tuning_confidence(
+    *,
+    recommendation: str,
+    auto_entry_pass: bool,
+    replay_trades: int,
+    replay_total_pnl: float,
+    replay_win_rate: float,
+    market_context: str,
+) -> tuple[str, str]:
+    if recommendation == "KEEP":
+        if replay_trades >= 5 and replay_total_pnl > 0 and replay_win_rate >= 60.0:
+            return "STRONG_KEEP", "Profitable replay with enough trades and a stable win rate."
+        if market_context in {"near entry", "between entry and target"}:
+            return "BORDERLINE_KEEP", "Rule still looks acceptable, but market context is worth watching before widening automation."
+        return "BORDERLINE_KEEP", "Keep the rule live, but continue gathering more evidence before trusting it broadly."
+    if recommendation == "REVIEW":
+        if replay_trades >= 4 or replay_total_pnl < 0:
+            return "REVIEW_SOON", "This rule has enough evidence to justify a near-term compare-and-adjust pass."
+        return "REVIEW_LATER", "Review this rule later after you gather a few more replay exits."
+    if recommendation == "MONITOR":
+        return "MONITOR_ONLY", "Ranking gate is acceptable, but there are not enough replay exits yet to score the rule confidently."
+    if recommendation == "PRUNE":
+        return "HIGH_PRUNE", "Both ranking and replay context are weak enough that removing it from live rules is the default move."
+    return "WATCH", "Mixed evidence; keep watching before changing the rule set."
+
+
 def recommend_live_rule_action(
     *,
     auto_entry_pass: bool,
@@ -99,6 +171,7 @@ def recommend_live_rule_action(
     return "MONITOR", "Mixed signals across ranking and replay."
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def build_live_rule_tuning_rows(
     *,
     config: dict[str, Any],
@@ -150,6 +223,8 @@ def build_live_rule_tuning_rows(
             auto_entry_pass = not require_ranking
             gate_reason = "no stored ranking" if require_ranking else "ranking gate disabled"
 
+        market_context = _build_market_context(last_close=last_close, rule=rule)
+
         replay_result = run_market_candle_replay(
             symbol=symbol,
             resolution=str(ranking_resolution),
@@ -169,18 +244,33 @@ def build_live_rule_tuning_rows(
             replay_total_pnl=replay_total_pnl,
             replay_win_rate=replay_win_rate,
         )
+        confidence, confidence_note = build_tuning_confidence(
+            recommendation=recommendation,
+            auto_entry_pass=auto_entry_pass,
+            replay_trades=replay_trades,
+            replay_total_pnl=replay_total_pnl,
+            replay_win_rate=replay_win_rate,
+            market_context=str(market_context["market_context"]),
+        )
         open_position = replay_result.get("open_position") or {}
 
         tuning_rows.append(
             {
                 "symbol": symbol,
                 "recommendation": recommendation,
+                "confidence": confidence,
+                "confidence_note": confidence_note,
                 "auto_entry_pass": "YES" if auto_entry_pass else "NO",
                 "gate_reason": gate_reason,
                 "score": score,
                 "trend_bias": trend_bias,
                 "momentum_pct": momentum_pct,
                 "last_close": last_close,
+                "market_context": market_context["market_context"],
+                "entry_gap_percent": market_context["entry_gap_percent"],
+                "target_gap_percent": market_context["target_gap_percent"],
+                "stop_reference": market_context["stop_reference"],
+                "stop_gap_percent": market_context["stop_gap_percent"],
                 "buy_below": float(rule.get("buy_below", 0.0) or 0.0),
                 "sell_above": float(rule.get("sell_above", 0.0) or 0.0),
                 "budget_thb": float(rule.get("budget_thb", 0.0) or 0.0),
@@ -257,6 +347,7 @@ def build_rule_compare_variants(*, base_rule: dict[str, Any]) -> list[dict[str, 
     ]
 
 
+@st.cache_data(ttl=60, show_spinner=False)
 def run_strategy_compare_rows(
     *,
     symbol: str,

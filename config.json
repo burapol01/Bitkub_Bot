@@ -62,9 +62,9 @@
   "trade_log_file": "paper_trade_log.csv",
   "rules": {
     "THB_BTC": {
-      "buy_below": 2290000,
-      "sell_above": 2330000,
-      "budget_thb": 100,
+      "buy_below": 2267100.0,
+      "sell_above": 2330000.0,
+      "budget_thb": 100.0,
       "stop_loss_percent": 1.5,
       "take_profit_percent": 2.0,
       "max_trades_per_day": 2
@@ -142,7 +142,7 @@
       "max_trades_per_day": 1
     },
     "THB_ABT": {
-      "buy_below": 7.05455,
+      "buy_below": 6.9840045,
       "sell_above": 7.196349999999999,
       "budget_thb": 100.0,
       "stop_loss_percent": 1.2,
