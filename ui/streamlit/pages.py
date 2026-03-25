@@ -77,6 +77,72 @@ def _cached_strategy_tuning_history(limit: int = 8) -> list[dict[str, Any]]:
     return fetch_runtime_event_log(limit=limit, event_type="strategy_tuning")
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_auto_entry_review_events(limit: int = 40) -> list[dict[str, Any]]:
+    return fetch_runtime_event_log(limit=limit, event_type="auto_live_entry_review")
+
+
+def _build_auto_entry_review_report(limit: int = 40) -> dict[str, Any]:
+    events = _cached_auto_entry_review_events(limit=limit)
+    rejection_counts: dict[str, int] = defaultdict(int)
+    symbol_reject_counts: dict[str, int] = defaultdict(int)
+    symbol_candidate_counts: dict[str, int] = defaultdict(int)
+    top_candidate_rows: list[dict[str, Any]] = []
+    latest_context: dict[str, Any] = {}
+
+    for index, row in enumerate(events):
+        details = dict(row.get("details") or {})
+        candidates = list(details.get("candidates") or [])
+        rejected = list(details.get("rejected") or [])
+        if index == 0:
+            latest_context = dict(details.get("ranking_context") or {})
+        for candidate in candidates:
+            symbol = str(candidate.get("symbol") or "")
+            if symbol:
+                symbol_candidate_counts[symbol] += 1
+            top_candidate_rows.append(
+                {
+                    "created_at": row.get("created_at"),
+                    "symbol": symbol or "n/a",
+                    "ranking_score": float(candidate.get("ranking_score") or 0.0),
+                    "entry_discount_percent": float(candidate.get("entry_discount_percent") or 0.0),
+                    "trend_bias": str(candidate.get("trend_bias") or "n/a"),
+                }
+            )
+        for rejected_row in rejected:
+            symbol = str(rejected_row.get("symbol") or "")
+            if symbol:
+                symbol_reject_counts[symbol] += 1
+            for reason in list(rejected_row.get("reasons") or []):
+                rejection_counts[str(reason)] += 1
+
+    top_candidate_rows.sort(
+        key=lambda item: (
+            -float(item.get("ranking_score") or 0.0),
+            -float(item.get("entry_discount_percent") or 0.0),
+            str(item.get("symbol") or ""),
+        )
+    )
+
+    return {
+        "events": events,
+        "latest_context": latest_context,
+        "rejection_summary": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(rejection_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "symbol_reject_summary": [
+            {"symbol": symbol, "rejections": count}
+            for symbol, count in sorted(symbol_reject_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "symbol_candidate_summary": [
+            {"symbol": symbol, "candidate_hits": count}
+            for symbol, count in sorted(symbol_candidate_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "top_candidates": top_candidate_rows[:20],
+    }
+
+
 def _build_pruned_live_rules_config(
     *,
     config: dict[str, Any],
@@ -780,6 +846,44 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
             st.caption("Run Compare to evaluate multiple variants for one live-rule symbol.")
     else:
         st.caption("No live rules configured yet, so compare mode is unavailable.")
+
+    auto_entry_report = _build_auto_entry_review_report(limit=40)
+    with st.expander("Auto Entry Review Report", expanded=False):
+        review_events = list(auto_entry_report.get("events") or [])
+        report_context = dict(auto_entry_report.get("latest_context") or {})
+        report_cards = st.columns(4)
+        with report_cards[0]:
+            render_metric_card("Review Events", str(len(review_events)), "Recent auto-entry reviews")
+        with report_cards[1]:
+            render_metric_card("Top Rejection", str((auto_entry_report.get("rejection_summary") or [{"reason": "n/a"}])[0].get("reason", "n/a")) if auto_entry_report.get("rejection_summary") else "n/a", f"Count {int((auto_entry_report.get('rejection_summary') or [{'count': 0}])[0].get('count', 0))}")
+        with report_cards[2]:
+            render_metric_card("Most Seen Candidate", str((auto_entry_report.get("symbol_candidate_summary") or [{"symbol": "n/a"}])[0].get("symbol", "n/a")) if auto_entry_report.get("symbol_candidate_summary") else "n/a", f"Hits {int((auto_entry_report.get('symbol_candidate_summary') or [{'candidate_hits': 0}])[0].get('candidate_hits', 0))}")
+        with report_cards[3]:
+            render_metric_card("Current Gate", f"min_score {float(report_context.get('min_score', 0.0)):.1f}", ", ".join(report_context.get("allowed_biases", [])) or "n/a")
+
+        report_left, report_right = st.columns([1.0, 1.0])
+        with report_left:
+            st.markdown("#### Rejection Summary")
+            if auto_entry_report.get("rejection_summary"):
+                st.dataframe(auto_entry_report["rejection_summary"], width='stretch', hide_index=True)
+            else:
+                st.caption("No rejection reasons recorded yet.")
+            st.markdown("#### Candidate Frequency")
+            if auto_entry_report.get("symbol_candidate_summary"):
+                st.dataframe(auto_entry_report["symbol_candidate_summary"], width='stretch', hide_index=True)
+            else:
+                st.caption("No candidates recorded yet.")
+        with report_right:
+            st.markdown("#### Top Candidate Snapshots")
+            if auto_entry_report.get("top_candidates"):
+                st.dataframe(auto_entry_report["top_candidates"], width='stretch', hide_index=True)
+            else:
+                st.caption("No candidate snapshots recorded yet.")
+            st.markdown("#### Symbols Rejected Most Often")
+            if auto_entry_report.get("symbol_reject_summary"):
+                st.dataframe(auto_entry_report["symbol_reject_summary"], width='stretch', hide_index=True)
+            else:
+                st.caption("No repeated rejects recorded yet.")
 
     tuning_history = _cached_strategy_tuning_history(limit=8)
     with st.expander("Recent Tuning Actions", expanded=False):
