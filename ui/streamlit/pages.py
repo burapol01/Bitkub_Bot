@@ -33,6 +33,7 @@ from ui.streamlit.strategy_support import (
     build_live_rule_tuning_rows,
     build_rule_compare_variants,
     build_rule_seed,
+    evaluate_fee_guardrail,
     fetch_market_symbol_universe,
     run_strategy_compare_rows,
 )
@@ -226,7 +227,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
     coverage_days = int(config.get("market_snapshot_retention_days", 30))
     coverage_rows = _cached_market_snapshot_coverage(days=coverage_days)
 
-    card1, card2, card3, card4 = st.columns(4)
+    card1, card2, card3, card4, card5 = st.columns(5)
     with card1:
         render_metric_card("Actual Trades", str(totals["trades"]), f"Win rate {totals['win_rate_percent']:.2f}%")
     with card2:
@@ -235,6 +236,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         render_metric_card("Profit Factor", f"{totals['profit_factor']:.2f}", f"Avg win {totals['avg_win_thb']:,.2f}")
     with card4:
         render_metric_card("Hold Time", f"{totals['avg_hold_minutes']:.1f} min", f"Losses {totals['losses']}")
+    with card5:
+        render_metric_card("Actual Fees", f"{totals.get('total_fee_thb', 0.0):,.2f} THB", f"Fee drag {totals.get('fee_drag_percent', 0.0):.2f}%")
 
     top_left, top_right = st.columns([1.15, 0.85])
     with top_left:
@@ -487,6 +490,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
     prune_rows = [row for row in tuning_rows if row["recommendation"] == "PRUNE"]
     strong_keep_count = sum(1 for row in keep_rows if row.get("confidence") == "STRONG_KEEP")
     high_prune_count = sum(1 for row in prune_rows if row.get("confidence") == "HIGH_PRUNE")
+    fee_watch_count = sum(1 for row in tuning_rows if str(row.get("fee_guardrail")) in {"FEE_HEAVY", "THIN_EDGE", "LOSS_AFTER_FEES"})
+    thin_edge_count = sum(1 for row in tuning_rows if str(row.get("fee_guardrail")) in {"THIN_EDGE", "LOSS_AFTER_FEES"})
     keep_count = len(keep_rows)
     monitor_count = len(monitor_rows)
     review_count = len(review_rows)
@@ -502,7 +507,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         render_metric_card("Review", str(review_count), f"High prune {high_prune_count} | Prune {prune_count}")
     with tuning_cards[3]:
         total_replay_pnl = sum(float(row.get("replay_pnl_thb", 0.0) or 0.0) for row in tuning_rows)
-        render_metric_card("Replay PnL Sum", f"{total_replay_pnl:,.2f} THB", f"Lookback {ranking_days} day(s)")
+        render_metric_card("Replay PnL Sum", f"{total_replay_pnl:,.2f} THB", f"Fee watch {fee_watch_count} | Thin edge {thin_edge_count}")
 
     if prune_rows:
         st.warning(
@@ -540,6 +545,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                             "gate_reason": row["gate_reason"],
                             "replay_trades": row["replay_trades"],
                             "replay_pnl_thb": row["replay_pnl_thb"],
+                            "replay_fee_drag_percent": row.get("replay_fee_drag_percent", 0.0),
+                            "fee_guardrail": row.get("fee_guardrail", "n/a"),
                             "replay_win_rate": row["replay_win_rate"],
                             "next_step": next_step,
                         }
@@ -641,6 +648,9 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                 f"Replay: trades={focus_row['replay_trades']} pnl={focus_row['replay_pnl_thb']:,.2f} THB win_rate={focus_row['replay_win_rate']:.2f}% hold={focus_row['replay_avg_hold_min']:.1f} min"
             )
             st.caption(
+                f"Fees: total={focus_row.get('replay_total_fee_thb', 0.0):,.2f} THB avg={focus_row.get('replay_avg_fee_thb', 0.0):,.2f} fee_drag={focus_row.get('replay_fee_drag_percent', 0.0):.2f}% -> {focus_row.get('fee_guardrail', 'n/a')}"
+            )
+            st.caption(
                 f"Market: last={focus_row['last_close']:,.8f} | {focus_row['market_context']} | entry gap {focus_row['entry_gap_percent']:+.2f}% | target gap {focus_row['target_gap_percent']:+.2f}%"
             )
             st.caption(
@@ -648,6 +658,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
             )
             st.caption(f"Tuning note: {focus_row['tuning_note']}")
             st.caption(f"Confidence: {focus_row['confidence_note']}")
+            st.caption(f"Fee guardrail: {focus_row.get('fee_guardrail_note', 'n/a')}")
             focus_next_step = (
                 "Next step: keep this symbol live and monitor Latest Auto Entry Review for execution quality."
                 if focus_row["recommendation"] == "KEEP"
@@ -754,7 +765,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
             with compare_cards[2]:
                 render_metric_card("Best Candidate", str(best_variant.get('variant', 'n/a')) if best_variant else "n/a", str(best_variant.get('decision', 'n/a')) if best_variant else "n/a")
             with compare_cards[3]:
-                render_metric_card("Best Win Rate", f"{float(best_variant.get('win_rate_percent', 0.0) if best_variant else 0.0):.2f}%", f"Lookback {compare_payload.get('days', 'n/a')} day(s)")
+                render_metric_card("Best Fee Drag", f"{float(best_variant.get('fee_drag_percent', 0.0) if best_variant else 0.0):.2f}%", f"Lookback {compare_payload.get('days', 'n/a')} day(s)")
 
             compare_left, compare_right = st.columns([1.1, 0.9])
             with compare_left:
@@ -789,6 +800,10 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                 st.caption(
                     f"Replay: trades={focus_variant_row['trades']} win_rate={focus_variant_row['win_rate_percent']:.2f}% hold={focus_variant_row['avg_hold_minutes']:.1f} min open_position={focus_variant_row['open_position']}"
                 )
+                st.caption(
+                    f"Fees: total={float(focus_variant_row.get('total_fee_thb', 0.0) or 0.0):,.2f} THB | fee drag={float(focus_variant_row.get('fee_drag_percent', 0.0) or 0.0):.2f}% | {focus_variant_row.get('fee_guardrail', 'n/a')}"
+                )
+                st.caption(f"Fee note: {focus_variant_row.get('fee_guardrail_note', 'n/a')}")
                 st.caption(f"Decision: {focus_variant_row['decision_reason']}")
                 st.caption(f"Variant note: {focus_variant_row['note']}")
 
@@ -1066,9 +1081,22 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         with replay_card2:
             render_metric_card("Replay PnL", f"{metrics['total_pnl_thb']:,.2f} THB", f"Win rate {metrics['win_rate_percent']:.2f}%")
         with replay_card3:
-            render_metric_card("Replay Avg/Trade", f"{metrics['avg_pnl_thb']:,.2f}", f"Profit factor {metrics['profit_factor']:.2f}")
+            render_metric_card("Replay Avg/Trade", f"{metrics['avg_pnl_thb']:,.2f}", f"Profit factor {metrics['profit_factor']:.2f} | Fee drag {metrics.get('fee_drag_percent', 0.0):.2f}%")
         with replay_card4:
-            render_metric_card("Replay Hold", f"{metrics['avg_hold_minutes']:.1f} min", f"W {metrics['wins']} / L {metrics['losses']}")
+            render_metric_card("Replay Fees", f"{metrics.get('total_fee_thb', 0.0):,.2f} THB", f"Avg fee {metrics.get('avg_fee_thb', 0.0):,.2f} | Hold {metrics['avg_hold_minutes']:.1f} min")
+
+        replay_fee_guardrail, replay_fee_note, _ = evaluate_fee_guardrail(
+            trades=int(metrics.get('trades', 0) or 0),
+            total_pnl_thb=float(metrics.get('total_pnl_thb', 0.0) or 0.0),
+            total_fee_thb=float(metrics.get('total_fee_thb', 0.0) or 0.0),
+            avg_pnl_thb=float(metrics.get('avg_pnl_thb', 0.0) or 0.0),
+            avg_fee_thb=float(metrics.get('avg_fee_thb', 0.0) or 0.0),
+            fee_drag_percent=float(metrics.get('fee_drag_percent', 0.0) or 0.0),
+        )
+        if replay_fee_guardrail in {"FEE_HEAVY", "THIN_EDGE", "LOSS_AFTER_FEES"}:
+            st.warning(f"Replay fee guardrail: {replay_fee_guardrail} | {replay_fee_note}")
+        else:
+            st.caption(f"Replay fee guardrail: {replay_fee_guardrail} | {replay_fee_note}")
 
         replay_left, replay_right = st.columns([1.05, 0.95])
         with replay_left:
@@ -1119,8 +1147,11 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
     total_pnl = sum(float(row.get("pnl_thb", 0.0)) for row in symbol_summary)
     total_wins = sum(int(row.get("wins", 0)) for row in symbol_summary)
     total_losses = sum(int(row.get("losses", 0)) for row in symbol_summary)
+    total_paper_fee = sum(float(row.get("paper_fee_thb", 0.0)) for row in symbol_summary)
+    total_live_fee = sum(float(row.get("live_fee_thb", 0.0)) for row in symbol_summary)
+    total_combined_fee = sum(float(row.get("combined_fee_thb", 0.0)) for row in symbol_summary)
 
-    card1, card2, card3, card4 = st.columns(4)
+    card1, card2, card3, card4, card5 = st.columns(5)
     with card1:
         render_metric_card("Report Filter", selected_symbol, f"Symbols {len(symbol_summary)}")
     with card2:
@@ -1128,6 +1159,12 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
     with card3:
         render_metric_card("PnL Today", f"{total_pnl:,.2f} THB", f"W {total_wins} / L {total_losses}")
     with card4:
+        render_metric_card(
+            "Fee Today",
+            f"{total_combined_fee:,.2f} THB",
+            f"Paper {total_paper_fee:,.2f} | Live {total_live_fee:,.2f}",
+        )
+    with card5:
         render_metric_card(
             "Execution Activity",
             str(len(recent_execution_orders)),
@@ -1147,6 +1184,51 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
             st.dataframe(recent_trades, width='stretch', hide_index=True)
         else:
             st.caption("No paper trades stored for this filter yet.")
+
+    fee_by_symbol_rows = []
+    for row in symbol_summary:
+        combined_trades = int(row.get("trades", 0) or 0) + int(row.get("live_closed_trades", 0) or 0)
+        combined_pnl = float(row.get("pnl_thb", 0.0) or 0.0) + float(row.get("live_realized_pnl_thb", 0.0) or 0.0)
+        combined_fee = float(row.get("combined_fee_thb", 0.0) or 0.0)
+        estimated_gross = combined_pnl + combined_fee if combined_pnl > 0 else 0.0
+        estimated_fee_drag = (combined_fee * 100.0 / estimated_gross) if estimated_gross > 0 else 0.0
+        avg_pnl = (combined_pnl / combined_trades) if combined_trades else 0.0
+        avg_fee = (combined_fee / combined_trades) if combined_trades else 0.0
+        fee_guardrail, fee_note, _ = evaluate_fee_guardrail(
+            trades=combined_trades,
+            total_pnl_thb=combined_pnl,
+            total_fee_thb=combined_fee,
+            avg_pnl_thb=avg_pnl,
+            avg_fee_thb=avg_fee,
+            fee_drag_percent=estimated_fee_drag,
+        )
+        fee_by_symbol_rows.append(
+            {
+                "symbol": row.get("symbol"),
+                "paper_fee_thb": row.get("paper_fee_thb", 0.0),
+                "live_fee_thb": row.get("live_fee_thb", 0.0),
+                "combined_fee_thb": combined_fee,
+                "combined_realized_pnl_thb": combined_pnl,
+                "closed_trades": combined_trades,
+                "fee_drag_percent": estimated_fee_drag,
+                "fee_guardrail": fee_guardrail,
+                "fee_guardrail_note": fee_note,
+            }
+        )
+
+    fee_left, fee_right = st.columns([1.0, 1.0])
+    with fee_left:
+        st.markdown('<div class="panel-title">Fee By Symbol</div>', unsafe_allow_html=True)
+        if fee_by_symbol_rows:
+            st.dataframe(fee_by_symbol_rows, width='stretch', hide_index=True)
+        else:
+            st.caption("No fee rows for the current filter yet.")
+    with fee_right:
+        st.markdown('<div class="panel-title">Fee Notes</div>', unsafe_allow_html=True)
+        st.caption("Paper fees come from paper_trade_logs buy_fee_thb + sell_fee_thb.")
+        st.caption("Live fees come from filled execution_orders response_json.result.fee.")
+        st.caption("Live realized PnL is estimated from filled buy/sell execution history using FIFO cost basis.")
+        st.caption("Fee guardrail flags symbols whose net edge is too thin relative to trading fees.")
 
     bottom_left, bottom_right = st.columns([1.0, 1.0])
     with bottom_left:

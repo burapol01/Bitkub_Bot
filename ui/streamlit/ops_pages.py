@@ -24,6 +24,7 @@ from ui.streamlit.actions import (
 from ui.streamlit.data import calc_daily_totals
 from ui.streamlit.refresh import render_refreshable_fragment
 from ui.streamlit.styles import badge, render_metric_card
+from ui.streamlit.strategy_support import evaluate_fee_guardrail
 from utils.time_utils import now_text
 
 
@@ -65,8 +66,31 @@ def render_overview_page(
     private_ctx: dict[str, Any],
     today: str,
 ) -> None:
-    total_trades, total_wins, total_losses, total_pnl = calc_daily_totals(runtime["daily_stats"])
+    paper_trades_today, paper_wins_today, paper_losses_today, paper_realized_today = calc_daily_totals(runtime["daily_stats"])
     dashboard_summary = fetch_dashboard_summary(today=today)
+    live_execution_pnl = dict(dashboard_summary.get("live_execution_pnl") or {})
+    paper_fee_today = float((dashboard_summary.get("paper_trades") or {}).get("today_fee_thb", 0.0) or 0.0)
+    live_fee_today = float(live_execution_pnl.get("today_fee_thb", 0.0) or 0.0)
+    combined_fee_today = paper_fee_today + live_fee_today
+    live_realized_today = float(live_execution_pnl.get("today_realized_pnl", 0.0) or 0.0)
+    live_trades_today = int(live_execution_pnl.get("today", 0) or 0)
+    live_wins_today = int(live_execution_pnl.get("today_wins", 0) or 0)
+    live_losses_today = int(live_execution_pnl.get("today_losses", 0) or 0)
+    combined_realized_today = paper_realized_today + live_realized_today
+    combined_trades_today = int(paper_trades_today) + int(live_trades_today)
+    combined_avg_pnl_today = (combined_realized_today / combined_trades_today) if combined_trades_today else 0.0
+    combined_avg_fee_today = (combined_fee_today / combined_trades_today) if combined_trades_today else 0.0
+    fee_drag_reference = combined_realized_today + combined_fee_today if combined_realized_today > 0 else 0.0
+    combined_fee_drag_today = (combined_fee_today * 100.0 / fee_drag_reference) if fee_drag_reference > 0 else 0.0
+    fee_guardrail, fee_guardrail_note, _ = evaluate_fee_guardrail(
+        trades=combined_trades_today,
+        total_pnl_thb=combined_realized_today,
+        total_fee_thb=combined_fee_today,
+        avg_pnl_thb=combined_avg_pnl_today,
+        avg_fee_thb=combined_avg_fee_today,
+        fee_drag_percent=combined_fee_drag_today,
+    )
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         render_metric_card("Trading Mode", str(config["mode"]).upper(), private_ctx["private_api_status"])
@@ -74,12 +98,16 @@ def render_overview_page(
         render_metric_card("Rules", str(len(config["rules"])), f"Open paper positions {len(runtime['positions'])}")
     with col3:
         render_metric_card(
-            "Tracked Today",
+            "Daily Stats Symbols",
             str(len(runtime["daily_stats"].get(today, {}))),
             f"Cooldowns {len(runtime['cooldowns'])}",
         )
     with col4:
-        render_metric_card("Realized Today", f"{total_pnl:,.2f} THB", f"Trades {total_trades} | W {total_wins} / L {total_losses}")
+        render_metric_card(
+            "Realized Today",
+            f"{combined_realized_today:,.2f} THB",
+            f"Paper {paper_realized_today:,.2f} | Live {live_realized_today:,.2f}",
+        )
 
     st.markdown('<div class="panel-title">Market Overview</div>', unsafe_allow_html=True)
     st.dataframe(
@@ -96,6 +124,50 @@ def render_overview_page(
         width='stretch',
         hide_index=True,
     )
+
+    pnl_left, pnl_right = st.columns([1.0, 1.0])
+    with pnl_left:
+        st.markdown('<div class="panel-title">Realized PnL Breakdown</div>', unsafe_allow_html=True)
+        pnl_cards = st.columns(4)
+        with pnl_cards[0]:
+            render_metric_card("Combined Today", f"{combined_realized_today:,.2f} THB", f"{today}")
+        with pnl_cards[1]:
+            render_metric_card(
+                "Paper Today",
+                f"{paper_realized_today:,.2f} THB",
+                f"Trades {paper_trades_today} | W {paper_wins_today} / L {paper_losses_today}",
+            )
+        with pnl_cards[2]:
+            render_metric_card(
+                "Live Today",
+                f"{live_realized_today:,.2f} THB",
+                f"Trades {live_trades_today} | W {live_wins_today} / L {live_losses_today}",
+            )
+        with pnl_cards[3]:
+            render_metric_card(
+                "Fee Today",
+                f"{combined_fee_today:,.2f} THB",
+                f"Paper {paper_fee_today:,.2f} | Live {live_fee_today:,.2f}",
+            )
+        st.caption(
+            "Paper realized comes from runtime daily_stats/paper trade flow. Live realized is estimated from filled execution_orders using FIFO cost basis across filled buy/sell orders. Fee Today combines paper_trade_logs fees with filled live execution fees."
+        )
+        if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE", "LOSS_AFTER_FEES"}:
+            st.warning(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
+        else:
+            st.caption(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
+    with pnl_right:
+        st.markdown('<div class="panel-title">Overview Notes</div>', unsafe_allow_html=True)
+        notes = [
+            f"Mode: {str(config['mode']).upper()} | live execution {'ON' if bool(config.get('live_execution_enabled', False)) else 'OFF'}",
+            f"Auto entry {'ON' if bool(config.get('live_auto_entry_enabled', False)) else 'OFF'} | auto exit {'ON' if bool(config.get('live_auto_exit_enabled', False)) else 'OFF'}",
+            f"Private API status: {private_ctx['private_api_status']}",
+            "Realized Today now combines paper and live execution, but the live side is an execution-order estimate rather than a full exchange ledger.",
+            "Fee Today combines paper_trade_logs fees with filled execution-order fees so you can gauge the cash drag of the strategy each day.",
+            f"Fee guardrail today: {fee_guardrail} | fee drag {combined_fee_drag_today:.2f}% | trades {combined_trades_today}",
+        ]
+        for note in notes:
+            st.caption(note)
 
     status_left, status_right = st.columns([1.05, 0.95])
     with status_left:

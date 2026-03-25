@@ -99,7 +99,7 @@ def main() -> None:
         elif selected_page == "Reports":
             render_reports_page(today=today, config=config)
         elif selected_page == "Logs":
-            render_logs_page(private_ctx=private_ctx)
+            render_logs_page(private_ctx=private_ctx, today=today)
         elif selected_page == "Diagnostics":
             render_diagnostics_page(
                 today=today,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -21,6 +22,61 @@ DEFAULT_TELEGRAM_NOTIFY_EVENTS = [
     "auto_live_exit",
     "runtime_error",
 ]
+
+
+
+def _parse_created_at(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _notification_cooldown_seconds(event_type: str) -> int:
+    normalized = str(event_type or "").strip().lower()
+    if normalized in {"auto_live_exit", "auto_live_entry"}:
+        return 300
+    if normalized in {"runtime_error", "safety_pause"}:
+        return 180
+    return 60
+
+
+def _recent_duplicate_notification_exists(
+    *,
+    event_type: str,
+    title: str,
+    body: str,
+    payload: dict[str, Any] | None,
+    cooldown_seconds: int,
+) -> bool:
+    now = datetime.now()
+    recent_rows = fetch_recent_telegram_outbox(limit=100, newest_first=True)
+    normalized_event_type = str(event_type or "")
+    normalized_title = str(title or "")
+    normalized_body = str(body or "")
+    normalized_symbol = str((payload or {}).get("symbol") or "")
+
+    for row in recent_rows:
+        if str(row.get("event_type") or "") != normalized_event_type:
+            continue
+        if str(row.get("title") or "") != normalized_title:
+            continue
+
+        row_payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        row_symbol = str((row_payload or {}).get("symbol") or "")
+
+        if normalized_event_type in {"auto_live_exit", "auto_live_entry"} and normalized_symbol:
+            if row_symbol != normalized_symbol:
+                continue
+        elif str(row.get("body") or "") != normalized_body:
+            continue
+
+        created_at = _parse_created_at(str(row.get("created_at") or ""))
+        if created_at is None:
+            continue
+        if (now - created_at).total_seconds() <= cooldown_seconds:
+            return True
+    return False
 
 
 def telegram_settings_snapshot(config: dict[str, Any]) -> dict[str, Any]:
@@ -80,6 +136,16 @@ def queue_telegram_notification(
             message_lines.append(normalized)
 
     body = "\n".join(message_lines)
+    cooldown_seconds = _notification_cooldown_seconds(event_type)
+    if _recent_duplicate_notification_exists(
+        event_type=event_type,
+        title=str(title),
+        body=body,
+        payload=payload or {},
+        cooldown_seconds=cooldown_seconds,
+    ):
+        return False
+
     insert_telegram_outbox(
         created_at=created_at,
         event_type=event_type,

@@ -57,6 +57,8 @@ def _calc_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     wins = sum(1 for row in trades if float(row.get("pnl_thb", 0.0)) > 0)
     losses = sum(1 for row in trades if float(row.get("pnl_thb", 0.0)) <= 0)
     total_pnl = sum(float(row.get("pnl_thb", 0.0)) for row in trades)
+    total_fee = sum(float(row.get("fee_thb", 0.0)) for row in trades)
+    gross_pnl_before_fees = sum(float(row.get("gross_pnl_before_fees_thb", row.get("pnl_thb", 0.0))) for row in trades)
     gross_win = sum(float(row.get("pnl_thb", 0.0)) for row in trades if float(row.get("pnl_thb", 0.0)) > 0)
     gross_loss = abs(sum(float(row.get("pnl_thb", 0.0)) for row in trades if float(row.get("pnl_thb", 0.0)) < 0))
     hold_minutes = [float(row.get("hold_minutes", 0.0)) for row in trades]
@@ -65,12 +67,17 @@ def _calc_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     expectancy = _safe_div(total_pnl, total_trades)
     win_rate = _safe_div(wins * 100.0, total_trades)
     profit_factor = _safe_div(gross_win, gross_loss)
+    fee_drag_percent = (_safe_div(total_fee * 100.0, abs(gross_pnl_before_fees)) if abs(gross_pnl_before_fees) > 0 else 0.0)
     return {
         "trades": total_trades,
         "wins": wins,
         "losses": losses,
         "win_rate_percent": win_rate,
         "total_pnl_thb": total_pnl,
+        "gross_pnl_before_fees_thb": gross_pnl_before_fees,
+        "total_fee_thb": total_fee,
+        "avg_fee_thb": _safe_div(total_fee, total_trades),
+        "fee_drag_percent": fee_drag_percent,
         "avg_pnl_thb": expectancy,
         "avg_win_thb": avg_win,
         "avg_loss_thb": avg_loss,
@@ -88,7 +95,7 @@ def fetch_trade_analytics(*, symbol: str | None = None) -> dict[str, Any]:
             for row in conn.execute(
                 f"""
                 SELECT buy_time, sell_time, symbol, exit_reason, budget_thb, buy_price,
-                       sell_price, coin_qty, pnl_thb, pnl_percent
+                       sell_price, coin_qty, pnl_thb, pnl_percent, buy_fee_thb, sell_fee_thb
                 FROM paper_trade_logs
                 {symbol_clause}
                 ORDER BY buy_time ASC
@@ -101,6 +108,8 @@ def fetch_trade_analytics(*, symbol: str | None = None) -> dict[str, Any]:
         buy_dt = _parse_time(str(row["buy_time"]))
         sell_dt = _parse_time(str(row["sell_time"]))
         row["hold_minutes"] = max(0.0, (sell_dt - buy_dt).total_seconds() / 60.0)
+        row["fee_thb"] = float(row.get("buy_fee_thb", 0.0) or 0.0) + float(row.get("sell_fee_thb", 0.0) or 0.0)
+        row["gross_pnl_before_fees_thb"] = float(row.get("pnl_thb", 0.0) or 0.0) + row["fee_thb"]
 
     by_symbol_bucket: dict[str, list[dict[str, Any]]] = defaultdict(list)
     exit_reason_bucket: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -373,6 +382,8 @@ def _close_replay_position(*, symbol: str, price: float, timestamp: str, positio
     gross_proceeds_thb = float(position.coin_qty) * float(price)
     sell_fee_thb = gross_proceeds_thb * float(position.fee_rate)
     net_proceeds_thb = gross_proceeds_thb - sell_fee_thb
+    total_fee_thb = float(position.buy_fee_thb) + sell_fee_thb
+    gross_pnl_before_fees_thb = gross_proceeds_thb - float(position.net_budget_thb)
     pnl_thb = net_proceeds_thb - float(position.budget_thb)
     pnl_percent = _safe_div(pnl_thb * 100.0, float(position.budget_thb))
     hold_minutes = max(0.0, (_parse_time(timestamp) - _parse_time(position.buy_time)).total_seconds() / 60.0)
@@ -384,6 +395,10 @@ def _close_replay_position(*, symbol: str, price: float, timestamp: str, positio
         "sell_price": float(price),
         "coin_qty": float(position.coin_qty),
         "budget_thb": float(position.budget_thb),
+        "buy_fee_thb": float(position.buy_fee_thb),
+        "sell_fee_thb": sell_fee_thb,
+        "fee_thb": total_fee_thb,
+        "gross_pnl_before_fees_thb": gross_pnl_before_fees_thb,
         "pnl_thb": pnl_thb,
         "pnl_percent": pnl_percent,
         "hold_minutes": hold_minutes,

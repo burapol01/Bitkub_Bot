@@ -20,6 +20,7 @@ from services.db_service import (
 from services.reconciliation_service import summarize_live_reconciliation
 from services.telegram_service import telegram_settings_snapshot
 from ui.streamlit.styles import badge, render_metric_card
+from ui.streamlit.strategy_support import evaluate_fee_guardrail
 
 
 def classify_runtime_event(row: dict[str, Any]) -> dict[str, Any]:
@@ -146,7 +147,7 @@ def render_reconciliation_block(live_reconciliation: dict[str, Any]) -> None:
         st.caption("No live reconciliation issues detected.")
 
 
-def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
+def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     st.markdown('<div class="panel-title">Logs & Errors</div>', unsafe_allow_html=True)
     st.caption(
         "Use this page to separate current issues from historical runtime events. Categories and hints are there to speed up troubleshooting."
@@ -157,6 +158,28 @@ def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
     telegram_rows = fetch_recent_telegram_outbox(limit=50)
     telegram_command_rows = fetch_recent_telegram_command_log(limit=50)
     telegram_settings = telegram_settings_snapshot(reload_config()[0] or {})
+    dashboard_summary = fetch_dashboard_summary(today=today)
+    paper_today = dict(dashboard_summary.get("paper_trades") or {})
+    live_today = dict(dashboard_summary.get("live_execution_pnl") or {})
+    paper_realized_today = float(paper_today.get("today_realized_pnl", 0.0) or 0.0)
+    live_realized_today = float(live_today.get("today_realized_pnl", 0.0) or 0.0)
+    paper_fee_today = float(paper_today.get("today_fee_thb", 0.0) or 0.0)
+    live_fee_today = float(live_today.get("today_fee_thb", 0.0) or 0.0)
+    combined_realized_today = paper_realized_today + live_realized_today
+    combined_fee_today = paper_fee_today + live_fee_today
+    combined_trades_today = int(paper_today.get("today", 0) or 0) + int(live_today.get("today", 0) or 0)
+    combined_avg_pnl_today = (combined_realized_today / combined_trades_today) if combined_trades_today else 0.0
+    combined_avg_fee_today = (combined_fee_today / combined_trades_today) if combined_trades_today else 0.0
+    fee_drag_reference = combined_realized_today + combined_fee_today if combined_realized_today > 0 else 0.0
+    combined_fee_drag_today = (combined_fee_today * 100.0 / fee_drag_reference) if fee_drag_reference > 0 else 0.0
+    fee_guardrail, fee_guardrail_note, _ = evaluate_fee_guardrail(
+        trades=combined_trades_today,
+        total_pnl_thb=combined_realized_today,
+        total_fee_thb=combined_fee_today,
+        avg_pnl_thb=combined_avg_pnl_today,
+        avg_fee_thb=combined_avg_fee_today,
+        fee_drag_percent=combined_fee_drag_today,
+    )
 
     category_counts: dict[str, int] = defaultdict(int)
     for row in current_issue_rows + historical_rows:
@@ -205,6 +228,21 @@ def render_logs_page(*, private_ctx: dict[str, Any]) -> None:
     with readiness_cols[3]:
         render_metric_card("Delivery Ready", "YES" if telegram_settings["ready"] else "NO", "control YES" if telegram_settings["control_ready"] else "control NO")
     st.caption("Telegram sender uses TELEGRAM_BOT_TOKEN plus TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_ID. Telegram commands can be restricted with TELEGRAM_ALLOWED_CHAT_IDS.")
+
+    st.markdown('<div class="panel-title">Fee Watch</div>', unsafe_allow_html=True)
+    fee_cols = st.columns(4)
+    with fee_cols[0]:
+        render_metric_card("Combined Fee Today", f"{combined_fee_today:,.2f} THB", f"Trades {combined_trades_today}")
+    with fee_cols[1]:
+        render_metric_card("Combined Realized", f"{combined_realized_today:,.2f} THB", f"Paper {paper_realized_today:,.2f} | Live {live_realized_today:,.2f}")
+    with fee_cols[2]:
+        render_metric_card("Fee Drag", f"{combined_fee_drag_today:.2f}%", f"Paper {paper_fee_today:,.2f} | Live {live_fee_today:,.2f}")
+    with fee_cols[3]:
+        render_metric_card("Fee Guardrail", fee_guardrail, today)
+    if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE", "LOSS_AFTER_FEES"}:
+        st.warning(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
+    else:
+        st.caption(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
 
     latest_auto_entry_review = next(
         (

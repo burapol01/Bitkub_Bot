@@ -123,6 +123,46 @@ def _build_market_context(*, last_close: float, rule: dict[str, Any]) -> dict[st
     }
 
 
+def evaluate_fee_guardrail(
+    *,
+    trades: int,
+    total_pnl_thb: float,
+    total_fee_thb: float,
+    avg_pnl_thb: float,
+    avg_fee_thb: float,
+    fee_drag_percent: float,
+) -> tuple[str, str, int]:
+    if trades <= 0:
+        return (
+            "NO_FEE_SIGNAL",
+            "No closed replay trades yet, so fee drag is not meaningful.",
+            0,
+        )
+    if total_pnl_thb <= 0 and total_fee_thb > 0:
+        return (
+            "LOSS_AFTER_FEES",
+            "Replay is already non-profitable after fees.",
+            4,
+        )
+    if fee_drag_percent >= 50.0 or (avg_fee_thb > 0 and avg_pnl_thb <= avg_fee_thb * 1.2):
+        return (
+            "THIN_EDGE",
+            "Fees are too close to the replay edge; widen the buffer or reduce churn.",
+            3,
+        )
+    if fee_drag_percent >= 30.0 or (total_fee_thb > 0 and total_pnl_thb <= total_fee_thb * 1.5):
+        return (
+            "FEE_HEAVY",
+            "Fees take a large share of the edge; keep this rule on a short leash.",
+            2,
+        )
+    return (
+        "FEE_OK",
+        "Fees look proportionate relative to the replay edge.",
+        1,
+    )
+
+
 def build_tuning_confidence(
     *,
     recommendation: str,
@@ -131,14 +171,21 @@ def build_tuning_confidence(
     replay_total_pnl: float,
     replay_win_rate: float,
     market_context: str,
+    fee_guardrail: str,
 ) -> tuple[str, str]:
     if recommendation == "KEEP":
-        if replay_trades >= 5 and replay_total_pnl > 0 and replay_win_rate >= 60.0:
+        if fee_guardrail in {"THIN_EDGE", "LOSS_AFTER_FEES"}:
+            return "BORDERLINE_KEEP", "Replay is positive enough to keep for now, but fees make the edge too thin to trust broadly."
+        if replay_trades >= 5 and replay_total_pnl > 0 and replay_win_rate >= 60.0 and fee_guardrail == "FEE_OK":
             return "STRONG_KEEP", "Profitable replay with enough trades and a stable win rate."
         if market_context in {"near entry", "between entry and target"}:
             return "BORDERLINE_KEEP", "Rule still looks acceptable, but market context is worth watching before widening automation."
+        if fee_guardrail == "FEE_HEAVY":
+            return "BORDERLINE_KEEP", "Keep the rule live, but fees are heavy enough that the edge still needs supervision."
         return "BORDERLINE_KEEP", "Keep the rule live, but continue gathering more evidence before trusting it broadly."
     if recommendation == "REVIEW":
+        if fee_guardrail in {"THIN_EDGE", "LOSS_AFTER_FEES"}:
+            return "REVIEW_SOON", "Fees are a direct reason to review this rule soon."
         if replay_trades >= 4 or replay_total_pnl < 0:
             return "REVIEW_SOON", "This rule has enough evidence to justify a near-term compare-and-adjust pass."
         return "REVIEW_LATER", "Review this rule later after you gather a few more replay exits."
@@ -155,15 +202,20 @@ def recommend_live_rule_action(
     replay_trades: int,
     replay_total_pnl: float,
     replay_win_rate: float,
+    fee_guardrail: str,
 ) -> tuple[str, str]:
-    if auto_entry_pass and replay_trades > 0 and replay_total_pnl > 0:
+    if auto_entry_pass and replay_trades > 0 and replay_total_pnl > 0 and fee_guardrail == "FEE_OK":
         return "KEEP", "Passes ranking gate and replay is profitable."
+    if auto_entry_pass and replay_trades > 0 and replay_total_pnl > 0 and fee_guardrail in {"FEE_HEAVY", "THIN_EDGE"}:
+        return "REVIEW", "Passes ranking gate and replay is profitable, but fees are eating too much of the edge."
     if auto_entry_pass and replay_trades == 0:
         return "MONITOR", "Passes ranking gate but replay has no completed exits yet."
     if auto_entry_pass and replay_total_pnl <= 0:
         return "REVIEW", "Passes ranking gate but replay edge is weak or negative."
-    if not auto_entry_pass and replay_trades > 0 and replay_total_pnl > 0 and replay_win_rate >= 50.0:
+    if not auto_entry_pass and replay_trades > 0 and replay_total_pnl > 0 and replay_win_rate >= 50.0 and fee_guardrail == "FEE_OK":
         return "REVIEW", "Replay is positive, but ranking gate is blocking this symbol."
+    if not auto_entry_pass and replay_trades > 0 and replay_total_pnl > 0 and fee_guardrail in {"FEE_HEAVY", "THIN_EDGE"}:
+        return "REVIEW", "Replay is still positive, but both ranking and fees argue for caution."
     if not auto_entry_pass and replay_trades == 0:
         return "PRUNE", "Fails ranking gate and replay has no completed trades."
     if replay_total_pnl <= 0:
@@ -238,11 +290,24 @@ def build_live_rule_tuning_rows(
         replay_total_pnl = float(replay_metrics.get("total_pnl_thb", 0.0) or 0.0)
         replay_win_rate = float(replay_metrics.get("win_rate_percent", 0.0) or 0.0)
         replay_avg_hold = float(replay_metrics.get("avg_hold_minutes", 0.0) or 0.0)
+        replay_total_fee = float(replay_metrics.get("total_fee_thb", 0.0) or 0.0)
+        replay_avg_fee = float(replay_metrics.get("avg_fee_thb", 0.0) or 0.0)
+        replay_avg_pnl = float(replay_metrics.get("avg_pnl_thb", 0.0) or 0.0)
+        replay_fee_drag = float(replay_metrics.get("fee_drag_percent", 0.0) or 0.0)
+        fee_guardrail, fee_guardrail_note, fee_guardrail_rank = evaluate_fee_guardrail(
+            trades=replay_trades,
+            total_pnl_thb=replay_total_pnl,
+            total_fee_thb=replay_total_fee,
+            avg_pnl_thb=replay_avg_pnl,
+            avg_fee_thb=replay_avg_fee,
+            fee_drag_percent=replay_fee_drag,
+        )
         recommendation, note = recommend_live_rule_action(
             auto_entry_pass=auto_entry_pass,
             replay_trades=replay_trades,
             replay_total_pnl=replay_total_pnl,
             replay_win_rate=replay_win_rate,
+            fee_guardrail=fee_guardrail,
         )
         confidence, confidence_note = build_tuning_confidence(
             recommendation=recommendation,
@@ -251,6 +316,7 @@ def build_live_rule_tuning_rows(
             replay_total_pnl=replay_total_pnl,
             replay_win_rate=replay_win_rate,
             market_context=str(market_context["market_context"]),
+            fee_guardrail=fee_guardrail,
         )
         open_position = replay_result.get("open_position") or {}
 
@@ -279,6 +345,13 @@ def build_live_rule_tuning_rows(
                 "max_trades_per_day": int(rule.get("max_trades_per_day", 0) or 0),
                 "replay_trades": replay_trades,
                 "replay_pnl_thb": replay_total_pnl,
+                "replay_total_fee_thb": replay_total_fee,
+                "replay_avg_fee_thb": replay_avg_fee,
+                "replay_avg_pnl_thb": replay_avg_pnl,
+                "replay_fee_drag_percent": replay_fee_drag,
+                "fee_guardrail": fee_guardrail,
+                "fee_guardrail_note": fee_guardrail_note,
+                "fee_guardrail_rank": fee_guardrail_rank,
                 "replay_win_rate": replay_win_rate,
                 "replay_avg_hold_min": replay_avg_hold,
                 "replay_open_position": "YES" if open_position else "NO",
@@ -289,6 +362,7 @@ def build_live_rule_tuning_rows(
     tuning_rows.sort(
         key=lambda row: (
             {"KEEP": 0, "MONITOR": 1, "REVIEW": 2, "PRUNE": 3}.get(str(row["recommendation"]), 9),
+            int(row.get("fee_guardrail_rank", 9)),
             -float(row["score"]),
             str(row["symbol"]),
         )
@@ -438,9 +512,20 @@ def annotate_strategy_compare_rows(rows: list[dict[str, Any]]) -> list[dict[str,
     annotated: list[dict[str, Any]] = []
     for row in rows:
         current = dict(row)
+        fee_guardrail, fee_guardrail_note, fee_guardrail_rank = evaluate_fee_guardrail(
+            trades=int(current.get("trades", 0) or 0),
+            total_pnl_thb=float(current.get("total_pnl_thb", 0.0) or 0.0),
+            total_fee_thb=float(current.get("total_fee_thb", 0.0) or 0.0),
+            avg_pnl_thb=float(current.get("avg_pnl_thb", 0.0) or 0.0),
+            avg_fee_thb=float(current.get("avg_fee_thb", 0.0) or 0.0),
+            fee_drag_percent=float(current.get("fee_drag_percent", 0.0) or 0.0),
+        )
+        current["fee_guardrail"] = fee_guardrail
+        current["fee_guardrail_note"] = fee_guardrail_note
+        current["fee_guardrail_rank"] = fee_guardrail_rank
         if str(current.get("variant")) == "CURRENT":
             current["decision"] = "Current baseline"
-            current["decision_reason"] = "Use this row as the benchmark for the other variants."
+            current["decision_reason"] = f"Use this row as the benchmark for the other variants. {fee_guardrail_note}"
             current["decision_rank"] = -1
             annotated.append(current)
             continue
@@ -485,6 +570,12 @@ def annotate_strategy_compare_rows(rows: list[dict[str, Any]]) -> list[dict[str,
             else:
                 reason = f"Replay PnL trails baseline by {abs(pnl_diff):,.2f} THB."
 
+        if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE"} and decision in {"Clearly better", "Marginally better", "Tied with baseline"}:
+            reason = f"{reason} {fee_guardrail_note}"
+        elif fee_guardrail == "LOSS_AFTER_FEES" and decision != "Worse":
+            decision = "Worse"
+            reason = fee_guardrail_note
+
         current["decision"] = decision
         current["decision_reason"] = reason
         current["decision_rank"] = {
@@ -500,6 +591,7 @@ def annotate_strategy_compare_rows(rows: list[dict[str, Any]]) -> list[dict[str,
     annotated.sort(
         key=lambda row: (
             int(row.get("decision_rank", 9)),
+            int(row.get("fee_guardrail_rank", 9)),
             -float(row.get("total_pnl_thb", 0.0) or 0.0),
             -float(row.get("win_rate_percent", 0.0) or 0.0),
             str(row.get("variant") or ""),

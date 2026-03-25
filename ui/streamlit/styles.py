@@ -29,10 +29,10 @@ CUSTOM_CSS = """
 }
 
 [data-testid="stAppViewContainer"] > .main .block-container {
-  max-width: min(1720px, calc(100vw - 18rem));
+  max-width: min(1920px, calc(100vw - 8rem));
   padding-top: 1.2rem;
-  padding-left: 1.4rem;
-  padding-right: 1.4rem;
+  padding-left: 1.1rem;
+  padding-right: 1.1rem;
 }
 
 @media (max-width: 1200px) {

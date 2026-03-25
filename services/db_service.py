@@ -778,6 +778,180 @@ def fetch_db_maintenance_summary() -> dict[str, Any]:
     }
 
 
+def _extract_execution_fill_rate(response_payload: dict[str, Any], request_payload: dict[str, Any]) -> float:
+    result = response_payload.get("result") if isinstance(response_payload, dict) else None
+    history = result.get("history") if isinstance(result, dict) else None
+    if isinstance(history, list) and history:
+        try:
+            return float(history[-1].get("rate") or 0.0)
+        except (TypeError, ValueError):
+            pass
+    if isinstance(result, dict):
+        try:
+            rate = float(result.get("rate") or 0.0)
+            if rate > 0:
+                return rate
+        except (TypeError, ValueError):
+            pass
+    try:
+        return float(request_payload.get("rat") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+
+def _extract_execution_fee_thb(response_payload: dict[str, Any]) -> float:
+    result = response_payload.get("result") if isinstance(response_payload, dict) else None
+    if not isinstance(result, dict):
+        return 0.0
+    try:
+        return float(result.get("fee") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+
+def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, created_at, updated_at, symbol, side, request_json, response_json
+            FROM execution_orders
+            WHERE state = 'filled'
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+
+    inventory: dict[str, list[dict[str, float]]] = {}
+    closed_trades: list[dict[str, Any]] = []
+    filled_orders: list[dict[str, Any]] = []
+
+    for row in rows:
+        symbol = str(row["symbol"])
+        side = str(row["side"])
+        request_payload = _load_json(row["request_json"], {})
+        response_payload = _load_json(row["response_json"], {})
+        fill_rate = _extract_execution_fill_rate(response_payload, request_payload)
+        fee_thb = _extract_execution_fee_thb(response_payload)
+        event_time = str(row["updated_at"] or row["created_at"] or "")
+        filled_orders.append(
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "symbol": symbol,
+                "side": side,
+                "fee_thb": fee_thb,
+                "event_time": event_time,
+            }
+        )
+        lots = inventory.setdefault(symbol, [])
+
+        if side == 'buy':
+            try:
+                amount_thb = float(request_payload.get("amt") or 0.0)
+            except (TypeError, ValueError):
+                amount_thb = 0.0
+            if fill_rate > 0 and amount_thb > 0:
+                net_coin_qty = max(0.0, (amount_thb - fee_thb) / fill_rate)
+                if net_coin_qty > 0:
+                    lots.append(
+                        {
+                            "coin_qty": net_coin_qty,
+                            "cost_thb": amount_thb,
+                            "buy_rate": fill_rate,
+                        }
+                    )
+            continue
+
+        if side != 'sell':
+            continue
+
+        try:
+            sell_coin_qty = float(request_payload.get("amt") or 0.0)
+        except (TypeError, ValueError):
+            sell_coin_qty = 0.0
+        if fill_rate <= 0 or sell_coin_qty <= 0:
+            continue
+
+        remaining_qty = sell_coin_qty
+        cost_basis_thb = 0.0
+        while remaining_qty > 1e-12 and lots:
+            current_lot = lots[0]
+            lot_qty = float(current_lot.get("coin_qty") or 0.0)
+            lot_cost = float(current_lot.get("cost_thb") or 0.0)
+            if lot_qty <= 1e-12:
+                lots.pop(0)
+                continue
+            consume_qty = min(remaining_qty, lot_qty)
+            consume_ratio = consume_qty / lot_qty if lot_qty > 0 else 0.0
+            cost_basis_thb += lot_cost * consume_ratio
+            current_lot["coin_qty"] = max(0.0, lot_qty - consume_qty)
+            current_lot["cost_thb"] = max(0.0, lot_cost - (lot_cost * consume_ratio))
+            remaining_qty -= consume_qty
+            if current_lot["coin_qty"] <= 1e-12:
+                lots.pop(0)
+
+        matched_qty = sell_coin_qty - remaining_qty
+        if matched_qty <= 1e-12:
+            continue
+
+        gross_proceeds_thb = matched_qty * fill_rate
+        net_proceeds_thb = gross_proceeds_thb - fee_thb
+        pnl_thb = net_proceeds_thb - cost_basis_thb
+        closed_trades.append(
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "symbol": symbol,
+                "sell_coin_qty": matched_qty,
+                "sell_rate": fill_rate,
+                "fee_thb": fee_thb,
+                "gross_proceeds_thb": gross_proceeds_thb,
+                "net_proceeds_thb": net_proceeds_thb,
+                "cost_basis_thb": cost_basis_thb,
+                "gross_pnl_before_fees_thb": gross_proceeds_thb - cost_basis_thb,
+                "pnl_thb": pnl_thb,
+            }
+        )
+
+    today_rows = [row for row in closed_trades if str(row.get("updated_at") or row.get("created_at") or "").startswith(f"{today}")]
+    today_filled_orders = [row for row in filled_orders if str(row.get("event_time") or "").startswith(f"{today}")]
+    wins = sum(1 for row in today_rows if float(row.get("pnl_thb", 0.0)) > 0)
+    losses = sum(1 for row in today_rows if float(row.get("pnl_thb", 0.0)) <= 0)
+
+    symbol_summary_today: dict[str, dict[str, Any]] = {}
+    for row in today_filled_orders:
+        summary = symbol_summary_today.setdefault(
+            str(row["symbol"]),
+            {"symbol": str(row["symbol"]), "live_fee_thb": 0.0, "live_filled_orders": 0, "live_realized_pnl_thb": 0.0, "live_closed_trades": 0},
+        )
+        summary["live_fee_thb"] += float(row.get("fee_thb", 0.0) or 0.0)
+        summary["live_filled_orders"] += 1
+    for row in today_rows:
+        summary = symbol_summary_today.setdefault(
+            str(row["symbol"]),
+            {"symbol": str(row["symbol"]), "live_fee_thb": 0.0, "live_filled_orders": 0, "live_realized_pnl_thb": 0.0, "live_closed_trades": 0},
+        )
+        summary["live_realized_pnl_thb"] += float(row.get("pnl_thb", 0.0) or 0.0)
+        summary["live_closed_trades"] += 1
+
+    return {
+        "today": len(today_rows),
+        "total": len(closed_trades),
+        "today_realized_pnl": sum(float(row.get("pnl_thb", 0.0)) for row in today_rows),
+        "total_realized_pnl": sum(float(row.get("pnl_thb", 0.0)) for row in closed_trades),
+        "today_fee_thb": sum(float(row.get("fee_thb", 0.0)) for row in today_filled_orders),
+        "total_fee_thb": sum(float(row.get("fee_thb", 0.0)) for row in filled_orders),
+        "today_wins": wins,
+        "today_losses": losses,
+        "recent": list(reversed(closed_trades[-5:])),
+        "recent_today": list(reversed(today_rows[-5:])),
+        "symbol_summary_today": [symbol_summary_today[key] for key in sorted(symbol_summary_today)],
+    }
+
+
 def fetch_dashboard_summary(
     *,
     today: str,
@@ -820,7 +994,8 @@ def fetch_dashboard_summary(
             """
             SELECT
                 COUNT(*) AS count,
-                COALESCE(SUM(pnl_thb), 0) AS pnl_thb
+                COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb
             FROM paper_trade_logs
             WHERE sell_time LIKE ?
             """,
@@ -830,7 +1005,8 @@ def fetch_dashboard_summary(
             """
             SELECT
                 COUNT(*) AS count,
-                COALESCE(SUM(pnl_thb), 0) AS pnl_thb
+                COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb
             FROM paper_trade_logs
             """
         ).fetchone()
@@ -980,6 +1156,8 @@ def fetch_dashboard_summary(
             }
         )
 
+    live_execution_pnl = fetch_live_execution_realized_summary(today=today)
+
     return {
         "signals": {
             "today": int(today_signal_totals["count"] if today_signal_totals else 0),
@@ -1001,8 +1179,15 @@ def fetch_dashboard_summary(
             "total_realized_pnl": float(
                 total_trade_totals["pnl_thb"] if total_trade_totals else 0.0
             ),
+            "today_fee_thb": float(
+                today_trade_totals["fee_thb"] if today_trade_totals else 0.0
+            ),
+            "total_fee_thb": float(
+                total_trade_totals["fee_thb"] if total_trade_totals else 0.0
+            ),
             "recent": [dict(row) for row in recent_trades],
         },
+        "live_execution_pnl": live_execution_pnl,
         "runtime_events": [dict(row) for row in recent_events],
         "latest_account_snapshot": (
             {
@@ -1138,6 +1323,7 @@ def fetch_reporting_summary(
                 symbol,
                 COUNT(*) AS trades,
                 COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb,
                 SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS wins,
                 SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS losses
             FROM paper_trade_logs
@@ -1199,6 +1385,12 @@ def fetch_reporting_summary(
             (recent_auto_exit_limit,),
         ).fetchall()
 
+    live_execution_summary = fetch_live_execution_realized_summary(today=today)
+    live_symbol_rows = [
+        row for row in list(live_execution_summary.get("symbol_summary_today") or [])
+        if symbol is None or str(row.get("symbol")) == symbol
+    ]
+
     symbol_summary: dict[str, dict[str, Any]] = {}
     for row in market_rows:
         first_price = float(row["first_price"])
@@ -1214,6 +1406,11 @@ def fetch_reporting_summary(
             "wins": 0,
             "losses": 0,
             "pnl_thb": 0.0,
+            "paper_fee_thb": 0.0,
+            "live_fee_thb": 0.0,
+            "combined_fee_thb": 0.0,
+            "live_realized_pnl_thb": 0.0,
+            "live_closed_trades": 0,
             "first_price": first_price,
             "latest_price": latest_price,
             "min_price": float(row["min_price"]),
@@ -1233,6 +1430,11 @@ def fetch_reporting_summary(
                 "wins": 0,
                 "losses": 0,
                 "pnl_thb": 0.0,
+                "paper_fee_thb": 0.0,
+                "live_fee_thb": 0.0,
+                "combined_fee_thb": 0.0,
+                "live_realized_pnl_thb": 0.0,
+                "live_closed_trades": 0,
                 "first_price": 0.0,
                 "latest_price": 0.0,
                 "min_price": 0.0,
@@ -1254,6 +1456,11 @@ def fetch_reporting_summary(
                 "wins": 0,
                 "losses": 0,
                 "pnl_thb": 0.0,
+                "paper_fee_thb": 0.0,
+                "live_fee_thb": 0.0,
+                "combined_fee_thb": 0.0,
+                "live_realized_pnl_thb": 0.0,
+                "live_closed_trades": 0,
                 "first_price": 0.0,
                 "latest_price": 0.0,
                 "min_price": 0.0,
@@ -1266,6 +1473,37 @@ def fetch_reporting_summary(
         summary["wins"] = int(row["wins"] or 0)
         summary["losses"] = int(row["losses"] or 0)
         summary["pnl_thb"] = float(row["pnl_thb"])
+        summary["paper_fee_thb"] = float(row["fee_thb"] or 0.0)
+        summary["combined_fee_thb"] = float(summary.get("paper_fee_thb", 0.0)) + float(summary.get("live_fee_thb", 0.0))
+
+    for row in live_symbol_rows:
+        summary = symbol_summary.setdefault(
+            str(row["symbol"]),
+            {
+                "symbol": str(row["symbol"]),
+                "snapshots": 0,
+                "signals": 0,
+                "trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "pnl_thb": 0.0,
+                "paper_fee_thb": 0.0,
+                "live_fee_thb": 0.0,
+                "combined_fee_thb": 0.0,
+                "live_realized_pnl_thb": 0.0,
+                "live_closed_trades": 0,
+                "first_price": 0.0,
+                "latest_price": 0.0,
+                "min_price": 0.0,
+                "max_price": 0.0,
+                "day_move_percent": 0.0,
+                "latest_zone": "n/a",
+            },
+        )
+        summary["live_fee_thb"] = float(row.get("live_fee_thb", 0.0) or 0.0)
+        summary["combined_fee_thb"] = float(summary.get("paper_fee_thb", 0.0)) + float(summary.get("live_fee_thb", 0.0))
+        summary["live_realized_pnl_thb"] = float(row.get("live_realized_pnl_thb", 0.0) or 0.0)
+        summary["live_closed_trades"] = int(row.get("live_closed_trades", 0) or 0)
 
     return {
         "filter_symbol": symbol,
@@ -1274,6 +1512,7 @@ def fetch_reporting_summary(
         "recent_execution_orders": [dict(row) for row in recent_execution_orders],
         "recent_auto_exit_events": [dict(row) for row in recent_auto_exit_events],
         "recent_errors": [dict(row) for row in recent_errors],
+        "live_execution_pnl": live_execution_summary,
     }
 
 
