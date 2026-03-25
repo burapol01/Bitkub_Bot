@@ -81,9 +81,9 @@
       "max_trades_per_day": 3
     },
     "THB_BCH": {
-      "buy_below": 15000,
-      "sell_above": 15700,
-      "budget_thb": 100,
+      "buy_below": 14850.0,
+      "sell_above": 15700.0,
+      "budget_thb": 100.0,
       "stop_loss_percent": 1.5,
       "take_profit_percent": 2.0,
       "max_trades_per_day": 1

@@ -28,6 +28,21 @@ CUSTOM_CSS = """
   color: var(--ink);
 }
 
+[data-testid="stAppViewContainer"] > .main .block-container {
+  max-width: min(1720px, calc(100vw - 18rem));
+  padding-top: 1.2rem;
+  padding-left: 1.4rem;
+  padding-right: 1.4rem;
+}
+
+@media (max-width: 1200px) {
+  [data-testid="stAppViewContainer"] > .main .block-container {
+    max-width: 100%;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+
 html, body, [class*="css"] {
   font-family: "Palatino Linotype", "Book Antiqua", Georgia, serif;
 }
