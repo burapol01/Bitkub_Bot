@@ -426,20 +426,28 @@ Supported Telegram commands now include:
 
 - `/start`
 - `/help`
+- `/help config`
 - `/status`
 - `/health`
 - `/positions`
 - `/holdings`
 - `/orders`
+- `/latest`
 - `/live`
 - `/config`
+- `/buy <symbol> <amount_thb> <rate>`
+- `/sell <symbol> <amount_coin> <rate>`
+- `/set_config <field> <value>`
+- `/set_config_fields`
+- `/set_rule <symbol> <buy_below> <sell_above> <budget_thb> <stop_loss_percent> <take_profit_percent> <max_trades_per_day>`
+- `/promote_symbol <symbol>`
 - `/pause`
 - `/resume`
 - `/cancel <execution_order_id>`
 - `/reload`
 - `/confirm <code>`
 
-Dangerous commands use a confirmation code flow. The bot replies with `/confirm <code>` instructions before it applies `/pause`, `/resume`, `/cancel`, or `/reload`.
+Dangerous commands use a confirmation code flow. The bot replies with `/confirm <code>` instructions before it applies `/buy`, `/sell`, `/set_config`, `/set_rule`, `/promote_symbol`, `/pause`, `/resume`, `/cancel`, or `/reload`.
 
 Required `.env` values for delivery:
 

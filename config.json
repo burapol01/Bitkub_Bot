@@ -73,9 +73,9 @@
       "max_trades_per_day": 2
     },
     "THB_KUB": {
-      "buy_below": 29.12,
-      "sell_above": 30.0,
-      "budget_thb": 100,
+      "buy_below": 28.9,
+      "sell_above": 40.0,
+      "budget_thb": 100.0,
       "stop_loss_percent": 1.0,
       "take_profit_percent": 1.2,
       "max_trades_per_day": 3

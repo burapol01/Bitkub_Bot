@@ -9,7 +9,7 @@ from clients.bitkub_private_client import (
     BitkubPrivateClient,
     BitkubPrivateClientError,
 )
-from config import CONFIG_PATH, reload_config, summarize_config_changes
+from config import CONFIG_PATH, reload_config, save_config, summarize_config_changes
 from core.strategy import get_zone, zone_changed
 from core.trade_engine import handle_symbol, import_wallet_position
 from services.account_service import (
@@ -28,6 +28,7 @@ from services.db_service import (
     fetch_open_execution_orders,
     fetch_reporting_summary,
     fetch_recent_telegram_command_log,
+    fetch_runtime_event_log,
     init_db,
     insert_account_snapshot,
     insert_execution_order,
@@ -533,6 +534,10 @@ def main():
             f"strategy_wired={'YES' if strategy_execution_wired else 'NO'}",
             f"thb_available={float(guardrails.get('thb_available_balance', 0.0)):,.2f}",
             f"blocked_reasons={len(guardrails.get('blocked_reasons', []))}",
+            *[
+                f"- {reason}"
+                for reason in list(guardrails.get("blocked_reasons", []))[:3]
+            ],
         ]
 
     def telegram_config_lines() -> list[str]:
@@ -543,6 +548,12 @@ def main():
             f"live_execution_enabled={'ON' if bool(config.get('live_execution_enabled', False)) else 'OFF'}",
             f"live_auto_entry_enabled={'ON' if bool(config.get('live_auto_entry_enabled', False)) else 'OFF'}",
             f"live_auto_exit_enabled={'ON' if bool(config.get('live_auto_exit_enabled', False)) else 'OFF'}",
+            f"entry_rank_min_score={float(config.get('live_auto_entry_min_score', 0.0)):,.1f}",
+            "entry_allowed_biases="
+            + ", ".join(
+                str(value)
+                for value in config.get("live_auto_entry_allowed_biases", [])
+            ),
             f"rules={len(config.get('rules', {}))}",
             f"watchlist_symbols={len(config.get('watchlist_symbols', []))}",
             f"telegram_enabled={'ON' if bool(config.get('telegram_enabled', False)) else 'OFF'}",
@@ -589,6 +600,107 @@ def main():
             lines.append(f"... and {len(open_orders) - 8} more order(s)")
         return lines
 
+    def telegram_latest_lines() -> list[str]:
+        summary = fetch_dashboard_summary(today=today_key())
+        latest_execution = summary.get("latest_execution_order")
+        latest_reconciliation = summary.get("latest_reconciliation")
+        latest_account_snapshot = summary.get("latest_account_snapshot")
+        recent_commands = fetch_recent_telegram_command_log(limit=20)
+        control_commands = {
+            "/buy",
+            "/sell",
+            "/set_config",
+            "/set_rule",
+            "/promote_symbol",
+            "/pause",
+            "/resume",
+            "/cancel",
+            "/reload",
+            "/confirm",
+        }
+        latest_control_command = next(
+            (
+                row
+                for row in recent_commands
+                if str(row.get("command_text") or "").split()[0].split("@")[0].lower()
+                in control_commands
+            ),
+            None,
+        )
+        recent_runtime_events = fetch_runtime_event_log(limit=20)
+        latest_runtime_event = next(
+            (
+                row
+                for row in recent_runtime_events
+                if str(row.get("event_type") or "") != "telegram_delivery"
+            ),
+            recent_runtime_events[0] if recent_runtime_events else None,
+        )
+        latest_auto_entry_review = next(
+            (
+                row
+                for row in recent_runtime_events
+                if str(row.get("event_type") or "") == "auto_live_entry_review"
+            ),
+            None,
+        )
+        open_orders_count = len(fetch_open_execution_orders())
+
+        lines: list[str] = [
+            "state: "
+            f"{'SAFETY PAUSE' if safety_pause else 'MANUAL PAUSE' if manual_pause else 'RUNNING'}",
+            f"manual_pause={'ON' if manual_pause else 'OFF'} safety_pause={'ON' if safety_pause else 'OFF'}",
+            f"open_execution_orders={open_orders_count}",
+        ]
+        if latest_execution:
+            lines.append(
+                "execution: "
+                f"id={latest_execution['id']} {latest_execution['symbol']} {latest_execution['side']} {latest_execution['state']}"
+            )
+            lines.append(f"execution_updated={latest_execution['updated_at']}")
+        else:
+            lines.append("execution: none")
+
+        if latest_reconciliation:
+            lines.append(
+                "reconciliation: "
+                f"{latest_reconciliation['status']} phase={latest_reconciliation['phase']} positions={latest_reconciliation['positions_count']}"
+            )
+        if latest_account_snapshot:
+            lines.append(
+                "account_snapshot: "
+                f"{latest_account_snapshot['private_api_status']} @ {latest_account_snapshot['created_at']}"
+            )
+        if latest_control_command:
+            lines.append(
+                "latest_control_command: "
+                f"{latest_control_command.get('command_text')} -> {latest_control_command.get('status')}"
+            )
+        else:
+            lines.append("latest_control_command: none")
+        if latest_runtime_event:
+            lines.append(
+                "latest_runtime_event: "
+                f"{latest_runtime_event.get('event_type')} | {latest_runtime_event.get('severity')} | {latest_runtime_event.get('message')}"
+            )
+        if latest_auto_entry_review:
+            details = latest_auto_entry_review.get("details") or {}
+            candidate_count = len(details.get("candidates") or [])
+            rejected_count = len(details.get("rejected") or [])
+            lines.append(
+                "latest_auto_entry_review: "
+                f"candidates={candidate_count} rejected={rejected_count} @ {latest_auto_entry_review.get('created_at')}"
+            )
+            top_candidate = (details.get("candidates") or [None])[0]
+            if isinstance(top_candidate, dict):
+                lines.append(
+                    "top_candidate: "
+                    f"{top_candidate.get('symbol')} score={top_candidate.get('ranking_score')} bias={top_candidate.get('trend_bias')}"
+                )
+        if notice:
+            lines.append(f"notice: {notice}")
+        return lines
+
     def cleanup_pending_telegram_confirms():
         now_ts = time.time()
         expired_chat_ids = [
@@ -611,9 +723,216 @@ def main():
         return [
             f"Confirmation required for {action}.",
             *summary_lines,
-            f"Reply with: /confirm {code}",
-            "This code expires in 120 seconds.",
+            "Confirm command:",
+            f"/confirm {code}",
+            "Copy the line above and send it within 120 seconds.",
         ]
+
+    def telegram_rule_seed(symbol: str) -> dict:
+        existing = config["rules"].get(symbol)
+        if existing:
+            return dict(existing)
+
+        latest_price = float(latest_prices.get(symbol, 0.0) or 0.0)
+        if latest_price > 0:
+            buy_below = latest_price * 0.995
+            sell_above = latest_price * 1.02
+        else:
+            buy_below = 1.0
+            sell_above = 1.1
+
+        return {
+            "buy_below": float(buy_below),
+            "sell_above": float(max(sell_above, buy_below * 1.01)),
+            "budget_thb": 100.0,
+            "stop_loss_percent": 1.2,
+            "take_profit_percent": 2.0,
+            "max_trades_per_day": 1,
+        }
+
+    def apply_saved_config_update(
+        *,
+        updated_config: dict,
+        event_type: str,
+        success_title: str,
+    ) -> tuple[bool, str, list[str]]:
+        nonlocal config, notice, notice_lines, report_filter_symbol
+        old_config = config
+        saved_config, errors = save_config(updated_config)
+        if errors or saved_config is None:
+            failed_lines = [str(error) for error in errors] if errors else ["Config save failed."]
+            return False, "Config update failed", failed_lines
+
+        config = saved_config
+        filter_was_reset = False
+        if report_filter_symbol and report_filter_symbol not in saved_config["rules"]:
+            report_filter_symbol = None
+            filter_was_reset = True
+
+        change_lines = summarize_config_changes(old_config, saved_config)
+        if filter_was_reset:
+            change_lines = change_lines + ["report filter reset to ALL"]
+
+        notice = success_title
+        notice_lines = change_lines
+        insert_runtime_event(
+            created_at=now_text(),
+            event_type=event_type,
+            severity="info",
+            message=success_title,
+            details={"changes": change_lines},
+        )
+        persist_state()
+        return True, success_title, change_lines
+
+    def submit_telegram_manual_live_order(
+        *,
+        symbol: str,
+        side: str,
+        amount_thb: float,
+        amount_coin: float,
+        rate: float,
+    ) -> tuple[bool, str, list[str]]:
+        nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
+        if private_client is None:
+            failed_lines = [
+                "Set BITKUB_API_KEY and BITKUB_API_SECRET in .env before using Telegram live order controls."
+            ]
+            return False, "Telegram live order requires private API credentials", failed_lines
+
+        try:
+            account_snapshot = fetch_account_snapshot(private_client)
+        except BitkubPrivateClientError as e:
+            failed_lines = [str(e)]
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="manual_live_order",
+                severity="error",
+                message="Telegram manual live order failed while refreshing account snapshot",
+                details={"errors": failed_lines, "symbol": symbol, "side": side},
+            )
+            return False, "Telegram manual live order failed", failed_lines
+
+        snapshot_errors = account_snapshot_errors(account_snapshot)
+        private_api_capabilities = summarize_account_capabilities(account_snapshot)
+        private_api_status = (
+            "wallet/balance ready, some order endpoints unavailable"
+            if snapshot_errors
+            else "wallet/balance/open-orders ready"
+        )
+        insert_account_snapshot(
+            created_at=now_text(),
+            source="telegram_manual_live_order",
+            private_api_status=private_api_status,
+            capabilities=private_api_capabilities,
+            snapshot=account_snapshot,
+        )
+
+        live_guardrails = build_live_execution_guardrails(
+            config=config,
+            trading_mode=trading_mode,
+            private_client=private_client,
+            private_api_capabilities=private_api_capabilities,
+            manual_pause=manual_pause,
+            safety_pause=safety_pause,
+            total_realized_pnl_thb=total_pnl,
+            available_balances=extract_available_balances(account_snapshot),
+            strategy_execution_wired=strategy_execution_wired,
+        )
+
+        temp_config = dict(config)
+        temp_config["live_manual_order"] = {
+            "enabled": True,
+            "symbol": symbol,
+            "side": side,
+            "order_type": "limit",
+            "amount_thb": float(amount_thb),
+            "amount_coin": float(amount_coin),
+            "rate": float(rate),
+        }
+
+        try:
+            order_record, order_events = submit_manual_live_order(
+                client=private_client,
+                config=temp_config,
+                rules=config["rules"],
+                guardrails=live_guardrails,
+                available_balances=extract_available_balances(account_snapshot),
+                created_at=now_text(),
+            )
+        except LiveExecutionGuardrailError as e:
+            failed_lines = str(e).split("; ")
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="manual_live_order",
+                severity="warning",
+                message="Telegram manual live order blocked by guardrails",
+                details={"errors": failed_lines, "symbol": symbol, "side": side},
+            )
+            return False, "Telegram manual live order blocked by guardrails", failed_lines
+        except Exception as e:
+            failed_lines = [str(e)]
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="manual_live_order",
+                severity="error",
+                message="Telegram manual live order submission failed",
+                details={"errors": failed_lines, "symbol": symbol, "side": side},
+            )
+            return False, "Telegram manual live order submission failed", failed_lines
+
+        execution_order_id = insert_execution_order(
+            created_at=order_record["created_at"],
+            updated_at=order_record["updated_at"],
+            symbol=order_record["symbol"],
+            side=order_record["side"],
+            order_type=order_record["order_type"],
+            state=order_record["state"],
+            request_payload=order_record["request_payload"],
+            response_payload=order_record.get("response_payload"),
+            guardrails=order_record.get("guardrails"),
+            exchange_order_id=order_record.get("exchange_order_id"),
+            exchange_client_id=order_record.get("exchange_client_id"),
+            message=order_record["message"],
+        )
+        update_execution_order(
+            execution_order_id=execution_order_id,
+            updated_at=order_record["updated_at"],
+            state=order_record["state"],
+            response_payload=order_record.get("response_payload"),
+            exchange_order_id=order_record.get("exchange_order_id"),
+            exchange_client_id=order_record.get("exchange_client_id"),
+            message=order_record["message"],
+        )
+        for event in order_events:
+            insert_execution_order_event(
+                execution_order_id=execution_order_id,
+                created_at=event["created_at"],
+                from_state=event["from_state"],
+                to_state=event["to_state"],
+                event_type=event["event_type"],
+                message=event["message"],
+                details=event.get("details"),
+            )
+
+        success_lines = [
+            f"id={execution_order_id} symbol={order_record['symbol']} side={order_record['side']} state={order_record['state']}"
+        ]
+        if order_record.get("exchange_order_id"):
+            success_lines.append(f"exchange_order_id={order_record['exchange_order_id']}")
+        insert_runtime_event(
+            created_at=now_text(),
+            event_type="manual_live_order",
+            severity="warning",
+            message="Telegram manual live order submitted",
+            details={
+                "execution_order_id": execution_order_id,
+                "symbol": order_record["symbol"],
+                "side": order_record["side"],
+                "state": order_record["state"],
+            },
+        )
+        return True, "Telegram manual live order submitted", success_lines
 
     def execute_telegram_confirmation(*, chat_id: str, code: str) -> tuple[str, list[str], str]:
         cleanup_pending_telegram_confirms()
@@ -666,12 +985,165 @@ def main():
                 source="telegram_cancel_command",
             )
             return result_title, result_lines, "processed" if success else "failed"
+        if action == "buy":
+            success, result_title, result_lines = submit_telegram_manual_live_order(
+                symbol=str(payload.get("symbol") or ""),
+                side="buy",
+                amount_thb=float(payload.get("amount_thb", 0.0) or 0.0),
+                amount_coin=float(payload.get("amount_coin", 0.0) or 0.0),
+                rate=float(payload.get("rate", 0.0) or 0.0),
+            )
+            return result_title, result_lines, "processed" if success else "failed"
+        if action == "sell":
+            success, result_title, result_lines = submit_telegram_manual_live_order(
+                symbol=str(payload.get("symbol") or ""),
+                side="sell",
+                amount_thb=float(payload.get("amount_thb", 0.0) or 0.0),
+                amount_coin=float(payload.get("amount_coin", 0.0) or 0.0),
+                rate=float(payload.get("rate", 0.0) or 0.0),
+            )
+            return result_title, result_lines, "processed" if success else "failed"
+        if action == "set_config":
+            updated_config = payload.get("updated_config")
+            if not isinstance(updated_config, dict):
+                return "Config update failed", ["Pending config payload is invalid."], "failed"
+            success, result_title, result_lines = apply_saved_config_update(
+                updated_config=updated_config,
+                event_type="telegram_set_config",
+                success_title="Config updated from Telegram",
+            )
+            return result_title, result_lines, "processed" if success else "failed"
+        if action == "promote_symbol":
+            symbol = str(payload.get("symbol") or "").strip().upper()
+            if not symbol:
+                return "Promote symbol failed", ["Pending symbol payload is invalid."], "failed"
+            updated = dict(config)
+            updated_rules = dict(config["rules"])
+            if symbol not in updated_rules:
+                updated_rules[symbol] = telegram_rule_seed(symbol)
+            updated["rules"] = updated_rules
+            updated["watchlist_symbols"] = sorted(
+                set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()) | {symbol}
+            )
+            success, result_title, result_lines = apply_saved_config_update(
+                updated_config=updated,
+                event_type="telegram_promote_symbol",
+                success_title=f"Promoted {symbol} into live rules",
+            )
+            return result_title, result_lines, "processed" if success else "failed"
+        if action == "set_rule":
+            symbol = str(payload.get("symbol") or "").strip().upper()
+            rule = payload.get("rule")
+            if not symbol or not isinstance(rule, dict):
+                return "Set rule failed", ["Pending rule payload is invalid."], "failed"
+            updated = dict(config)
+            updated_rules = dict(config["rules"])
+            updated_rules[symbol] = {
+                "buy_below": float(rule["buy_below"]),
+                "sell_above": float(rule["sell_above"]),
+                "budget_thb": float(rule["budget_thb"]),
+                "stop_loss_percent": float(rule["stop_loss_percent"]),
+                "take_profit_percent": float(rule["take_profit_percent"]),
+                "max_trades_per_day": int(rule["max_trades_per_day"]),
+            }
+            updated["rules"] = updated_rules
+            updated["watchlist_symbols"] = sorted(
+                set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()) | {symbol}
+            )
+            success, result_title, result_lines = apply_saved_config_update(
+                updated_config=updated,
+                event_type="telegram_set_rule",
+                success_title=f"Saved rule for {symbol} from Telegram",
+            )
+            return result_title, result_lines, "processed" if success else "failed"
 
         return (
             "Telegram confirmation failed",
             [f"Unsupported pending action: {action}"],
             "failed",
         )
+
+    def parse_telegram_scalar_value(field_name: str, raw_value: str):
+        web_only_fields = {
+            "telegram_enabled",
+            "telegram_control_enabled",
+        }
+        boolean_fields = {
+            "live_execution_enabled",
+            "live_auto_entry_enabled",
+            "live_auto_exit_enabled",
+            "live_auto_entry_require_ranking",
+        }
+        integer_fields = {
+            "interval_seconds",
+            "cooldown_seconds",
+            "live_auto_entry_rank_lookback_days",
+        }
+        float_fields = {
+            "fee_rate",
+            "live_auto_entry_min_score",
+            "live_max_order_thb",
+            "live_min_thb_balance",
+            "live_slippage_tolerance_percent",
+            "live_daily_loss_limit_thb",
+        }
+        string_fields = {
+            "mode",
+            "base_url",
+            "live_auto_entry_rank_resolution",
+        }
+
+        if field_name in web_only_fields:
+            raise ValueError(f"{field_name} is web-only and cannot be changed from Telegram")
+
+        if field_name in boolean_fields:
+            normalized = str(raw_value).strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off"}:
+                return False
+            raise ValueError(f"{field_name} expects true/false")
+        if field_name in integer_fields:
+            return int(raw_value)
+        if field_name in float_fields:
+            return float(raw_value)
+        if field_name in string_fields:
+            value = str(raw_value).strip()
+            if not value:
+                raise ValueError(f"{field_name} cannot be empty")
+            return value
+        raise ValueError(
+            "unsupported field. Allowed fields: "
+            "mode, base_url, fee_rate, interval_seconds, cooldown_seconds, "
+            "live_execution_enabled, live_auto_entry_enabled, live_auto_exit_enabled, "
+            "live_auto_entry_require_ranking, live_auto_entry_rank_resolution, "
+            "live_auto_entry_rank_lookback_days, live_auto_entry_min_score, "
+            "live_max_order_thb, live_min_thb_balance, "
+            "live_slippage_tolerance_percent, live_daily_loss_limit_thb"
+        )
+
+    def telegram_set_config_fields_lines() -> list[str]:
+        return [
+            "Supported /set_config fields:",
+            "mode",
+            "base_url",
+            "fee_rate",
+            "interval_seconds",
+            "cooldown_seconds",
+            "live_execution_enabled",
+            "live_auto_entry_enabled",
+            "live_auto_exit_enabled",
+            "live_auto_entry_require_ranking",
+            "live_auto_entry_rank_resolution",
+            "live_auto_entry_rank_lookback_days",
+            "live_auto_entry_min_score",
+            "live_max_order_thb",
+            "live_min_thb_balance",
+            "live_slippage_tolerance_percent",
+            "live_daily_loss_limit_thb",
+            "Example:",
+            "/set_config live_auto_entry_min_score 55",
+        ]
 
     def process_telegram_commands():
         cleanup_pending_telegram_confirms()
@@ -714,21 +1186,29 @@ def main():
 
             try:
                 if command_name in {"/start", "/help"}:
-                    response_title = "Bitkub Telegram Commands"
-                    response_lines = [
-                        "/status",
-                        "/health",
-                        "/positions",
-                        "/holdings",
-                        "/orders",
-                        "/live",
-                        "/config",
-                        "/pause",
-                        "/resume",
-                        "/cancel <id>",
-                        "/reload",
-                        "/confirm <code>",
-                    ]
+                    help_topic = (
+                        str(command_parts[1]).strip().lower()
+                        if len(command_parts) > 1
+                        else ""
+                    )
+                    if help_topic == "config":
+                        response_title = "Bitkub Telegram Config Help"
+                        response_lines = telegram_set_config_fields_lines()
+                    else:
+                        response_title = "Bitkub Telegram Commands"
+                        response_lines = [
+                            "Read only: /status /health /positions /holdings /orders /latest /live /config",
+                            "Control: /buy /sell /set_config /set_rule /promote_symbol /pause /resume /cancel /reload",
+                            "Confirm: /confirm <code>",
+                            "Config help: /help config or /set_config_fields",
+                            "Quick examples:",
+                            "/buy THB_BCH 100 15400",
+                            "/set_config live_auto_entry_min_score 55",
+                            "/set_rule THB_BCH 15000 15700 100 1.5 2.0 1",
+                        ]
+                elif command_name == "/set_config_fields":
+                    response_title = "Bitkub Telegram Config Help"
+                    response_lines = telegram_set_config_fields_lines()
                 elif command_name == "/status":
                     response_title = "Bitkub Bot Status"
                     response_lines = telegram_status_lines()
@@ -744,12 +1224,218 @@ def main():
                 elif command_name == "/orders":
                     response_title = "Bitkub Open Orders"
                     response_lines = telegram_orders_lines()
+                elif command_name == "/latest":
+                    response_title = "Bitkub Latest Activity"
+                    response_lines = telegram_latest_lines()
                 elif command_name == "/live":
                     response_title = "Bitkub Live Execution"
                     response_lines = telegram_live_lines()
                 elif command_name == "/config":
                     response_title = "Bitkub Config Summary"
                     response_lines = telegram_config_lines()
+                elif command_name == "/buy":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /buy."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 4:
+                        response_title = "Telegram buy usage"
+                        response_lines = [
+                            "Use: /buy SYMBOL AMOUNT_THB RATE",
+                            "Example:",
+                            "/buy THB_BCH 100 15400",
+                        ]
+                        response_status = "rejected"
+                    else:
+                        symbol = str(command_parts[1]).strip().upper()
+                        try:
+                            amount_thb = float(command_parts[2])
+                            rate = float(command_parts[3])
+                        except ValueError:
+                            response_title = "Telegram buy usage"
+                            response_lines = ["AMOUNT_THB and RATE must be numeric."]
+                            response_status = "rejected"
+                        else:
+                            if symbol not in config["rules"]:
+                                response_title = "Telegram buy rejected"
+                                response_lines = [f"{symbol} is not present in config rules."]
+                                response_status = "rejected"
+                            else:
+                                response_title = "Telegram confirmation required"
+                                response_lines = create_telegram_confirmation(
+                                    chat_id=str(update["chat_id"]),
+                                    action="buy",
+                                    payload={
+                                        "symbol": symbol,
+                                        "amount_thb": amount_thb,
+                                        "amount_coin": 0.0,
+                                        "rate": rate,
+                                    },
+                                    summary_lines=[
+                                        "Requested action: live BUY",
+                                        f"symbol={symbol}",
+                                        f"amount_thb={amount_thb:,.2f}",
+                                        f"rate={rate:,.8f}",
+                                    ],
+                                )
+                                response_status = "pending_confirmation"
+                elif command_name == "/sell":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /sell."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 4:
+                        response_title = "Telegram sell usage"
+                        response_lines = [
+                            "Use: /sell SYMBOL AMOUNT_COIN RATE",
+                            "Example:",
+                            "/sell THB_KUB 3.2 30",
+                        ]
+                        response_status = "rejected"
+                    else:
+                        symbol = str(command_parts[1]).strip().upper()
+                        try:
+                            amount_coin = float(command_parts[2])
+                            rate = float(command_parts[3])
+                        except ValueError:
+                            response_title = "Telegram sell usage"
+                            response_lines = ["AMOUNT_COIN and RATE must be numeric."]
+                            response_status = "rejected"
+                        else:
+                            if symbol not in config["rules"]:
+                                response_title = "Telegram sell rejected"
+                                response_lines = [f"{symbol} is not present in config rules."]
+                                response_status = "rejected"
+                            else:
+                                response_title = "Telegram confirmation required"
+                                response_lines = create_telegram_confirmation(
+                                    chat_id=str(update["chat_id"]),
+                                    action="sell",
+                                    payload={
+                                        "symbol": symbol,
+                                        "amount_thb": 0.0,
+                                        "amount_coin": amount_coin,
+                                        "rate": rate,
+                                    },
+                                    summary_lines=[
+                                        "Requested action: live SELL",
+                                        f"symbol={symbol}",
+                                        f"amount_coin={amount_coin:,.8f}",
+                                        f"rate={rate:,.8f}",
+                                    ],
+                                )
+                                response_status = "pending_confirmation"
+                elif command_name == "/set_config":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /set_config."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 3:
+                        response_title = "Telegram set_config usage"
+                        response_lines = [
+                            "Use /set_config <field> <value>",
+                            "Example: /set_config live_auto_entry_min_score 55",
+                        ]
+                        response_status = "rejected"
+                    else:
+                        field_name = str(command_parts[1]).strip()
+                        raw_value = " ".join(command_parts[2:]).strip()
+                        try:
+                            parsed_value = parse_telegram_scalar_value(field_name, raw_value)
+                        except Exception as e:
+                            response_title = "Telegram set_config rejected"
+                            response_lines = [str(e)]
+                            response_status = "rejected"
+                        else:
+                            updated = dict(config)
+                            updated[field_name] = parsed_value
+                            response_title = "Telegram confirmation required"
+                            response_lines = create_telegram_confirmation(
+                                chat_id=str(update["chat_id"]),
+                                action="set_config",
+                                payload={"updated_config": updated},
+                                summary_lines=[
+                                    "Requested action: config update",
+                                    f"{field_name}: {config.get(field_name)} -> {parsed_value}",
+                                ],
+                            )
+                            response_status = "pending_confirmation"
+                elif command_name == "/set_rule":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /set_rule."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 8:
+                        response_title = "Telegram set_rule usage"
+                        response_lines = [
+                            "Use: /set_rule SYMBOL BUY_BELOW SELL_ABOVE BUDGET STOP_LOSS TAKE_PROFIT MAX_TRADES",
+                            "Example:",
+                            "/set_rule THB_BCH 15000 15700 100 1.5 2.0 1",
+                        ]
+                        response_status = "rejected"
+                    else:
+                        symbol = str(command_parts[1]).strip().upper()
+                        try:
+                            rule = {
+                                "buy_below": float(command_parts[2]),
+                                "sell_above": float(command_parts[3]),
+                                "budget_thb": float(command_parts[4]),
+                                "stop_loss_percent": float(command_parts[5]),
+                                "take_profit_percent": float(command_parts[6]),
+                                "max_trades_per_day": int(command_parts[7]),
+                            }
+                        except ValueError:
+                            response_title = "Telegram set_rule rejected"
+                            response_lines = ["Rule values must be numeric and max_trades_per_day must be an integer."]
+                            response_status = "rejected"
+                        else:
+                            response_title = "Telegram confirmation required"
+                            response_lines = create_telegram_confirmation(
+                                chat_id=str(update["chat_id"]),
+                                action="set_rule",
+                                payload={"symbol": symbol, "rule": rule},
+                                summary_lines=[
+                                    f"Requested action: save rule for {symbol}",
+                                    f"buy_below={rule['buy_below']}",
+                                    f"sell_above={rule['sell_above']}",
+                                    f"budget_thb={rule['budget_thb']}",
+                                    f"stop_loss_percent={rule['stop_loss_percent']}",
+                                    f"take_profit_percent={rule['take_profit_percent']}",
+                                    f"max_trades_per_day={rule['max_trades_per_day']}",
+                                ],
+                            )
+                            response_status = "pending_confirmation"
+                elif command_name == "/promote_symbol":
+                    if not authorized:
+                        response_title = "Telegram command rejected"
+                        response_lines = ["This chat is not authorized to run /promote_symbol."]
+                        response_status = "rejected"
+                    elif len(command_parts) < 2:
+                        response_title = "Telegram promote_symbol usage"
+                        response_lines = ["Use /promote_symbol <symbol>"]
+                        response_status = "rejected"
+                    else:
+                        symbol = str(command_parts[1]).strip().upper()
+                        if not symbol:
+                            response_title = "Telegram promote_symbol rejected"
+                            response_lines = ["Symbol cannot be empty."]
+                            response_status = "rejected"
+                        elif symbol in config["rules"]:
+                            response_title = "Telegram promote_symbol skipped"
+                            response_lines = [f"{symbol} is already present in live rules."]
+                            response_status = "rejected"
+                        else:
+                            response_title = "Telegram confirmation required"
+                            response_lines = create_telegram_confirmation(
+                                chat_id=str(update["chat_id"]),
+                                action="promote_symbol",
+                                payload={"symbol": symbol},
+                                summary_lines=[
+                                    "Requested action: promote symbol into live rules",
+                                    f"symbol={symbol}",
+                                ],
+                            )
+                            response_status = "pending_confirmation"
                 elif command_name == "/pause":
                     if not authorized:
                         response_title = "Telegram command rejected"
@@ -855,7 +1541,13 @@ def main():
                 else:
                     response_title = "Unknown Telegram command"
                     response_lines = [
-                        "Supported commands: /start, /help, /status, /health, /positions, /holdings, /orders, /live, /config, /pause, /resume, /cancel <id>, /reload, /confirm <code>"
+                        "Unknown command.",
+                        "Use /help to see all commands.",
+                        "Use /help config to list /set_config fields.",
+                        "Quick: /status /orders /latest",
+                        "Examples:",
+                        "/buy THB_BCH 100 15400",
+                        "/set_rule THB_BCH 15000 15700 100 1.5 2.0 1",
                     ]
                     response_status = "rejected"
             except Exception as e:
