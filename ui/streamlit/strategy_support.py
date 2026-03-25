@@ -45,10 +45,28 @@ def fetch_market_symbol_universe() -> dict[str, Any]:
         return {"symbols": [], "error": str(e)}
 
 
-def build_rule_seed(config: dict[str, Any], symbol: str) -> dict[str, Any]:
+def build_rule_seed(
+    config: dict[str, Any],
+    symbol: str,
+    *,
+    market_price: float | None = None,
+) -> dict[str, Any]:
     existing = config["rules"].get(symbol)
     if existing:
         return dict(existing)
+    if market_price is not None and float(market_price) > 0:
+        price = float(market_price)
+        buy_below = price * 0.995
+        take_profit_percent = 2.0
+        sell_above = max(price * 1.015, buy_below * (1.0 + take_profit_percent / 100.0))
+        return {
+            "buy_below": buy_below,
+            "sell_above": sell_above,
+            "budget_thb": 100.0,
+            "stop_loss_percent": 1.2,
+            "take_profit_percent": take_profit_percent,
+            "max_trades_per_day": 1,
+        }
     return {
         "buy_below": 1.0,
         "sell_above": 1.1,

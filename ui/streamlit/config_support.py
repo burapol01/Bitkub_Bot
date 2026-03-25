@@ -23,7 +23,7 @@ def _show_config_save_feedback() -> None:
 
 
 
-def _save_config_with_feedback(
+def save_config_with_feedback(
     current_config: dict[str, Any],
     updated_config: dict[str, Any],
     success_title: str,
@@ -193,7 +193,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     "live_daily_loss_limit_thb": float(live_daily_loss_limit_thb),
                 }
             )
-            if _save_config_with_feedback(config, updated, "Saved system settings to config.json"):
+            if save_config_with_feedback(config, updated, "Saved system settings to config.json"):
                 st.rerun()
 
         st.markdown("#### Retention")
@@ -216,7 +216,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     "reconciliation_retention_days": int(reconciliation_retention_days),
                 }
             )
-            if _save_config_with_feedback(config, updated, "Saved retention settings to config.json"):
+            if save_config_with_feedback(config, updated, "Saved retention settings to config.json"):
                 st.rerun()
 
     with right:
@@ -244,7 +244,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             ]
             updated = dict(config)
             updated["watchlist_symbols"] = sorted(set(selected_watchlist) | set(extra_symbols) | set(configured_symbols))
-            if _save_config_with_feedback(config, updated, "Saved watchlist symbols"):
+            if save_config_with_feedback(config, updated, "Saved watchlist symbols"):
                 st.rerun()
 
         st.markdown("#### Telegram Foundation")
@@ -268,7 +268,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             updated["telegram_enabled"] = bool(telegram_enabled)
             updated["telegram_control_enabled"] = bool(telegram_control_enabled)
             updated["telegram_notify_events"] = [str(event_name) for event_name in telegram_notify_events]
-            if _save_config_with_feedback(config, updated, "Saved Telegram foundation settings"):
+            if save_config_with_feedback(config, updated, "Saved Telegram foundation settings"):
                 st.rerun()
 
         st.markdown("#### Manual Live Order Preset")
@@ -300,7 +300,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                 "amount_coin": float(mo_amount_coin),
                 "rate": float(mo_rate),
             }
-            if _save_config_with_feedback(config, updated, "Saved manual live order preset"):
+            if save_config_with_feedback(config, updated, "Saved manual live order preset"):
                 st.rerun()
 
         st.markdown("#### Rules Editor")
@@ -337,7 +337,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                 "max_trades_per_day": int(max_trades_per_day),
             }
             updated["rules"] = updated_rules
-            if _save_config_with_feedback(config, updated, f"Saved rule for {selected_rule_symbol}"):
+            if save_config_with_feedback(config, updated, f"Saved rule for {selected_rule_symbol}"):
                 st.rerun()
 
         st.markdown("#### Add / Remove Rule")
@@ -379,7 +379,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     updated_rules[new_symbol] = build_rule_seed(config, new_symbol)
                     updated["rules"] = updated_rules
                     updated["watchlist_symbols"] = sorted(set(config.get("watchlist_symbols", configured_symbols)) | {new_symbol})
-                    if _save_config_with_feedback(config, updated, f"Added new rule {new_symbol}"):
+                    if save_config_with_feedback(config, updated, f"Added new rule {new_symbol}"):
                         st.rerun()
         with remove_col:
             confirm_remove = st.checkbox("Confirm remove selected rule", key="confirm_remove_rule")
@@ -394,7 +394,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     updated_rules.pop(selected_rule_symbol, None)
                     updated["rules"] = updated_rules
                     updated["watchlist_symbols"] = sorted(set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()))
-                    if _save_config_with_feedback(config, updated, f"Removed rule {selected_rule_symbol}"):
+                    if save_config_with_feedback(config, updated, f"Removed rule {selected_rule_symbol}"):
                         st.rerun()
 
     with st.expander("Raw Config Preview", expanded=False):

@@ -20,7 +20,7 @@ from services.strategy_lab_service import (
     run_market_snapshot_replay,
     sync_candles_for_symbols,
 )
-from ui.streamlit.config_support import render_config_page
+from ui.streamlit.config_support import render_config_page, save_config_with_feedback
 from ui.streamlit.ops_pages import render_account_page, render_live_ops_page, render_overview_page
 from ui.streamlit.diagnostics_support import render_diagnostics_page, render_logs_page
 from ui.streamlit.data import calc_daily_totals
@@ -220,6 +220,10 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         resolution=ranking_resolution,
         lookback_days=ranking_days,
     )
+    ranking_last_close_by_symbol = {
+        str(row["symbol"]): float(row.get("last_close", 0.0) or 0.0)
+        for row in ranking["rows"]
+    }
 
     rank_card1, rank_card2, rank_card3 = st.columns(3)
     with rank_card1:
@@ -290,12 +294,16 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     updated_rules = dict(config["rules"])
                     for promoted_symbol in selected_promotions:
                         if promoted_symbol not in updated_rules:
-                            updated_rules[promoted_symbol] = build_rule_seed(config, promoted_symbol)
+                            updated_rules[promoted_symbol] = build_rule_seed(
+                                config,
+                                promoted_symbol,
+                                market_price=ranking_last_close_by_symbol.get(promoted_symbol),
+                            )
                     updated["rules"] = updated_rules
                     updated["watchlist_symbols"] = sorted(
                         set(config.get("watchlist_symbols", configured_symbols)) | set(selected_promotions)
                     )
-                    if _save_config_with_feedback(
+                    if save_config_with_feedback(
                         config,
                         updated,
                         f"Promoted {len(selected_promotions)} ranked symbol(s) into live rules",
@@ -400,9 +408,10 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         "Compare a few parameter variants for one live-rule symbol at once, then apply the winning rule back into config if it looks better than the current setup."
     )
 
-    compare_default_symbol = st.session_state.get("strategy_compare_symbol", configured_symbols[0] if configured_symbols else symbols[0])
-    if compare_default_symbol not in symbols:
-        compare_default_symbol = symbols[0]
+    compare_symbol_options = configured_symbols or symbols
+    compare_default_symbol = st.session_state.get("strategy_compare_symbol", compare_symbol_options[0])
+    if compare_default_symbol not in compare_symbol_options:
+        compare_default_symbol = compare_symbol_options[0]
     compare_source_options = ["candles", "snapshots"]
     compare_default_source = str(st.session_state.get("strategy_compare_source", "candles"))
     if compare_default_source not in compare_source_options:
@@ -416,8 +425,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         with compare_meta_left:
             compare_symbol = st.selectbox(
                 "Compare Symbol",
-                configured_symbols or symbols,
-                index=(configured_symbols or symbols).index(compare_default_symbol),
+                compare_symbol_options,
+                index=compare_symbol_options.index(compare_default_symbol),
             )
             compare_source = st.selectbox(
                 "Compare Source",
@@ -537,7 +546,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                         updated_rules = dict(config["rules"])
                         updated_rules[str(compare_payload["symbol"])] = chosen_rule
                         updated["rules"] = updated_rules
-                        if _save_config_with_feedback(
+                        if save_config_with_feedback(
                             config,
                             updated,
                             f"Applied compared variant {apply_variant} to {compare_payload['symbol']}",
@@ -598,7 +607,11 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
             key="strategy_replay_days",
         )
 
-    active_rule = build_rule_seed(config, replay_symbol)
+    active_rule = build_rule_seed(
+        config,
+        replay_symbol,
+        market_price=ranking_last_close_by_symbol.get(replay_symbol),
+    )
     replay_snapshot_cards = st.columns(4)
     with replay_snapshot_cards[0]:
         render_metric_card("Rule Buy Below", f"{float(active_rule['buy_below']):,.8f}", replay_symbol)

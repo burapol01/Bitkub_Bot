@@ -29,14 +29,19 @@
     "rate": 30.0
   },
   "watchlist_symbols": [
+    "THB_ABT",
     "THB_BCH",
     "THB_BTC",
+    "THB_COMP",
     "THB_DOGE",
+    "THB_EPIC",
     "THB_ETH",
     "THB_FET",
     "THB_KUB",
+    "THB_L3",
     "THB_LINK",
-    "THB_LUNA"
+    "THB_LUNA",
+    "THB_TAO"
   ],
   "telegram_enabled": true,
   "telegram_control_enabled": true,
@@ -113,8 +118,40 @@
       "max_trades_per_day": 1
     },
     "THB_LINK": {
-      "buy_below": 289.0,
+      "buy_below": 287.555,
       "sell_above": 305.0,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TAO": {
+      "buy_below": 11840.5,
+      "sell_above": 12078.499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_L3": {
+      "buy_below": 0.38805,
+      "sell_above": 0.39585,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ABT": {
+      "buy_below": 7.05455,
+      "sell_above": 7.196349999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_EPIC": {
+      "buy_below": 8.96495,
+      "sell_above": 9.14515,
       "budget_thb": 100.0,
       "stop_loss_percent": 1.2,
       "take_profit_percent": 2.0,
