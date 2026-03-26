@@ -118,6 +118,138 @@ html, body, [class*="css"] {
   margin-bottom: 0.5rem;
 }
 
+.section-shell {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 1rem 1.05rem 0.95rem 1.05rem;
+  box-shadow: 0 12px 34px rgba(66, 47, 24, 0.05);
+  margin-top: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.section-kicker {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.section-title {
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: var(--ink);
+  margin: 0;
+}
+
+.section-sub {
+  color: var(--muted);
+  font-size: 0.94rem;
+  margin-top: 0.28rem;
+}
+
+.callout {
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  padding: 0.82rem 0.95rem;
+  margin: 0.45rem 0 0.8rem 0;
+}
+
+.callout-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-bottom: 0.28rem;
+}
+
+.callout-body {
+  font-size: 0.96rem;
+  line-height: 1.42;
+}
+
+.callout.good { background: rgba(47,125,50,0.10); color: var(--good); border-color: rgba(47,125,50,0.20); }
+.callout.warn { background: rgba(154,103,0,0.10); color: var(--warn); border-color: rgba(154,103,0,0.22); }
+.callout.bad  { background: rgba(180,35,24,0.10); color: var(--bad); border-color: rgba(180,35,24,0.22); }
+.callout.info { background: rgba(31,106,115,0.10); color: var(--accent-2); border-color: rgba(31,106,115,0.22); }
+
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin: 0.2rem 0 0.75rem 0;
+}
+
+.nav-shell {
+  background: rgba(255, 250, 241, 0.84);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 0.85rem 0.9rem;
+  margin-bottom: 0.9rem;
+}
+
+.nav-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin-bottom: 0.42rem;
+}
+
+.nav-body {
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.page-gap {
+  height: 0.25rem;
+}
+
+[data-testid="stSidebar"] .element-container,
+[data-testid="stSidebar"] .stButton,
+[data-testid="stSidebar"] .stRadio,
+[data-testid="stSidebar"] .stCaption {
+  margin-bottom: 0.45rem;
+}
+
+[data-testid="stSidebar"] .stRadio > div {
+  gap: 0.3rem;
+}
+
+[data-testid="stSidebar"] .stRadio label {
+  border-radius: 14px;
+}
+
+.main .block-container [data-testid="stHorizontalBlock"] {
+  gap: 0.9rem;
+}
+
+.main .block-container .element-container,
+.main .block-container .stDataFrame,
+.main .block-container .stAlert,
+.main .block-container .stMarkdown,
+.main .block-container .stCaption,
+.main .block-container .stExpander,
+.main .block-container .stForm {
+  margin-bottom: 0.7rem;
+}
+
+.main .block-container .stDataFrame {
+  padding-top: 0.1rem;
+}
+
+.main .block-container .stForm {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 251, 243, 0.72);
+  padding: 0.8rem 0.85rem 0.45rem 0.85rem;
+}
+
+.main .block-container hr {
+  margin: 1rem 0;
+}
+
 .note-strip {
   border-left: 4px solid var(--accent);
   background: rgba(163, 74, 40, 0.08);
@@ -158,6 +290,45 @@ def render_metric_card(label: str, value: str, note: str = "") -> None:
           <div class="metric-label">{label}</div>
           <div class="metric-value">{value}</div>
           <div class="metric-note">{note}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_intro(title: str, subtitle: str = "", kicker: str = "") -> None:
+    kicker_html = f'<div class="section-kicker">{kicker}</div>' if kicker else ""
+    subtitle_html = f'<div class="section-sub">{subtitle}</div>' if subtitle else ""
+    st.markdown(
+        f"""
+        <div class="section-shell">
+          {kicker_html}
+          <div class="section-title">{title}</div>
+          {subtitle_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_callout(title: str, message: str, tone: str = "info") -> None:
+    st.markdown(
+        f"""
+        <div class="callout {tone}">
+          <div class="callout-title">{title}</div>
+          <div class="callout-body">{message}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_sidebar_block(title: str, body: str) -> None:
+    st.markdown(
+        f"""
+        <div class="nav-shell">
+          <div class="nav-title">{title}</div>
+          <div class="nav-body">{body}</div>
         </div>
         """,
         unsafe_allow_html=True,

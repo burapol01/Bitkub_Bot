@@ -19,7 +19,7 @@ from services.db_service import (
 )
 from services.reconciliation_service import summarize_live_reconciliation
 from services.telegram_service import telegram_settings_snapshot
-from ui.streamlit.styles import badge, render_metric_card
+from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
 from ui.streamlit.strategy_support import evaluate_fee_guardrail
 
 
@@ -148,9 +148,10 @@ def render_reconciliation_block(live_reconciliation: dict[str, Any]) -> None:
 
 
 def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
-    st.markdown('<div class="panel-title">Logs & Errors</div>', unsafe_allow_html=True)
-    st.caption(
-        "Use this page to separate current issues from historical runtime events. Categories and hints are there to speed up troubleshooting."
+    render_section_intro(
+        "Logs & Errors",
+        "Start with the current issues and fee watch, then go deeper into runtime history only when needed.",
+        "Diagnostics",
     )
 
     current_issue_rows = current_private_api_issues(private_ctx)
@@ -185,6 +186,19 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     for row in current_issue_rows + historical_rows:
         category_counts[str(row.get("category") or "General")] += 1
 
+    if current_issue_rows:
+        render_callout(
+            "Current Issues Need Attention",
+            f"There are {len(current_issue_rows)} current issue(s) in the latest snapshot. Start with the Current Issues table before reviewing historical events.",
+            "warn",
+        )
+    else:
+        render_callout(
+            "Current Snapshot Looks Clean",
+            "No current private-API or open-order issues were detected in the latest snapshot.",
+            "good",
+        )
+
     card1, card2, card3, card4 = st.columns(4)
     with card1:
         render_metric_card("Current Issues", str(len(current_issue_rows)), "Current snapshot only")
@@ -196,6 +210,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         top_category = max(category_counts, key=category_counts.get) if category_counts else "None"
         render_metric_card("Top Category", top_category, f"Telegram queued {len(telegram_rows)}")
 
+    st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
     current_left, current_right = st.columns([1.0, 1.0])
     with current_left:
         st.markdown('<div class="panel-title">Current Issues</div>', unsafe_allow_html=True)
@@ -217,7 +232,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         else:
             st.caption("No runtime categories recorded yet.")
 
-    st.markdown('<div class="panel-title">Telegram Delivery Readiness</div>', unsafe_allow_html=True)
+    render_section_intro("Telegram Delivery Readiness", "Quick readiness check before relying on Telegram notifications or control commands.", "Telegram")
     readiness_cols = st.columns(4)
     with readiness_cols[0]:
         render_metric_card("Telegram Enabled", "ON" if telegram_settings["enabled"] else "OFF", "config.json toggle")
@@ -229,7 +244,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         render_metric_card("Delivery Ready", "YES" if telegram_settings["ready"] else "NO", "control YES" if telegram_settings["control_ready"] else "control NO")
     st.caption("Telegram sender uses TELEGRAM_BOT_TOKEN plus TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_ID. Telegram commands can be restricted with TELEGRAM_ALLOWED_CHAT_IDS.")
 
-    st.markdown('<div class="panel-title">Fee Watch</div>', unsafe_allow_html=True)
+    render_section_intro("Fee Watch", "Daily fee drag summary so you can spot when the strategy is paying too much for its edge.", "Fees")
     fee_cols = st.columns(4)
     with fee_cols[0]:
         render_metric_card("Combined Fee Today", f"{combined_fee_today:,.2f} THB", f"Trades {combined_trades_today}")
@@ -239,10 +254,11 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         render_metric_card("Fee Drag", f"{combined_fee_drag_today:.2f}%", f"Paper {paper_fee_today:,.2f} | Live {live_fee_today:,.2f}")
     with fee_cols[3]:
         render_metric_card("Fee Guardrail", fee_guardrail, today)
-    if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE", "LOSS_AFTER_FEES"}:
-        st.warning(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
-    else:
-        st.caption(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
+    render_callout(
+        "Fee Watch",
+        f"{fee_guardrail} | {fee_guardrail_note}",
+        "bad" if fee_guardrail == "LOSS_AFTER_FEES" else "warn" if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE"} else "good",
+    )
 
     latest_auto_entry_review = next(
         (
@@ -253,7 +269,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         None,
     )
 
-    st.markdown('<div class="panel-title">Latest Auto Entry Review</div>', unsafe_allow_html=True)
+    render_section_intro("Latest Auto Entry Review", "Use this to understand why the bot almost entered, did enter, or kept rejecting candidates.", "Auto Entry")
     if latest_auto_entry_review:
         review_details = dict(latest_auto_entry_review.get("details") or {})
         review_candidates = list(review_details.get("candidates") or [])
@@ -269,6 +285,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         with review_cards[3]:
             render_metric_card("Allowed Biases", ", ".join(review_context.get("allowed_biases", [])) or "n/a", f"Lookback {review_context.get('lookback_days', 'n/a')}")
 
+        st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
         review_left, review_right = st.columns([1.0, 1.0])
         with review_left:
             if review_candidates:
@@ -291,7 +308,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         if selected_category == "ALL" or str(row.get("category")) == selected_category
     ]
 
-    st.markdown('<div class="panel-title">Historical Runtime Events</div>', unsafe_allow_html=True)
+    render_section_intro("Historical Runtime Events", "Lower-signal history lives here. Filter by category after you check current issues.", "History")
     if filtered_rows:
         st.dataframe(
             [
@@ -331,7 +348,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
         else:
             st.caption("No detailed events to show.")
 
-    st.markdown('<div class="panel-title">Telegram Outbox</div>', unsafe_allow_html=True)
+    render_section_intro("Telegram Outbox", "Queued and recently sent notifications, useful when checking delivery or anti-spam behavior.", "Messaging")
     if telegram_rows:
         st.dataframe(
             [
@@ -351,7 +368,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     else:
         st.caption("No Telegram notifications have been queued yet.")
 
-    st.markdown('<div class="panel-title">Telegram Command Log</div>', unsafe_allow_html=True)
+    render_section_intro("Telegram Command Log", "Recent control interactions and the engine response captured for each command.", "Messaging")
     if telegram_command_rows:
         st.dataframe(
             [
@@ -428,6 +445,7 @@ def render_diagnostics_page(
             f"Events {table_counts.get('execution_order_events', 0)}",
         )
 
+    st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
     col1, col2 = st.columns([0.95, 1.05])
     with col1:
         st.markdown('<div class="panel-title">SQLite Health</div>', unsafe_allow_html=True)

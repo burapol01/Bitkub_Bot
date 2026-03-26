@@ -23,7 +23,7 @@ from ui.streamlit.actions import (
 )
 from ui.streamlit.data import calc_daily_totals
 from ui.streamlit.refresh import render_refreshable_fragment
-from ui.streamlit.styles import badge, render_metric_card
+from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
 from ui.streamlit.strategy_support import evaluate_fee_guardrail
 from utils.time_utils import now_text
 
@@ -91,6 +91,20 @@ def render_overview_page(
         fee_drag_percent=combined_fee_drag_today,
     )
 
+    render_section_intro(
+        "Overview",
+        "Start here for the daily outcome, current market context, and control health before drilling into details.",
+        "Control Surface",
+    )
+
+    status_badges = [
+        badge(f"Mode {str(config['mode']).upper()}", "info"),
+        badge("Manual Pause ON" if runtime["manual_pause"] else "Manual Pause OFF", "warn" if runtime["manual_pause"] else "good"),
+        badge("Private API READY" if private_ctx["account_snapshot"] is not None else "Private API OFFLINE", "good" if private_ctx["account_snapshot"] is not None else "bad"),
+        badge(f"Fee {fee_guardrail}", "bad" if fee_guardrail == "LOSS_AFTER_FEES" else "warn" if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE"} else "good"),
+    ]
+    st.markdown(f'<div class="status-strip">{" ".join(status_badges)}</div>', unsafe_allow_html=True)
+
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         render_metric_card("Trading Mode", str(config["mode"]).upper(), private_ctx["private_api_status"])
@@ -109,7 +123,7 @@ def render_overview_page(
             f"Paper {paper_realized_today:,.2f} | Live {live_realized_today:,.2f}",
         )
 
-    st.markdown('<div class="panel-title">Market Overview</div>', unsafe_allow_html=True)
+    render_section_intro("Market Overview", "Live prices against the current entry/exit zones for each configured rule.", "Market")
     st.dataframe(
         [
             {
@@ -127,7 +141,7 @@ def render_overview_page(
 
     pnl_left, pnl_right = st.columns([1.0, 1.0])
     with pnl_left:
-        st.markdown('<div class="panel-title">Realized PnL Breakdown</div>', unsafe_allow_html=True)
+        render_section_intro("Realized PnL Breakdown", "Combined paper and live outcomes for the current day, including fee drag.", "P&L")
         pnl_cards = st.columns(4)
         with pnl_cards[0]:
             render_metric_card("Combined Today", f"{combined_realized_today:,.2f} THB", f"{today}")
@@ -152,12 +166,13 @@ def render_overview_page(
         st.caption(
             "Paper realized comes from runtime daily_stats/paper trade flow. Live realized is estimated from filled execution_orders using FIFO cost basis across filled buy/sell orders. Fee Today combines paper_trade_logs fees with filled live execution fees."
         )
-        if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE", "LOSS_AFTER_FEES"}:
-            st.warning(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
-        else:
-            st.caption(f"Fee Watch: {fee_guardrail} | {fee_guardrail_note}")
+        render_callout(
+            "Fee Watch",
+            f"{fee_guardrail} | {fee_guardrail_note}",
+            "bad" if fee_guardrail == "LOSS_AFTER_FEES" else "warn" if fee_guardrail in {"FEE_HEAVY", "THIN_EDGE"} else "good",
+        )
     with pnl_right:
-        st.markdown('<div class="panel-title">Overview Notes</div>', unsafe_allow_html=True)
+        render_section_intro("Overview Notes", "Read this block when a number looks surprising or you need to understand what is connected already.", "Context")
         notes = [
             f"Mode: {str(config['mode']).upper()} | live execution {'ON' if bool(config.get('live_execution_enabled', False)) else 'OFF'}",
             f"Auto entry {'ON' if bool(config.get('live_auto_entry_enabled', False)) else 'OFF'} | auto exit {'ON' if bool(config.get('live_auto_exit_enabled', False)) else 'OFF'}",
@@ -171,7 +186,7 @@ def render_overview_page(
 
     status_left, status_right = st.columns([1.05, 0.95])
     with status_left:
-        st.markdown('<div class="panel-title">Control Snapshot</div>', unsafe_allow_html=True)
+        render_section_intro("Control Snapshot", "Runtime, private API, and execution-readiness signals condensed into one place.", "Status")
         pause_badges = [
             badge("Manual Pause ON", "warn" if runtime["manual_pause"] else "good"),
             badge(
@@ -189,7 +204,7 @@ def render_overview_page(
         )
         st.caption(private_ctx["private_api_status"])
     with status_right:
-        st.markdown('<div class="panel-title">Latest Execution</div>', unsafe_allow_html=True)
+        render_section_intro("Latest Execution", "The newest execution-order state recorded by the engine.", "Execution")
         latest_execution = dashboard_summary.get("latest_execution_order")
         if latest_execution:
             st.write(
@@ -204,9 +219,10 @@ def render_overview_page(
             st.caption("No execution orders stored yet.")
 
     if runtime["messages"]:
-        st.markdown(
-            '<div class="note-strip"><strong>Runtime Restore</strong><br>' + "<br>".join(runtime["messages"]) + '</div>',
-            unsafe_allow_html=True,
+        render_callout(
+            "Runtime Restore",
+            "<br>".join(runtime["messages"]),
+            "info",
         )
 
 
@@ -221,7 +237,22 @@ def render_account_page(
         st.warning("Private API credentials are not configured or account snapshot is unavailable.")
         return
 
-    st.markdown('<div class="panel-title">Capability Matrix</div>', unsafe_allow_html=True)
+    render_section_intro(
+        "Account",
+        "Start with capability and wallet summary, then move to holdings and open orders only if something looks off.",
+        "Wallet & Orders",
+    )
+    capability_tones = [
+        "good" if item.endswith("=OK") else "warn" if item.endswith("=PARTIAL") else "bad"
+        for item in private_ctx["private_api_capabilities"]
+    ]
+    status_badges = [
+        badge("Account Snapshot READY", "good"),
+        badge("Capability PARTIAL" if any(tone == "warn" for tone in capability_tones) else "Capability OK", "warn" if any(tone == "warn" for tone in capability_tones) else "good"),
+        badge("Capability ERROR" if any(tone == "bad" for tone in capability_tones) else "No hard errors", "bad" if any(tone == "bad" for tone in capability_tones) else "good"),
+    ]
+    st.markdown(f'<div class="status-strip">{" ".join(status_badges)}</div>', unsafe_allow_html=True)
+    render_section_intro("Capability Matrix", "Private API readiness, open-order support, and partial capability signals live here.", "Status")
     st.markdown(
         " ".join(
             badge(item, "good" if item.endswith("=OK") else "warn" if item.endswith("=PARTIAL") else "bad")
@@ -230,8 +261,17 @@ def render_account_page(
         unsafe_allow_html=True,
     )
     if private_ctx["errors"]:
-        for error in private_ctx["errors"]:
-            st.warning(error)
+        render_callout(
+            "Account Warnings",
+            "<br>".join(str(error) for error in private_ctx["errors"]),
+            "warn",
+        )
+    else:
+        render_callout(
+            "Account Snapshot",
+            "Private API snapshot loaded without account-level warnings.",
+            "good",
+        )
 
     holdings = build_live_holdings_snapshot(
         account_snapshot=account_snapshot,
@@ -261,6 +301,9 @@ def render_account_page(
                 else:
                     open_rows.append({"symbol": symbol, "status": "ERROR", "open_orders": error_message})
 
+    unsupported_open_order_symbols = sum(1 for row in open_rows if str(row.get("status")) == "UNSUPPORTED")
+    error_open_order_symbols = sum(1 for row in open_rows if str(row.get("status")) == "ERROR")
+
     metric1, metric2, metric3 = st.columns(3)
     with metric1:
         render_metric_card("Holdings Rows", str(len(holdings)), f"Reserved rows {reserved_rows}")
@@ -269,15 +312,34 @@ def render_account_page(
     with metric3:
         render_metric_card("Open Order Symbols", str(len(open_rows)), "Exchange snapshot summary")
 
+    if error_open_order_symbols:
+        render_callout(
+            "Open Order Coverage",
+            f"{error_open_order_symbols} symbol(s) returned hard open-order errors. Check the right-hand table before trusting the exchange snapshot.",
+            "bad",
+        )
+    elif unsupported_open_order_symbols:
+        render_callout(
+            "Open Order Coverage",
+            f"{unsupported_open_order_symbols} symbol(s) are marked unsupported for my-open-orders. This is usually safe if you already know they are broker-coin style symbols.",
+            "warn",
+        )
+    else:
+        render_callout(
+            "Open Order Coverage",
+            "All tracked symbols returned a clean open-order capability snapshot.",
+            "good",
+        )
+
     left, right = st.columns([1.15, 0.85])
     with left:
-        st.markdown('<div class="panel-title">Live Holdings</div>', unsafe_allow_html=True)
+        render_section_intro("Live Holdings", "Mark-to-market holdings using the latest known prices and filled execution history.", "Holdings")
         if holdings:
             st.dataframe(holdings, width='stretch', hide_index=True)
         else:
             st.caption("No live holdings found in the current account snapshot.")
     with right:
-        st.markdown('<div class="panel-title">Exchange Open Orders</div>', unsafe_allow_html=True)
+        render_section_intro("Exchange Open Orders", "Capability-normalized open-order snapshot from the exchange. Unsupported symbols stay visible here so they are easy to spot.", "Orders")
         if open_rows:
             st.dataframe(open_rows, width='stretch', hide_index=True)
         else:
@@ -335,6 +397,20 @@ def render_live_ops_page(
         recent_execution_events = dynamic["recent_execution_events"]
         last_execution = recent_execution_orders[0] if recent_execution_orders else None
 
+        render_section_intro(
+            "Live Ops",
+            "Use this page for real actions only. Read the summary first, then move left to the order form and right to live controls.",
+            "Execution",
+        )
+
+        status_badges = [
+            badge("Execution READY" if guardrails.get("ready") else "Execution BLOCKED", "good" if guardrails.get("ready") else "bad"),
+            badge("Auto Exit ON" if guardrails.get("live_auto_exit_enabled") else "Auto Exit OFF", "info"),
+            badge("Auto Entry ON" if guardrails.get("live_auto_entry_enabled") else "Auto Entry OFF", "info"),
+            badge(f"Open Orders {len(open_execution_orders)}", "warn" if open_execution_orders else "good"),
+        ]
+        st.markdown(f'<div class="status-strip">{" ".join(status_badges)}</div>', unsafe_allow_html=True)
+
         card1, card2, card3 = st.columns(3)
         with card1:
             render_metric_card(
@@ -355,20 +431,24 @@ def render_live_ops_page(
                 f"Min balance {float(config['live_min_thb_balance']):,.2f}",
             )
 
-        st.markdown('<div class="panel-title">Guardrail Snapshot</div>', unsafe_allow_html=True)
         if guardrails.get("blocked_reasons"):
-            st.markdown(
-                " ".join(badge(reason, "warn") for reason in guardrails["blocked_reasons"]),
-                unsafe_allow_html=True,
+            render_callout(
+                "Guardrail Snapshot",
+                "<br>".join(str(reason) for reason in guardrails["blocked_reasons"]),
+                "warn",
             )
         else:
-            st.markdown(badge("No blocking reasons", "good"), unsafe_allow_html=True)
+            render_callout(
+                "Guardrail Snapshot",
+                "No blocking reasons right now. The engine can still reject the final submit if the exchange response changes.",
+                "good",
+            )
 
         _show_live_ops_feedback()
 
         summary_left, summary_right = st.columns([0.95, 1.05])
         with summary_left:
-            st.markdown('<div class="panel-title">Latest Action Snapshot</div>', unsafe_allow_html=True)
+            render_section_intro("Latest Action Snapshot", "The newest execution update recorded by the engine.", "Action")
             if last_execution:
                 st.markdown(
                     " ".join(
@@ -389,7 +469,7 @@ def render_live_ops_page(
             else:
                 st.caption("No execution history yet.")
         with summary_right:
-            st.markdown('<div class="panel-title">Open Order Focus</div>', unsafe_allow_html=True)
+            render_section_intro("Open Order Focus", "Inspect the currently selected open execution order before refreshing or canceling it.", "Focus")
             if open_execution_orders:
                 focus_options = {
                     f"id={order['id']} | {order['symbol']} | {order['side']} | {order['state']}": order
@@ -424,7 +504,7 @@ def render_live_ops_page(
 
     left, right = st.columns([1.1, 0.9])
     with left:
-        st.markdown('<div class="panel-title">Manual Live Order</div>', unsafe_allow_html=True)
+        render_section_intro("Manual Live Order", "Submit a real order only after the pre-flight checks look clean.", "Action Form")
         with st.form("manual_live_order_form"):
             symbol = st.selectbox(
                 "Symbol",
@@ -476,7 +556,7 @@ def render_live_ops_page(
         if float(rate) <= 0:
             validation_badges.append(badge("Rate must be greater than 0", "bad"))
 
-        st.markdown('<div class="panel-title">Pre-flight Checks</div>', unsafe_allow_html=True)
+        render_section_intro("Pre-flight Checks", "This checks internal consistency only. Exchange responses and live guardrails still decide the final outcome.", "Validation")
         if validation_badges:
             st.markdown(" ".join(validation_badges), unsafe_allow_html=True)
         else:
@@ -531,7 +611,7 @@ def render_live_ops_page(
             guardrails = dynamic["guardrails"]
             open_execution_orders = dynamic["open_execution_orders"]
 
-            st.markdown('<div class="panel-title">Live Controls</div>', unsafe_allow_html=True)
+            render_section_intro("Live Controls", "Use refresh and cancel here. Keep this side focused on open-order maintenance, not new order creation.", "Controls")
             if st.button("Refresh Open Live Orders", width='stretch'):
                 refreshed = 0
                 for order in open_execution_orders:
@@ -625,10 +705,10 @@ def render_live_ops_page(
 
         history_left, history_right = st.columns([1.0, 1.0])
         with history_left:
-            st.markdown('<div class="panel-title">Recent Execution Orders</div>', unsafe_allow_html=True)
+            render_section_intro("Recent Execution Orders", "Latest order states first. Use this together with the events table to understand what the engine just did.", "History")
             st.dataframe(recent_execution_orders, width='stretch', hide_index=True)
         with history_right:
-            st.markdown('<div class="panel-title">Recent Execution Events</div>', unsafe_allow_html=True)
+            render_section_intro("Recent Execution Events", "Execution event stream behind the latest orders.", "History")
             st.dataframe(recent_execution_events, width='stretch', hide_index=True)
 
     render_refreshable_fragment(auto_refresh_run_every, _render_live_ops_history)

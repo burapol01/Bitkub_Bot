@@ -69,6 +69,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
     summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
     with summary_col1:
         render_metric_card("Mode", str(config["mode"]).upper(), f"Base URL {config['base_url']}")
@@ -95,6 +96,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             str(config.get("live_manual_order", {}).get("side", "n/a")).upper(),
         )
 
+    st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
     with st.expander("Live Rule Summary", expanded=False):
         st.dataframe(
             [

@@ -53,14 +53,19 @@ def main() -> None:
     if default_page not in PAGE_ORDER:
         default_page = PAGE_ORDER[0]
 
+    if st.session_state.get("ui_page") not in PAGE_ORDER:
+        st.session_state["ui_page"] = default_page
+    current_page = str(st.session_state.get("ui_page", default_page))
+
     sidebar_ctx = build_dashboard_context(config)
     selected_page = render_sidebar(
         config=config,
         private_ctx=sidebar_ctx["private_ctx"],
-        selected_page=default_page,
+        selected_page=current_page,
     )
     st.session_state["ui_page"] = selected_page
-    st.query_params["page"] = selected_page
+    if st.query_params.get("page") != selected_page:
+        st.query_params["page"] = selected_page
 
     auto_refresh_enabled, auto_refresh_seconds = render_auto_refresh_controls(selected_page)
     run_every = get_auto_refresh_run_every(selected_page, auto_refresh_enabled, auto_refresh_seconds)

@@ -21,10 +21,10 @@
   "live_daily_loss_limit_thb": 1000.0,
   "live_manual_order": {
     "enabled": true,
-    "symbol": "THB_KUB",
+    "symbol": "THB_L3",
     "side": "sell",
     "order_type": "limit",
-    "amount_thb": 100,
+    "amount_thb": 500.0,
     "amount_coin": 3.41413451,
     "rate": 30.0
   },
@@ -33,7 +33,6 @@
     "THB_BCH",
     "THB_BTC",
     "THB_COMP",
-    "THB_DOGE",
     "THB_EPIC",
     "THB_ETH",
     "THB_FET",
@@ -99,14 +98,6 @@
       "budget_thb": 100,
       "stop_loss_percent": 1.5,
       "take_profit_percent": 2.0,
-      "max_trades_per_day": 1
-    },
-    "THB_DOGE": {
-      "buy_below": 2.7,
-      "sell_above": 3.2,
-      "budget_thb": 100.0,
-      "stop_loss_percent": 1.2,
-      "take_profit_percent": 2.4,
       "max_trades_per_day": 1
     },
     "THB_FET": {
