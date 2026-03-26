@@ -6,17 +6,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=bitkub
-WorkingDirectory=/opt/bitkub
-Environment=BITKUB_APP_ROOT=/opt/bitkub
-Environment=BITKUB_VENV_PATH=/opt/bitkub/.venv
-Environment=BITKUB_CONFIG_PATH=/opt/bitkub/config.json
-Environment=BITKUB_DB_PATH=/opt/bitkub/data/bitkub.db
-Environment=BITKUB_RUNTIME_STATE_PATH=/opt/bitkub/runtime_state.json
-EnvironmentFile=-/opt/bitkub/.env
-ExecStart=/opt/bitkub/scripts/start_engine.sh
+WorkingDirectory=/opt/bitkub/Bitkub_Bot
+Environment=BITKUB_APP_ROOT=/opt/bitkub/Bitkub_Bot
+Environment=BITKUB_VENV_PATH=/opt/bitkub/Bitkub_Bot/.venv
+EnvironmentFile=-/opt/bitkub/Bitkub_Bot/.env
+ExecStart=/opt/bitkub/Bitkub_Bot/scripts/start_engine.sh
 Restart=always
 RestartSec=5
-TimeoutStopSec=20
 
 [Install]
 WantedBy=multi-user.target
