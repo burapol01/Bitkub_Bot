@@ -5,8 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-STATE_FILE_PATH = Path(__file__).resolve().parent.parent / "runtime_state.json"
-STATE_PENDING_PATH = Path(__file__).resolve().parent.parent / "runtime_state.pending.json"
+from services.env_service import get_env_path
+
+DEFAULT_STATE_PATH = Path(__file__).resolve().parent.parent / "runtime_state.json"
+STATE_FILE_PATH = get_env_path("BITKUB_RUNTIME_STATE_PATH", DEFAULT_STATE_PATH)
+STATE_PENDING_PATH = STATE_FILE_PATH.with_name(f"{STATE_FILE_PATH.stem}.pending{STATE_FILE_PATH.suffix}")
 _STATE_WRITE_RETRIES = 10
 _STATE_WRITE_RETRY_SECONDS = 0.1
 
@@ -117,6 +120,8 @@ def save_runtime_state(
     *,
     manual_pause: bool,
 ):
+    STATE_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
     payload = {
         "version": 1,
         "manual_pause": manual_pause,

@@ -4,8 +4,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-DB_DIR = Path(__file__).resolve().parent.parent / "data"
-DB_PATH = DB_DIR / "bitkub.db"
+from services.env_service import get_env_path
+
+DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
+DB_PATH = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_DIR / "bitkub.db")
+DB_DIR = DB_PATH.parent
 
 
 def _connect() -> sqlite3.Connection:

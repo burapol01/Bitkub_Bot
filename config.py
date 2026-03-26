@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+from services.env_service import get_env_path
+
+CONFIG_PATH = get_env_path(
+    "BITKUB_CONFIG_PATH",
+    Path(__file__).resolve().parent / "config.json",
+)
 
 ROOT_REQUIRED_FIELDS = {
     "mode",

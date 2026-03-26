@@ -1,7 +1,11 @@
-import msvcrt
 import secrets
 import time
 from collections.abc import Callable
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Linux/VPS fallback
+    msvcrt = None
 
 from clients.bitkub_client import get_ticker
 from clients.bitkub_private_client import (
@@ -231,7 +235,7 @@ def wait_with_hotkeys(
     end_time = time.time() + seconds
 
     while time.time() < end_time:
-        if msvcrt.kbhit():
+        if msvcrt is not None and msvcrt.kbhit():
             key = msvcrt.getwch().lower()
             action = hotkey_actions.get(key)
             if action is not None:
@@ -246,6 +250,9 @@ def wait_with_hotkeys(
 def wait_for_any_key(prompt: str = "Press any key to return..."):
     print(divider("-"))
     print(prompt)
+    if msvcrt is None:
+        print("Interactive key input is unavailable on this platform.")
+        return
     while True:
         if msvcrt.kbhit():
             msvcrt.getwch()
@@ -258,6 +265,9 @@ def confirm_action(prompt: str, details: list[str] | None = None) -> bool:
     print(prompt)
     for line in details or []:
         print(f"- {line}")
+    if msvcrt is None:
+        print("Interactive confirmation is unavailable on this platform.")
+        return False
     print("Press Y to confirm or any other key to cancel.")
     while True:
         if msvcrt.kbhit():

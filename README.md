@@ -73,6 +73,39 @@ Important:
 - Saving config in UI writes only to `config.json`.
 - The console engine still needs its own reload/apply step.
 
+## VPS Deploy
+
+Recommended target:
+
+- `Ubuntu 24.04 LTS`
+- run both `main.py` and `ui/streamlit/app.py` on the same VPS
+- keep `config.json`, `runtime_state.json`, and `data/bitkub.db` on that VPS as the single source of truth
+
+Quick start:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+chmod +x scripts/start_engine.sh scripts/start_streamlit.sh
+./scripts/start_engine.sh
+./scripts/start_streamlit.sh
+```
+
+Cloud path overrides:
+
+- `BITKUB_CONFIG_PATH`
+- `BITKUB_DB_PATH`
+- `BITKUB_RUNTIME_STATE_PATH`
+- `BITKUB_APP_ROOT`
+- `BITKUB_VENV_PATH`
+
+Full steps and `systemd` templates:
+
+- [deploy/VPS_DEPLOY.md](/d:/Project/Bitkub/deploy/VPS_DEPLOY.md)
+- [bitkub-engine.service](/d:/Project/Bitkub/deploy/systemd/bitkub-engine.service)
+- [bitkub-streamlit.service](/d:/Project/Bitkub/deploy/systemd/bitkub-streamlit.service)
+
 ## Streamlit Pages
 
 ### Overview

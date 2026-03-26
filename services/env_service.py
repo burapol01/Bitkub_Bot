@@ -39,6 +39,13 @@ def get_env(name: str, default: str | None = None) -> str | None:
     return os.getenv(name, default)
 
 
+def get_env_path(name: str, default: Path) -> Path:
+    raw_value = get_env(name)
+    if not raw_value:
+        return default
+    return Path(raw_value).expanduser()
+
+
 def get_bitkub_api_credentials() -> tuple[str | None, str | None]:
     api_key = get_env("BITKUB_API_KEY")
     api_secret = get_env("BITKUB_API_SECRET")
