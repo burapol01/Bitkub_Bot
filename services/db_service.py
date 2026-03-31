@@ -9,13 +9,23 @@ from services.env_service import get_env_path
 DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_DIR / "bitkub.db")
 DB_DIR = DB_PATH.parent
+SQLITE_TIMEOUT_SECONDS = 30.0
+SQLITE_BUSY_TIMEOUT_MS = int(SQLITE_TIMEOUT_SECONDS * 1000)
+
+
+def configure_sqlite_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
+    conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
 
 
 def _connect() -> sqlite3.Connection:
     DB_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    conn = sqlite3.connect(DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
+    return configure_sqlite_connection(conn)
 
 
 def init_db():
@@ -265,6 +275,25 @@ def update_telegram_command_log(
             """,
             (str(status), response_text, int(command_log_id)),
         )
+
+
+def expire_stale_telegram_command_logs(*, created_before: str) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE telegram_command_log
+            SET status = 'expired',
+                response_text = CASE
+                    WHEN COALESCE(response_text, '') = '' THEN 'Telegram confirmation expired.'
+                    WHEN instr(response_text, 'Telegram confirmation expired.') > 0 THEN response_text
+                    ELSE response_text || char(10) || 'Telegram confirmation expired.'
+                END
+            WHERE status = 'pending_confirmation'
+              AND created_at <= ?
+            """,
+            (str(created_before),),
+        )
+        return int(cursor.rowcount or 0)
 
 
 def insert_signal_log(
@@ -813,8 +842,7 @@ def _extract_execution_fee_thb(response_payload: dict[str, Any]) -> float:
         return 0.0
 
 
-
-def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
+def _build_live_execution_trade_history() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -850,7 +878,7 @@ def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
         )
         lots = inventory.setdefault(symbol, [])
 
-        if side == 'buy':
+        if side == "buy":
             try:
                 amount_thb = float(request_payload.get("amt") or 0.0)
             except (TypeError, ValueError):
@@ -867,7 +895,7 @@ def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
                     )
             continue
 
-        if side != 'sell':
+        if side != "sell":
             continue
 
         try:
@@ -919,6 +947,13 @@ def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
             }
         )
 
+    return filled_orders, closed_trades
+
+
+
+def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
+    filled_orders, closed_trades = _build_live_execution_trade_history()
+
     today_rows = [row for row in closed_trades if str(row.get("updated_at") or row.get("created_at") or "").startswith(f"{today}")]
     today_filled_orders = [row for row in filled_orders if str(row.get("event_time") or "").startswith(f"{today}")]
     wins = sum(1 for row in today_rows if float(row.get("pnl_thb", 0.0)) > 0)
@@ -953,6 +988,122 @@ def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
         "recent_today": list(reversed(today_rows[-5:])),
         "symbol_summary_today": [symbol_summary_today[key] for key in sorted(symbol_summary_today)],
     }
+
+
+def fetch_daily_reporting_summary(
+    *,
+    days: int = 14,
+    symbol: str | None = None,
+) -> list[dict[str, Any]]:
+    window_days = max(1, int(days))
+    cutoff_day = (datetime.now() - timedelta(days=window_days - 1)).strftime("%Y-%m-%d")
+    trade_symbol_clause = "AND symbol = ?" if symbol else ""
+
+    with _connect() as conn:
+        paper_rows = conn.execute(
+            f"""
+            SELECT
+                substr(sell_time, 1, 10) AS report_date,
+                COUNT(*) AS paper_trades,
+                COALESCE(SUM(pnl_thb), 0) AS paper_pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS paper_fee_thb,
+                SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS paper_wins,
+                SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS paper_losses
+            FROM paper_trade_logs
+            WHERE sell_time >= ?
+            {trade_symbol_clause}
+            GROUP BY substr(sell_time, 1, 10)
+            ORDER BY report_date DESC
+            """,
+            tuple(
+                value
+                for value in (f"{cutoff_day} 00:00:00", symbol)
+                if value is not None
+            ),
+        ).fetchall()
+
+    filled_orders, closed_trades = _build_live_execution_trade_history()
+    daily_rows: dict[str, dict[str, Any]] = {}
+
+    def ensure_daily_row(report_date: str) -> dict[str, Any]:
+        return daily_rows.setdefault(
+            report_date,
+            {
+                "report_date": report_date,
+                "paper_trades": 0,
+                "paper_wins": 0,
+                "paper_losses": 0,
+                "paper_pnl_thb": 0.0,
+                "paper_fee_thb": 0.0,
+                "live_filled_orders": 0,
+                "live_closed_trades": 0,
+                "live_wins": 0,
+                "live_losses": 0,
+                "live_realized_pnl_thb": 0.0,
+                "live_fee_thb": 0.0,
+                "combined_closed_trades": 0,
+                "combined_wins": 0,
+                "combined_losses": 0,
+                "combined_realized_pnl_thb": 0.0,
+                "combined_fee_thb": 0.0,
+            },
+        )
+
+    for row in paper_rows:
+        report_date = str(row["report_date"] or "")
+        if not report_date:
+            continue
+        summary = ensure_daily_row(report_date)
+        summary["paper_trades"] = int(row["paper_trades"] or 0)
+        summary["paper_wins"] = int(row["paper_wins"] or 0)
+        summary["paper_losses"] = int(row["paper_losses"] or 0)
+        summary["paper_pnl_thb"] = float(row["paper_pnl_thb"] or 0.0)
+        summary["paper_fee_thb"] = float(row["paper_fee_thb"] or 0.0)
+
+    for row in filled_orders:
+        event_day = str(row.get("event_time") or "")[:10]
+        if len(event_day) != 10 or event_day < cutoff_day:
+            continue
+        if symbol is not None and str(row.get("symbol")) != symbol:
+            continue
+        summary = ensure_daily_row(event_day)
+        summary["live_filled_orders"] += 1
+        summary["live_fee_thb"] += float(row.get("fee_thb", 0.0) or 0.0)
+
+    for row in closed_trades:
+        report_date = str(row.get("updated_at") or row.get("created_at") or "")[:10]
+        if len(report_date) != 10 or report_date < cutoff_day:
+            continue
+        if symbol is not None and str(row.get("symbol")) != symbol:
+            continue
+        summary = ensure_daily_row(report_date)
+        pnl_thb = float(row.get("pnl_thb", 0.0) or 0.0)
+        summary["live_closed_trades"] += 1
+        summary["live_realized_pnl_thb"] += pnl_thb
+        if pnl_thb > 0:
+            summary["live_wins"] += 1
+        else:
+            summary["live_losses"] += 1
+
+    results: list[dict[str, Any]] = []
+    for report_date in sorted(daily_rows, reverse=True):
+        summary = daily_rows[report_date]
+        summary["combined_closed_trades"] = int(summary["paper_trades"]) + int(
+            summary["live_closed_trades"]
+        )
+        summary["combined_wins"] = int(summary["paper_wins"]) + int(summary["live_wins"])
+        summary["combined_losses"] = int(summary["paper_losses"]) + int(
+            summary["live_losses"]
+        )
+        summary["combined_realized_pnl_thb"] = float(summary["paper_pnl_thb"]) + float(
+            summary["live_realized_pnl_thb"]
+        )
+        summary["combined_fee_thb"] = float(summary["paper_fee_thb"]) + float(
+            summary["live_fee_thb"]
+        )
+        results.append(summary)
+
+    return results
 
 
 def fetch_dashboard_summary(

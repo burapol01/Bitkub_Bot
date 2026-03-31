@@ -491,3 +491,41 @@ TELEGRAM_ALLOWED_CHAT_IDS=123456789
 ```
 
 You can use `TELEGRAM_CHAT_ID` instead when only one chat should receive notifications. If `TELEGRAM_ALLOWED_CHAT_IDS` is omitted, command authorization falls back to the notify chat ids.
+
+### Find `TELEGRAM_CHAT_ID` with `telegram_test_token.py`
+
+Use the helper script below to confirm which chat id is currently resolved from your env file and to ask Telegram for the latest chats seen by the bot.
+
+1. Open Telegram and send a message such as `/start` to your bot first.
+2. Run the helper script from the project root.
+
+```bash
+python telegram_test_token.py --env-file env_dev
+```
+
+What the script does:
+
+- loads the selected env file, such as `env_dev`
+- reads `TELEGRAM_CHAT_ID`, `TELEGRAM_CHAT_IDS`, and `TELEGRAM_ALLOWED_CHAT_IDS` using the same fallback logic as the app
+- calls Telegram `getUpdates` so you can see which `chat_id` should be used
+
+Observed output from the current workspace run:
+
+```text
+Loaded env file: env_dev
+TELEGRAM_BOT_TOKEN present: True
+Notify chat ids: ['12345567890']
+Control chat ids: ['12345567890']
+
+Use TELEGRAM_CHAT_ID when there is only one destination chat.
+Use TELEGRAM_CHAT_IDS=id1,id2 when notifications should go to multiple chats.
+Private chat ids are usually positive numbers; group or supergroup ids are usually negative.
+
+Telegram API lookup failed: requests is not installed. Install project dependencies before using Telegram API lookup.
+```
+
+If you see the same `requests is not installed` message, install the project dependencies in the Python environment you are using and run the command again. If you only want to verify env parsing without calling Telegram, use:
+
+```bash
+python telegram_test_token.py --env-file env_dev --skip-api
+```

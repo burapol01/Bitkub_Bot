@@ -384,6 +384,7 @@ def evaluate_live_entry_candidates(
     live_holdings_rows: list[dict[str, Any]],
     open_execution_orders: list[dict[str, Any]],
     exchange_open_orders_by_symbol: dict[str, list[dict[str, Any]]],
+    unsupported_symbols: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if not entry_signal_rows:
         return {
@@ -413,6 +414,11 @@ def evaluate_live_entry_candidates(
         for value in config.get("live_auto_entry_allowed_biases", ["bullish", "mixed"])
         if str(value).strip()
     } or {"bullish", "mixed"}
+    unsupported_symbols = {
+        str(symbol): str(reason)
+        for symbol, reason in (unsupported_symbols or {}).items()
+        if str(symbol)
+    }
 
     ranking_result = build_coin_ranking(
         symbols=sorted(rules.keys()),
@@ -431,6 +437,8 @@ def evaluate_live_entry_candidates(
         rejection_reasons: list[str] = []
         if symbol not in rules:
             rejection_reasons.append("symbol is not present in config rules")
+        if symbol in unsupported_symbols:
+            rejection_reasons.append(unsupported_symbols[symbol])
         if symbol in open_execution_symbols:
             rejection_reasons.append("symbol already has an open execution order")
         if symbol in holding_symbols:

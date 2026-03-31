@@ -23,6 +23,18 @@ class BitkubAPIResponseError(BitkubPrivateClientError):
     pass
 
 
+def is_unsupported_symbol_error_message(error: str | None) -> bool:
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return False
+
+    return (
+        "bitkub api error=61" in normalized
+        or "endpoint not found for path /api/market/my-open-orders" in normalized
+        or "endpoint not found for path /api/v3/market/my-open-orders" in normalized
+    )
+
+
 def _json_body(payload: dict[str, Any] | None) -> str:
     if not payload:
         return ""

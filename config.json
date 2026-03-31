@@ -1,5 +1,5 @@
 {
-  "mode": "live",
+  "mode": "paper",
   "base_url": "https://api.bitkub.com",
   "fee_rate": 0.0025,
   "interval_seconds": 10,
@@ -29,18 +29,281 @@
     "rate": 30.0
   },
   "watchlist_symbols": [
+    "THB_0G",
+    "THB_1INCH",
+    "THB_2Z",
+    "THB_AAVE",
     "THB_ABT",
+    "THB_ACX",
+    "THB_ADA",
+    "THB_AERO",
+    "THB_AEVO",
+    "THB_AIXBT",
+    "THB_ALGO",
+    "THB_ALPHA",
+    "THB_ALT",
+    "THB_ANKR",
+    "THB_APE",
+    "THB_API3",
+    "THB_APT",
+    "THB_ARB",
+    "THB_ARKM",
+    "THB_ASP",
+    "THB_ASTER",
+    "THB_ATH",
+    "THB_ATOM",
+    "THB_AUSD",
+    "THB_AVAX",
+    "THB_AVNT",
+    "THB_AXL",
+    "THB_AXS",
+    "THB_B3",
+    "THB_BABY",
+    "THB_BAL",
+    "THB_BAND",
+    "THB_BARD",
+    "THB_BAT",
     "THB_BCH",
+    "THB_BICO",
+    "THB_BLAST",
+    "THB_BLUR",
+    "THB_BMT",
+    "THB_BNB",
+    "THB_BONK",
     "THB_BTC",
+    "THB_C",
+    "THB_C98",
+    "THB_CARV",
+    "THB_CATI",
+    "THB_CELO",
+    "THB_CELR",
+    "THB_CETUS",
+    "THB_CFX",
+    "THB_CHZ",
+    "THB_CLEAR",
     "THB_COMP",
+    "THB_COOKIE",
+    "THB_CORE",
+    "THB_CRV",
+    "THB_CVC",
+    "THB_CYBER",
+    "THB_DBR",
+    "THB_DMC",
+    "THB_DOGE",
+    "THB_DOLO",
+    "THB_DOT",
+    "THB_DYDX",
+    "THB_EDEN",
+    "THB_EIGEN",
+    "THB_EL",
+    "THB_ELIZAOS",
+    "THB_ENA",
+    "THB_ENJ",
+    "THB_ENS",
+    "THB_ENSO",
     "THB_EPIC",
+    "THB_ERA",
+    "THB_ES",
     "THB_ETH",
+    "THB_ETHFI",
     "THB_FET",
+    "THB_FF",
+    "THB_FIL",
+    "THB_FLOW",
+    "THB_FLUX",
+    "THB_FXS",
+    "THB_G",
+    "THB_GALA",
+    "THB_GLM",
+    "THB_GLMR",
+    "THB_GMX",
+    "THB_GNO",
+    "THB_GRASS",
+    "THB_GRT",
+    "THB_GT",
+    "THB_HAEDAL",
+    "THB_HBAR",
+    "THB_HEMI",
+    "THB_HFT",
+    "THB_HNT",
+    "THB_HOME",
+    "THB_HUMA",
+    "THB_HYPE",
+    "THB_HYPER",
+    "THB_ICP",
+    "THB_ID",
+    "THB_ILV",
+    "THB_IMX",
+    "THB_INJ",
+    "THB_IO",
+    "THB_IOST",
+    "THB_IOTX",
+    "THB_IQ",
+    "THB_JFIN",
+    "THB_JOE",
+    "THB_JST",
+    "THB_JTO",
+    "THB_KAIA",
+    "THB_KAITO",
+    "THB_KAVA",
+    "THB_KERNEL",
+    "THB_KITE",
+    "THB_KMNO",
+    "THB_KNC",
+    "THB_KSM",
     "THB_KUB",
     "THB_L3",
+    "THB_LA",
+    "THB_LAYER",
+    "THB_LDO",
+    "THB_LINEA",
     "THB_LINK",
+    "THB_LIT",
+    "THB_LM",
+    "THB_LPT",
+    "THB_LQTY",
+    "THB_LRC",
     "THB_LUNA",
-    "THB_TAO"
+    "THB_LYX",
+    "THB_MANA",
+    "THB_MANTA",
+    "THB_MAVIA",
+    "THB_MBX",
+    "THB_ME",
+    "THB_MEME",
+    "THB_MEW",
+    "THB_MIRA",
+    "THB_MITO",
+    "THB_MNT",
+    "THB_MON",
+    "THB_MORPHO",
+    "THB_MOVR",
+    "THB_MPLX",
+    "THB_NEAR",
+    "THB_NEIRO",
+    "THB_NEWT",
+    "THB_NOM",
+    "THB_NXPC",
+    "THB_ONDO",
+    "THB_OP",
+    "THB_OPEN",
+    "THB_ORCA",
+    "THB_ORDER",
+    "THB_OSMO",
+    "THB_PAXG",
+    "THB_PEAQ",
+    "THB_PENDLE",
+    "THB_PENGU",
+    "THB_PERP",
+    "THB_PLN",
+    "THB_PLUME",
+    "THB_PNUT",
+    "THB_POL",
+    "THB_POPCAT",
+    "THB_POW",
+    "THB_PRCL",
+    "THB_PROMPT",
+    "THB_PROVE",
+    "THB_PUFFR",
+    "THB_PYTH",
+    "THB_QI",
+    "THB_QNT",
+    "THB_RAY",
+    "THB_RDNT",
+    "THB_REALX",
+    "THB_RECALL",
+    "THB_RED",
+    "THB_RESOLV",
+    "THB_REZ",
+    "THB_RLUSD",
+    "THB_RNDR",
+    "THB_RON",
+    "THB_RSR",
+    "THB_S",
+    "THB_SAFE",
+    "THB_SAHARA",
+    "THB_SAND",
+    "THB_SAPIEN",
+    "THB_SCA",
+    "THB_SCR",
+    "THB_SCRT",
+    "THB_SEI",
+    "THB_SFP",
+    "THB_SHELL",
+    "THB_SHIB",
+    "THB_SIX",
+    "THB_SKL",
+    "THB_SKY",
+    "THB_SNT",
+    "THB_SNX",
+    "THB_SOL",
+    "THB_SOMI",
+    "THB_SONIC",
+    "THB_SOON",
+    "THB_SOPH",
+    "THB_SPEC",
+    "THB_SPK",
+    "THB_SPX",
+    "THB_SQD",
+    "THB_SSV",
+    "THB_STG",
+    "THB_STO",
+    "THB_SUI",
+    "THB_SUMX",
+    "THB_SUN",
+    "THB_SUSHI",
+    "THB_SWELL",
+    "THB_SXT",
+    "THB_SYRUP",
+    "THB_TAIKO",
+    "THB_TAO",
+    "THB_TIA",
+    "THB_TNSR",
+    "THB_TON",
+    "THB_TOSHI",
+    "THB_TOWNS",
+    "THB_TRAC",
+    "THB_TRB",
+    "THB_TREE",
+    "THB_TRUMP",
+    "THB_TRX",
+    "THB_TURTLE",
+    "THB_TWT",
+    "THB_UMA",
+    "THB_UNI",
+    "THB_USAT",
+    "THB_USDC",
+    "THB_USDS",
+    "THB_USDT",
+    "THB_VELO",
+    "THB_VIC",
+    "THB_VIRTUAL",
+    "THB_W",
+    "THB_WCT",
+    "THB_WEMIX",
+    "THB_WIF",
+    "THB_WIN",
+    "THB_WLD",
+    "THB_WLFI",
+    "THB_WOO",
+    "THB_XAN",
+    "THB_XAUT",
+    "THB_XDC",
+    "THB_XLM",
+    "THB_XMN",
+    "THB_XPL",
+    "THB_XRP",
+    "THB_XTZ",
+    "THB_YFI",
+    "THB_ZENT",
+    "THB_ZETA",
+    "THB_ZIL",
+    "THB_ZK",
+    "THB_ZKC",
+    "THB_ZORA",
+    "THB_ZRC",
+    "THB_ZRO",
+    "THB_ZRX"
   ],
   "telegram_enabled": true,
   "telegram_control_enabled": true,
@@ -143,6 +406,2118 @@
     "THB_EPIC": {
       "buy_below": 8.96495,
       "sell_above": 9.14515,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_STO": {
+      "buy_below": 4.56705,
+      "sell_above": 4.658849999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RLUSD": {
+      "buy_below": 33.0141,
+      "sell_above": 33.677699999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_USAT": {
+      "buy_below": 33.0539,
+      "sell_above": 33.71829999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_USDC": {
+      "buy_below": 32.775299999999994,
+      "sell_above": 33.434099999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CATI": {
+      "buy_below": 1.7313,
+      "sell_above": 1.7660999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_USDT": {
+      "buy_below": 32.74545,
+      "sell_above": 33.40364999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_STG": {
+      "buy_below": 8.60675,
+      "sell_above": 8.77975,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CHZ": {
+      "buy_below": 1.393,
+      "sell_above": 1.4209999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KAITO": {
+      "buy_below": 13.20365,
+      "sell_above": 13.469049999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_JST": {
+      "buy_below": 2.0106761,
+      "sell_above": 2.0510916999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ACX": {
+      "buy_below": 1.3731,
+      "sell_above": 1.4006999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DYDX": {
+      "buy_below": 3.19395,
+      "sell_above": 3.2581499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TRX": {
+      "buy_below": 10.41765,
+      "sell_above": 10.627049999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LDO": {
+      "buy_below": 10.387799999999999,
+      "sell_above": 10.596599999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AUSD": {
+      "buy_below": 32.6758,
+      "sell_above": 33.3326,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_FLUX": {
+      "buy_below": 1.76115,
+      "sell_above": 1.7965499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_FF": {
+      "buy_below": 2.27855,
+      "sell_above": 2.32435,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WLFI": {
+      "buy_below": 3.219422,
+      "sell_above": 3.2841339999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SUN": {
+      "buy_below": 0.5867117,
+      "sell_above": 0.5985048999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PAXG": {
+      "buy_below": 150776.4892,
+      "sell_above": 153807.17239999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AERO": {
+      "buy_below": 10.27835,
+      "sell_above": 10.48495,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XAUT": {
+      "buy_below": 148712.74975,
+      "sell_above": 151701.95074999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BONK": {
+      "buy_below": 0.0001863635,
+      "sell_above": 0.00019010949999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SKL": {
+      "buy_below": 0.213726,
+      "sell_above": 0.21802199999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SHIB": {
+      "buy_below": 0.00019336830000000002,
+      "sell_above": 0.0001972551,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ALGO": {
+      "buy_below": 2.81585,
+      "sell_above": 2.8724499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SUMX": {
+      "buy_below": 0.32835000000000003,
+      "sell_above": 0.33494999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SKY": {
+      "buy_below": 2.446705,
+      "sell_above": 2.495885,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WEMIX": {
+      "buy_below": 8.2806885,
+      "sell_above": 8.447134499999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CELO": {
+      "buy_below": 2.57705,
+      "sell_above": 2.6288499999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_POW": {
+      "buy_below": 1.92035,
+      "sell_above": 1.9589499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XLM": {
+      "buy_below": 5.3929,
+      "sell_above": 5.5013,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LYX": {
+      "buy_below": 9.0346,
+      "sell_above": 9.216199999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ES": {
+      "buy_below": 4.746149999999999,
+      "sell_above": 4.841549999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TON": {
+      "buy_below": 40.3572,
+      "sell_above": 41.1684,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LM": {
+      "buy_below": 0.026466999999999997,
+      "sell_above": 0.026998999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MOVR": {
+      "buy_below": 36.685649999999995,
+      "sell_above": 37.423049999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MBX": {
+      "buy_below": 1.2338,
+      "sell_above": 1.2586,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_APT": {
+      "buy_below": 29.501749999999998,
+      "sell_above": 30.094749999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_UNI": {
+      "buy_below": 113.71855000000001,
+      "sell_above": 116.00434999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_G": {
+      "buy_below": 0.13333,
+      "sell_above": 0.13601,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AXS": {
+      "buy_below": 36.02895,
+      "sell_above": 36.75315,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ONDO": {
+      "buy_below": 8.44755,
+      "sell_above": 8.61735,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RSR": {
+      "buy_below": 0.055321999999999996,
+      "sell_above": 0.05643399999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZRC": {
+      "buy_below": 0.051242499999999996,
+      "sell_above": 0.05227249999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MON": {
+      "buy_below": 0.736698,
+      "sell_above": 0.7515059999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KAVA": {
+      "buy_below": 1.78105,
+      "sell_above": 1.8168499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_IO": {
+      "buy_below": 3.43275,
+      "sell_above": 3.50175,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_YFI": {
+      "buy_below": 82477.88825,
+      "sell_above": 84135.73525,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RNDR": {
+      "buy_below": 54.277249999999995,
+      "sell_above": 55.36824999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RON": {
+      "buy_below": 2.9053999999999998,
+      "sell_above": 2.9637999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_QNT": {
+      "buy_below": 2253.30685,
+      "sell_above": 2298.5994499999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TREE": {
+      "buy_below": 2.0397499999999997,
+      "sell_above": 2.0807499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ASTER": {
+      "buy_below": 21.770599999999998,
+      "sell_above": 22.208199999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_API3": {
+      "buy_below": 8.726149999999999,
+      "sell_above": 8.901549999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WIF": {
+      "buy_below": 5.674485000000001,
+      "sell_above": 5.788545,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SPEC": {
+      "buy_below": 3.0845000000000002,
+      "sell_above": 3.1464999999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SUSHI": {
+      "buy_below": 6.3481,
+      "sell_above": 6.475699999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ARB": {
+      "buy_below": 3.0148499999999996,
+      "sell_above": 3.0754499999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DOGE": {
+      "buy_below": 2.9547519999999996,
+      "sell_above": 3.0141439999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_USDS": {
+      "buy_below": 31.75045,
+      "sell_above": 32.38865,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SPK": {
+      "buy_below": 0.6766995,
+      "sell_above": 0.6903015,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WIN": {
+      "buy_below": 0.00059899,
+      "sell_above": 0.0006110299999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ATH": {
+      "buy_below": 0.2170095,
+      "sell_above": 0.22137149999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BAT": {
+      "buy_below": 3.1641000000000004,
+      "sell_above": 3.2277,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_C": {
+      "buy_below": 2.25865,
+      "sell_above": 2.3040499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZENT": {
+      "buy_below": 0.10347999999999999,
+      "sell_above": 0.10555999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AVAX": {
+      "buy_below": 286.19185,
+      "sell_above": 291.94444999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SCRT": {
+      "buy_below": 2.3979500000000002,
+      "sell_above": 2.44615,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BLUR": {
+      "buy_below": 0.5671499999999999,
+      "sell_above": 0.5785499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DOLO": {
+      "buy_below": 0.995,
+      "sell_above": 1.015,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_1INCH": {
+      "buy_below": 2.95515,
+      "sell_above": 3.01455,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KNC": {
+      "buy_below": 4.6566,
+      "sell_above": 4.7501999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HFT": {
+      "buy_below": 0.4179,
+      "sell_above": 0.42629999999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SIX": {
+      "buy_below": 0.274222,
+      "sell_above": 0.279734,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TAIKO": {
+      "buy_below": 4.06955,
+      "sell_above": 4.15135,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_OPEN": {
+      "buy_below": 5.0347,
+      "sell_above": 5.1358999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BNB": {
+      "buy_below": 19766.16255,
+      "sell_above": 20163.47235,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LIT": {
+      "buy_below": 26.034174999999998,
+      "sell_above": 26.557474999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_JFIN": {
+      "buy_below": 1.90045,
+      "sell_above": 1.9386499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_NOM": {
+      "buy_below": 0.106266,
+      "sell_above": 0.108402,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CETUS": {
+      "buy_below": 0.6666500000000001,
+      "sell_above": 0.6800499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MEME": {
+      "buy_below": 0.016921965,
+      "sell_above": 0.017262105,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XDC": {
+      "buy_below": 0.9974875,
+      "sell_above": 1.0175374999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_REZ": {
+      "buy_below": 0.1091515,
+      "sell_above": 0.1113455,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_UMA": {
+      "buy_below": 13.36285,
+      "sell_above": 13.63145,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_OP": {
+      "buy_below": 3.5223,
+      "sell_above": 3.5930999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SFP": {
+      "buy_below": 9.14405,
+      "sell_above": 9.327849999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SUI": {
+      "buy_below": 28.098799999999997,
+      "sell_above": 28.663599999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GALA": {
+      "buy_below": 0.094724,
+      "sell_above": 0.09662799999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_POL": {
+      "buy_below": 2.95515,
+      "sell_above": 3.01455,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ADA": {
+      "buy_below": 7.9003000000000005,
+      "sell_above": 8.059099999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_IOST": {
+      "buy_below": 0.0337305,
+      "sell_above": 0.034408499999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SAPIEN": {
+      "buy_below": 2.17905,
+      "sell_above": 2.2228499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XTZ": {
+      "buy_below": 11.39275,
+      "sell_above": 11.621749999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_NEWT": {
+      "buy_below": 2.2685999999999997,
+      "sell_above": 2.3141999999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_0G": {
+      "buy_below": 15.800600000000001,
+      "sell_above": 16.118199999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZRX": {
+      "buy_below": 3.2834999999999996,
+      "sell_above": 3.3494999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MANA": {
+      "buy_below": 2.6666000000000003,
+      "sell_above": 2.7201999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KERNEL": {
+      "buy_below": 2.985,
+      "sell_above": 3.045,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ANKR": {
+      "buy_below": 0.1616875,
+      "sell_above": 0.1649375,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SOL": {
+      "buy_below": 2643.0782,
+      "sell_above": 2696.2054,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_EDEN": {
+      "buy_below": 0.96515,
+      "sell_above": 0.9845499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CRV": {
+      "buy_below": 6.9053,
+      "sell_above": 7.044099999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KSM": {
+      "buy_below": 135.121,
+      "sell_above": 137.837,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BAND": {
+      "buy_below": 6.616750000000001,
+      "sell_above": 6.74975,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XRP": {
+      "buy_below": 42.99395,
+      "sell_above": 43.858149999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SHELL": {
+      "buy_below": 0.9154,
+      "sell_above": 0.9338,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DMC": {
+      "buy_below": 0.0253725,
+      "sell_above": 0.025882499999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TRUMP": {
+      "buy_below": 97.031405,
+      "sell_above": 98.981785,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZK": {
+      "buy_below": 0.5574985,
+      "sell_above": 0.5687045,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SAND": {
+      "buy_below": 2.3979500000000002,
+      "sell_above": 2.44615,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SQD": {
+      "buy_below": 1.02485,
+      "sell_above": 1.04545,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_REALX": {
+      "buy_below": 54.51605,
+      "sell_above": 55.61185,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WOO": {
+      "buy_below": 0.5572,
+      "sell_above": 0.5684,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_C98": {
+      "buy_below": 0.82585,
+      "sell_above": 0.8424499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_POPCAT": {
+      "buy_below": 1.5258325000000001,
+      "sell_above": 1.5565025,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SWELL": {
+      "buy_below": 0.036815,
+      "sell_above": 0.03755499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ORCA": {
+      "buy_below": 27.90975,
+      "sell_above": 28.47075,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GRT": {
+      "buy_below": 0.7761,
+      "sell_above": 0.7917,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_QI": {
+      "buy_below": 0.0452725,
+      "sell_above": 0.046182499999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TOWNS": {
+      "buy_below": 0.107659,
+      "sell_above": 0.10982299999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LQTY": {
+      "buy_below": 8.895299999999999,
+      "sell_above": 9.074099999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GMX": {
+      "buy_below": 207.59679999999997,
+      "sell_above": 211.76959999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LINEA": {
+      "buy_below": 0.096714,
+      "sell_above": 0.09865799999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AIXBT": {
+      "buy_below": 0.7407775000000001,
+      "sell_above": 0.7556674999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_NEAR": {
+      "buy_below": 38.27765,
+      "sell_above": 39.04704999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_S": {
+      "buy_below": 1.3134000000000001,
+      "sell_above": 1.3397999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CFX": {
+      "buy_below": 1.72135,
+      "sell_above": 1.75595,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PNUT": {
+      "buy_below": 1.256486,
+      "sell_above": 1.2817419999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZIL": {
+      "buy_below": 0.1202955,
+      "sell_above": 0.12271349999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_VELO": {
+      "buy_below": 0.4577,
+      "sell_above": 0.4669,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GLMR": {
+      "buy_below": 0.32835000000000003,
+      "sell_above": 0.33494999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LPT": {
+      "buy_below": 66.85405,
+      "sell_above": 68.19784999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AAVE": {
+      "buy_below": 3203.9,
+      "sell_above": 3268.2999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GT": {
+      "buy_below": 209.4475,
+      "sell_above": 213.65749999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HBAR": {
+      "buy_below": 2.77605,
+      "sell_above": 2.8318499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_IOTX": {
+      "buy_below": 0.3979005,
+      "sell_above": 0.40589849999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LA": {
+      "buy_below": 5.92025,
+      "sell_above": 6.03925,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_NEIRO": {
+      "buy_below": 0.0018125915,
+      "sell_above": 0.0018490255,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ARKM": {
+      "buy_below": 3.17405,
+      "sell_above": 3.2378499999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AEVO": {
+      "buy_below": 0.7163999999999999,
+      "sell_above": 0.7307999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HYPE": {
+      "buy_below": 1179.075,
+      "sell_above": 1202.7749999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HOME": {
+      "buy_below": 0.64675,
+      "sell_above": 0.65975,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MIRA": {
+      "buy_below": 2.388,
+      "sell_above": 2.4359999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ENA": {
+      "buy_below": 2.95515,
+      "sell_above": 3.01455,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TOSHI": {
+      "buy_below": 0.005916469,
+      "sell_above": 0.006035392999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ENSO": {
+      "buy_below": 32.835,
+      "sell_above": 33.495,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ENS": {
+      "buy_below": 180.26415,
+      "sell_above": 183.88754999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SNX": {
+      "buy_below": 8.905249999999999,
+      "sell_above": 9.084249999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MITO": {
+      "buy_below": 1.14425,
+      "sell_above": 1.16725,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MPLX": {
+      "buy_below": 0.9883335,
+      "sell_above": 1.0081995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CYBER": {
+      "buy_below": 16.12895,
+      "sell_above": 16.45315,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_JOE": {
+      "buy_below": 1.2139,
+      "sell_above": 1.2383,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PLUME": {
+      "buy_below": 0.333126,
+      "sell_above": 0.33982199999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SNT": {
+      "buy_below": 0.306858,
+      "sell_above": 0.31302599999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BABY": {
+      "buy_below": 0.4452625,
+      "sell_above": 0.45421249999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MAVIA": {
+      "buy_below": 0.90545,
+      "sell_above": 0.92365,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GLM": {
+      "buy_below": 4.129250000000001,
+      "sell_above": 4.21225,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XPL": {
+      "buy_below": 2.87555,
+      "sell_above": 2.93335,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SPX": {
+      "buy_below": 8.655107000000001,
+      "sell_above": 8.829079,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TURTLE": {
+      "buy_below": 1.34325,
+      "sell_above": 1.37025,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZKC": {
+      "buy_below": 2.25865,
+      "sell_above": 2.3040499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ORDER": {
+      "buy_below": 1.5621500000000001,
+      "sell_above": 1.5935499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PLN": {
+      "buy_below": 0.2032785,
+      "sell_above": 0.20736449999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CLEAR": {
+      "buy_below": 0.0402975,
+      "sell_above": 0.0411075,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SXT": {
+      "buy_below": 0.4874505,
+      "sell_above": 0.4972484999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KAIA": {
+      "buy_below": 1.46265,
+      "sell_above": 1.4920499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BMT": {
+      "buy_below": 0.44775,
+      "sell_above": 0.45675,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WLD": {
+      "buy_below": 8.92515,
+      "sell_above": 9.10455,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_COMP": {
+      "buy_below": 569.8763,
+      "sell_above": 581.3311,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ASP": {
+      "buy_below": 0.8358,
+      "sell_above": 0.8525999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ETHFI": {
+      "buy_below": 15.17375,
+      "sell_above": 15.478749999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CVC": {
+      "buy_below": 0.9452499999999999,
+      "sell_above": 0.9642499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BLAST": {
+      "buy_below": 0.014427500000000001,
+      "sell_above": 0.0147175,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_INJ": {
+      "buy_below": 92.70415,
+      "sell_above": 94.56755,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SAHARA": {
+      "buy_below": 0.7477425,
+      "sell_above": 0.7627724999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ID": {
+      "buy_below": 1.1342999999999999,
+      "sell_above": 1.1570999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ATOM": {
+      "buy_below": 54.725,
+      "sell_above": 55.824999999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZORA": {
+      "buy_below": 0.46625700000000003,
+      "sell_above": 0.47562899999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_APE": {
+      "buy_below": 2.7064000000000004,
+      "sell_above": 2.7608,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TNSR": {
+      "buy_below": 1.194,
+      "sell_above": 1.2179999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HYPER": {
+      "buy_below": 2.7462,
+      "sell_above": 2.8013999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_VIC": {
+      "buy_below": 1.28355,
+      "sell_above": 1.30935,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HUMA": {
+      "buy_below": 0.480386,
+      "sell_above": 0.490042,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DOT": {
+      "buy_below": 40.317400000000006,
+      "sell_above": 41.1278,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ENJ": {
+      "buy_below": 0.6567000000000001,
+      "sell_above": 0.6698999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SAFE": {
+      "buy_below": 3.0944499999999997,
+      "sell_above": 3.1566499999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HAEDAL": {
+      "buy_below": 0.86565,
+      "sell_above": 0.8830499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MEW": {
+      "buy_below": 0.017454289999999997,
+      "sell_above": 0.017805129999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MORPHO": {
+      "buy_below": 49.2525,
+      "sell_above": 50.24249999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ME": {
+      "buy_below": 3.17405,
+      "sell_above": 3.2378499999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_VIRTUAL": {
+      "buy_below": 20.895,
+      "sell_above": 21.314999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PRCL": {
+      "buy_below": 0.455312,
+      "sell_above": 0.464464,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PENGU": {
+      "buy_below": 0.20538989,
+      "sell_above": 0.20951832999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SOON": {
+      "buy_below": 3.6417,
+      "sell_above": 3.7148999999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_IMX": {
+      "buy_below": 4.54715,
+      "sell_above": 4.6385499999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PUFFR": {
+      "buy_below": 0.8159,
+      "sell_above": 0.8322999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RAY": {
+      "buy_below": 18.2085,
+      "sell_above": 18.5745,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_DBR": {
+      "buy_below": 0.472426,
+      "sell_above": 0.48192199999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_FLOW": {
+      "buy_below": 0.9452499999999999,
+      "sell_above": 0.9642499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CARV": {
+      "buy_below": 1.7313,
+      "sell_above": 1.7660999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TIA": {
+      "buy_below": 9.54205,
+      "sell_above": 9.733849999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CELR": {
+      "buy_below": 0.0806945,
+      "sell_above": 0.0823165,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ICP": {
+      "buy_below": 71.2221,
+      "sell_above": 72.65369999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AXL": {
+      "buy_below": 1.50245,
+      "sell_above": 1.5326499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_2Z": {
+      "buy_below": 2.4476999999999998,
+      "sell_above": 2.4968999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SYRUP": {
+      "buy_below": 6.6665,
+      "sell_above": 6.8004999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZETA": {
+      "buy_below": 1.52235,
+      "sell_above": 1.5529499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SCR": {
+      "buy_below": 1.32335,
+      "sell_above": 1.34995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_EIGEN": {
+      "buy_below": 5.2934,
+      "sell_above": 5.3998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ALT": {
+      "buy_below": 0.2012885,
+      "sell_above": 0.20533449999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MNT": {
+      "buy_below": 22.0293,
+      "sell_above": 22.472099999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RESOLV": {
+      "buy_below": 1.3731,
+      "sell_above": 1.4006999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PERP": {
+      "buy_below": 0.9352999999999999,
+      "sell_above": 0.9540999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_IQ": {
+      "buy_below": 0.033431999999999996,
+      "sell_above": 0.034103999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BICO": {
+      "buy_below": 0.6567000000000001,
+      "sell_above": 0.6698999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_WCT": {
+      "buy_below": 1.7512,
+      "sell_above": 1.7863999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HEMI": {
+      "buy_below": 0.17909999999999998,
+      "sell_above": 0.18269999999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PYTH": {
+      "buy_below": 1.26365,
+      "sell_above": 1.2890499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KMNO": {
+      "buy_below": 0.5736175,
+      "sell_above": 0.5851474999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_KITE": {
+      "buy_below": 5.0704205,
+      "sell_above": 5.1723384999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LAYER": {
+      "buy_below": 2.4278,
+      "sell_above": 2.4766,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_W": {
+      "buy_below": 0.47759999999999997,
+      "sell_above": 0.4871999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TRAC": {
+      "buy_below": 9.2137,
+      "sell_above": 9.3989,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BAL": {
+      "buy_below": 4.4974,
+      "sell_above": 4.587799999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PEAQ": {
+      "buy_below": 0.45192899999999997,
+      "sell_above": 0.46101299999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ERA": {
+      "buy_below": 3.4825,
+      "sell_above": 3.5524999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SOPH": {
+      "buy_below": 0.2900425,
+      "sell_above": 0.2958724999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ELIZAOS": {
+      "buy_below": 0.023646175000000002,
+      "sell_above": 0.024121475,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_EL": {
+      "buy_below": 0.052536,
+      "sell_above": 0.053591999999999994,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RED": {
+      "buy_below": 3.11435,
+      "sell_above": 3.1769499999999997,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SONIC": {
+      "buy_below": 1.2238499999999999,
+      "sell_above": 1.2484499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ILV": {
+      "buy_below": 110.76339999999999,
+      "sell_above": 112.98979999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RECALL": {
+      "buy_below": 1.2736,
+      "sell_above": 1.2992,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PROMPT": {
+      "buy_below": 0.92535,
+      "sell_above": 0.94395,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_OSMO": {
+      "buy_below": 0.80595,
+      "sell_above": 0.8221499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GNO": {
+      "buy_below": 3880.5,
+      "sell_above": 3958.4999999999995,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_COOKIE": {
+      "buy_below": 0.48755,
+      "sell_above": 0.49734999999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_MANTA": {
+      "buy_below": 1.84075,
+      "sell_above": 1.8777499999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_LRC": {
+      "buy_below": 0.6368,
+      "sell_above": 0.6496,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_AVNT": {
+      "buy_below": 4.18895,
+      "sell_above": 4.273149999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_FXS": {
+      "buy_below": 14.07925,
+      "sell_above": 14.36225,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XMN": {
+      "buy_below": 0.268252,
+      "sell_above": 0.273644,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_HNT": {
+      "buy_below": 34.87475,
+      "sell_above": 35.57574999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ZRO": {
+      "buy_below": 59.69005,
+      "sell_above": 60.889849999999996,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TWT": {
+      "buy_below": 11.402700000000001,
+      "sell_above": 11.6319,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SSV": {
+      "buy_below": 72.1972,
+      "sell_above": 73.6484,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_NXPC": {
+      "buy_below": 8.895299999999999,
+      "sell_above": 9.074099999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PENDLE": {
+      "buy_below": 36.815,
+      "sell_above": 37.555,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_XAN": {
+      "buy_below": 0.259297,
+      "sell_above": 0.264509,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_GRASS": {
+      "buy_below": 9.14405,
+      "sell_above": 9.327849999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SEI": {
+      "buy_below": 1.6915,
+      "sell_above": 1.7254999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_B3": {
+      "buy_below": 0.010348,
+      "sell_above": 0.010555999999999998,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_JTO": {
+      "buy_below": 8.5371,
+      "sell_above": 8.708699999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_RDNT": {
+      "buy_below": 0.130146,
+      "sell_above": 0.132762,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SCA": {
+      "buy_below": 0.60695,
+      "sell_above": 0.61915,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_SOMI": {
+      "buy_below": 4.776,
+      "sell_above": 4.871999999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_FIL": {
+      "buy_below": 26.148600000000002,
+      "sell_above": 26.6742,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_TRB": {
+      "buy_below": 482.18695,
+      "sell_above": 491.87915,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_PROVE": {
+      "buy_below": 6.029699999999999,
+      "sell_above": 6.150899999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_ALPHA": {
+      "buy_below": 0.0265665,
+      "sell_above": 0.0271005,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_BARD": {
+      "buy_below": 11.0445,
+      "sell_above": 11.266499999999999,
+      "budget_thb": 100.0,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "max_trades_per_day": 1
+    },
+    "THB_CORE": {
+      "buy_below": 0.90545,
+      "sell_above": 0.92365,
       "budget_thb": 100.0,
       "stop_loss_percent": 1.2,
       "take_profit_percent": 2.0,

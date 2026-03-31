@@ -10,6 +10,8 @@ from typing import Any
 from clients.bitkub_client import build_history_window, get_tradingview_history
 from services.db_service import (
     DB_PATH,
+    SQLITE_TIMEOUT_SECONDS,
+    configure_sqlite_connection,
     fetch_market_candle_coverage,
     fetch_market_candles,
     upsert_market_candles,
@@ -33,9 +35,8 @@ class ReplayPosition:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    conn = sqlite3.connect(DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
+    return configure_sqlite_connection(conn)
 
 
 def _parse_time(value: str) -> datetime:

@@ -1,5 +1,6 @@
 import secrets
 import time
+from datetime import timedelta
 from collections.abc import Callable
 
 try:
@@ -12,6 +13,7 @@ from clients.bitkub_private_client import (
     BitkubMissingCredentialsError,
     BitkubPrivateClient,
     BitkubPrivateClientError,
+    is_unsupported_symbol_error_message,
 )
 from config import CONFIG_PATH, reload_config, save_config, summarize_config_changes
 from core.strategy import get_zone, zone_changed
@@ -22,6 +24,7 @@ from services.account_service import (
     fetch_account_snapshot,
     open_orders_error_map,
     summarize_account_capabilities,
+    unsupported_open_orders_symbol_map,
 )
 from services.db_service import (
     DB_PATH,
@@ -33,6 +36,7 @@ from services.db_service import (
     fetch_reporting_summary,
     fetch_recent_telegram_command_log,
     fetch_runtime_event_log,
+    expire_stale_telegram_command_logs,
     init_db,
     insert_account_snapshot,
     insert_execution_order,
@@ -302,6 +306,40 @@ def main():
     private_api_status = "not configured"
     private_api_capabilities: list[str] | None = None
     selected_execution_order_id: int | None = None
+    telegram_confirm_ttl_seconds = 120
+    telegram_poll_error_cooldown_seconds = 180
+    unsupported_live_entry_symbols: dict[str, str] = {}
+    last_telegram_poll_error_signature: tuple[str, ...] | None = None
+    last_telegram_poll_error_logged_at = 0.0
+
+    def prune_unsupported_live_entry_symbols():
+        active_symbols = {str(symbol) for symbol in config.get("rules", {})}
+        for symbol in list(unsupported_live_entry_symbols):
+            if symbol not in active_symbols:
+                unsupported_live_entry_symbols.pop(symbol, None)
+
+    def track_unsupported_live_entry_symbols_from_snapshot(snapshot: dict | None):
+        prune_unsupported_live_entry_symbols()
+        for symbol in unsupported_open_orders_symbol_map(snapshot).keys():
+            normalized_symbol = str(symbol).strip().upper()
+            if not normalized_symbol:
+                continue
+            unsupported_live_entry_symbols.setdefault(
+                normalized_symbol,
+                "symbol is blocked because Bitkub rejected the order endpoint for it",
+            )
+
+    def remember_unsupported_live_entry_symbol(*, symbol: str, error_message: str) -> bool:
+        normalized_symbol = str(symbol).strip().upper()
+        if not normalized_symbol:
+            return False
+
+        prune_unsupported_live_entry_symbols()
+        was_new = normalized_symbol not in unsupported_live_entry_symbols
+        unsupported_live_entry_symbols[normalized_symbol] = (
+            "symbol is blocked because Bitkub rejected the order endpoint for it"
+        )
+        return was_new
 
     private_client: BitkubPrivateClient | None = None
     try:
@@ -346,6 +384,7 @@ def main():
                 capabilities=private_api_capabilities,
                 snapshot=account_snapshot,
             )
+            track_unsupported_live_entry_symbols_from_snapshot(account_snapshot)
         else:
             private_api_status = "not configured"
             private_api_capabilities = ["wallet=OFF", "balances=OFF", "open_orders=OFF"]
@@ -713,6 +752,11 @@ def main():
 
     def cleanup_pending_telegram_confirms():
         now_ts = time.time()
+        expire_stale_telegram_command_logs(
+            created_before=(
+                now_dt() - timedelta(seconds=telegram_confirm_ttl_seconds)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        )
         expired_chat_ids = [
             chat_id
             for chat_id, pending in pending_telegram_confirms.items()
@@ -728,14 +772,14 @@ def main():
             "code": code,
             "action": action,
             "payload": payload,
-            "expires_at": time.time() + 120,
+            "expires_at": time.time() + telegram_confirm_ttl_seconds,
         }
         return [
             f"Confirmation required for {action}.",
             *summary_lines,
             "Confirm command:",
             f"/confirm {code}",
-            "Copy the line above and send it within 120 seconds.",
+            f"Copy the line above and send it within {telegram_confirm_ttl_seconds} seconds.",
         ]
 
     def telegram_rule_seed(symbol: str) -> dict:
@@ -774,6 +818,7 @@ def main():
             return False, "Config update failed", failed_lines
 
         config = saved_config
+        prune_unsupported_live_entry_symbols()
         filter_was_reset = False
         if report_filter_symbol and report_filter_symbol not in saved_config["rules"]:
             report_filter_symbol = None
@@ -1156,17 +1201,36 @@ def main():
         ]
 
     def process_telegram_commands():
+        nonlocal last_telegram_poll_error_logged_at, last_telegram_poll_error_signature
         cleanup_pending_telegram_confirms()
         updates_result = fetch_telegram_command_updates(config=config, limit=10)
         if updates_result.get("errors"):
-            insert_runtime_event(
-                created_at=now_text(),
-                event_type="telegram_delivery",
-                severity="warning",
-                message="Telegram command polling failed",
-                details=updates_result,
+            error_signature = tuple(
+                [str(updates_result.get("error_type") or "unknown")]
+                + [str(item) for item in updates_result.get("errors", [])]
             )
+            now_ts = time.time()
+            should_log = (
+                error_signature != last_telegram_poll_error_signature
+                or now_ts - last_telegram_poll_error_logged_at >= telegram_poll_error_cooldown_seconds
+            )
+            if should_log:
+                insert_runtime_event(
+                    created_at=now_text(),
+                    event_type="telegram_delivery",
+                    severity=(
+                        "info"
+                        if str(updates_result.get("error_type") or "") == "config"
+                        else "warning"
+                    ),
+                    message="Telegram command polling failed",
+                    details=updates_result,
+                )
+                last_telegram_poll_error_signature = error_signature
+                last_telegram_poll_error_logged_at = now_ts
             return
+        last_telegram_poll_error_signature = None
+        last_telegram_poll_error_logged_at = 0.0
 
         for update in updates_result.get("updates", []):
             command_text = str(update.get("command_text") or "").strip()
@@ -1573,7 +1637,6 @@ def main():
                     text=response_text,
                 )
             except Exception as e:
-                response_status = "failed"
                 response_text = f"{response_text}\nTelegram send failed: {e}"
                 insert_runtime_event(
                     created_at=now_text(),
@@ -1719,6 +1782,7 @@ def main():
                     return True
 
                 config = new_config
+                prune_unsupported_live_entry_symbols()
                 filter_was_reset = False
                 if report_filter_symbol and report_filter_symbol not in new_config["rules"]:
                     report_filter_symbol = None
@@ -2569,8 +2633,43 @@ def main():
                     )
                     return False
                 except Exception as e:
+                    error_text = str(e)
+                    if is_unsupported_symbol_error_message(error_text):
+                        newly_blocked = remember_unsupported_live_entry_symbol(
+                            symbol=str(candidate["symbol"]),
+                            error_message=error_text,
+                        )
+                        notice = "Auto live entry disabled for unsupported symbol"
+                        notice_lines = [
+                            f"symbol={candidate['symbol']}",
+                            error_text,
+                        ]
+                        insert_runtime_event(
+                            created_at=now_text(),
+                            event_type="auto_live_entry",
+                            severity="warning",
+                            message=notice,
+                            details={
+                                "symbol": candidate["symbol"],
+                                "signal_reason": candidate["signal_reason"],
+                                "errors": notice_lines,
+                                "newly_blocked": newly_blocked,
+                            },
+                        )
+                        if newly_blocked:
+                            notify_telegram(
+                                "auto_live_entry",
+                                notice,
+                                notice_lines,
+                                payload={
+                                    "symbol": candidate["symbol"],
+                                    "signal_reason": candidate["signal_reason"],
+                                },
+                            )
+                        return False
+
                     notice = "Auto live entry submission failed"
-                    notice_lines = [str(e)]
+                    notice_lines = [error_text]
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="auto_live_entry",
@@ -2585,7 +2684,7 @@ def main():
                     notify_telegram(
                         "auto_live_entry",
                         notice,
-                        [f"symbol={candidate['symbol']}", str(e)],
+                        [f"symbol={candidate['symbol']}", error_text],
                         payload={"symbol": candidate["symbol"], "signal_reason": candidate["signal_reason"]},
                     )
                     return False
@@ -3211,6 +3310,7 @@ def main():
                 if (live_auto_exit_enabled or live_auto_entry_enabled) and not manual_pause and not safety_pause:
                     try:
                         account_snapshot = fetch_account_snapshot(private_client)
+                        track_unsupported_live_entry_symbols_from_snapshot(account_snapshot)
                         snapshot_errors = account_snapshot_errors(account_snapshot)
                         private_api_capabilities = summarize_account_capabilities(
                             account_snapshot
@@ -3250,6 +3350,7 @@ def main():
                                 live_holdings_rows=live_holdings_rows,
                                 open_execution_orders=current_open_execution_orders,
                                 exchange_open_orders_by_symbol=exchange_open_orders_by_symbol,
+                                unsupported_symbols=unsupported_live_entry_symbols,
                             )
                             entry_candidates = list(entry_review.get("candidates", []))
                             rejected_entry_candidates = list(entry_review.get("rejected", []))

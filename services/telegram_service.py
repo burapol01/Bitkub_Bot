@@ -22,6 +22,9 @@ DEFAULT_TELEGRAM_NOTIFY_EVENTS = [
     "auto_live_exit",
     "runtime_error",
 ]
+TELEGRAM_MESSAGE_CHUNK_LIMIT = 3500
+TELEGRAM_POLL_RETRIES = 3
+TELEGRAM_POLL_BACKOFF_SECONDS = 1.0
 
 
 
@@ -112,6 +115,41 @@ def _parse_chat_ids(raw_value: str | None) -> list[str]:
         for part in str(raw_value).split(",")
         if part.strip()
     ]
+
+
+def _chunk_telegram_text(text: str, *, max_length: int = TELEGRAM_MESSAGE_CHUNK_LIMIT) -> list[str]:
+    normalized = str(text or "").replace("\r\n", "\n").strip()
+    if not normalized:
+        return []
+    if len(normalized) <= max_length:
+        return [normalized]
+
+    chunks: list[str] = []
+    current = ""
+
+    for line in normalized.split("\n"):
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) <= max_length:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        remainder = line
+        while len(remainder) > max_length:
+            split_at = remainder.rfind(" ", 0, max_length)
+            if split_at <= 0:
+                split_at = max_length
+            chunks.append(remainder[:split_at].rstrip())
+            remainder = remainder[split_at:].lstrip()
+        current = remainder
+
+    if current:
+        chunks.append(current)
+
+    return [chunk for chunk in chunks if chunk]
 
 
 def queue_telegram_notification(
@@ -225,10 +263,12 @@ def fetch_telegram_command_updates(
         "ready": settings["control_ready"],
         "updates": [],
         "errors": [],
+        "error_type": None,
     }
     if not settings["enabled"] or not settings["control_enabled"]:
         return result
     if not settings["control_ready"]:
+        result["error_type"] = "config"
         if not settings["bot_token_present"]:
             result["errors"].append("TELEGRAM_BOT_TOKEN is missing")
         if not settings["control_chat_ids"]:
@@ -240,16 +280,41 @@ def fetch_telegram_command_updates(
     last_update_id = max((int(row["update_id"]) for row in recent_logs), default=0)
     params = {"offset": last_update_id + 1, "timeout": 0, "limit": int(limit)}
 
-    try:
-        response = requests.get(
-            f"https://api.telegram.org/bot{token}/getUpdates",
-            params=params,
-            timeout=timeout_seconds,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as e:
-        result["errors"].append(str(e))
+    payload: dict[str, Any] | None = None
+    last_network_error: Exception | None = None
+    for attempt in range(TELEGRAM_POLL_RETRIES):
+        try:
+            response = requests.get(
+                f"https://api.telegram.org/bot{token}/getUpdates",
+                params=params,
+                timeout=timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            last_network_error = None
+            break
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_network_error = e
+            if attempt < TELEGRAM_POLL_RETRIES - 1:
+                time.sleep(TELEGRAM_POLL_BACKOFF_SECONDS + attempt)
+                continue
+            break
+        except Exception as e:
+            result["error_type"] = "request"
+            result["errors"].append(str(e))
+            return result
+
+    if last_network_error is not None:
+        result["error_type"] = "network"
+        result["errors"].append(str(last_network_error))
+        return result
+    if not isinstance(payload, dict):
+        result["error_type"] = "response"
+        result["errors"].append("Telegram getUpdates returned a non-JSON object")
+        return result
+    if not payload.get("ok", False):
+        result["error_type"] = "response"
+        result["errors"].append("Telegram getUpdates returned ok=false")
         return result
 
     updates: list[dict[str, Any]] = []
@@ -310,32 +375,35 @@ def _send_telegram_message(
         raise ValueError("missing Telegram chat ids")
 
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload_template = {
-        "text": text,
-        "disable_web_page_preview": True,
-    }
+    message_parts = _chunk_telegram_text(text)
+    if not message_parts:
+        raise ValueError("missing Telegram text")
 
     for chat_id in chat_ids:
-        payload = dict(payload_template)
-        payload["chat_id"] = chat_id
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                response = requests.post(url, json=payload, timeout=timeout_seconds)
-                response.raise_for_status()
-                body = response.json()
-                if not isinstance(body, dict) or not body.get("ok", False):
-                    raise RuntimeError(
-                        f"Telegram sendMessage rejected payload for chat_id={chat_id}"
-                    )
-                last_error = None
-                break
-            except (requests.Timeout, requests.ConnectionError) as e:
-                last_error = e
-                if attempt < 2:
-                    time.sleep(1.0 + attempt)
-                    continue
-                break
+        for message_text in message_parts:
+            payload = {
+                "chat_id": chat_id,
+                "text": message_text,
+                "disable_web_page_preview": True,
+            }
+            last_error: Exception | None = None
+            for attempt in range(3):
+                try:
+                    response = requests.post(url, json=payload, timeout=timeout_seconds)
+                    response.raise_for_status()
+                    body = response.json()
+                    if not isinstance(body, dict) or not body.get("ok", False):
+                        raise RuntimeError(
+                            f"Telegram sendMessage rejected payload for chat_id={chat_id}"
+                        )
+                    last_error = None
+                    break
+                except (requests.Timeout, requests.ConnectionError) as e:
+                    last_error = e
+                    if attempt < 2:
+                        time.sleep(1.0 + attempt)
+                        continue
+                    break
 
-        if last_error is not None:
-            raise last_error
+            if last_error is not None:
+                raise last_error

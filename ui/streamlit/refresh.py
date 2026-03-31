@@ -29,10 +29,21 @@ AUTO_REFRESH_SAFE_PAGES = {
 
 def render_auto_refresh_controls(page_name: str) -> tuple[bool, int]:
     safe_page = page_name in AUTO_REFRESH_SAFE_PAGES
-    default_enabled = bool(st.session_state.get("ui_auto_refresh_enabled", False)) and safe_page
+    enabled_state_key = f"ui_auto_refresh_enabled::{page_name}"
+    interval_state_key = f"ui_auto_refresh_seconds::{page_name}"
+
+    if enabled_state_key not in st.session_state:
+        st.session_state[enabled_state_key] = (
+            bool(st.session_state.get("ui_auto_refresh_enabled", False)) and safe_page
+        )
+    if interval_state_key not in st.session_state:
+        st.session_state[interval_state_key] = int(
+            st.session_state.get("ui_auto_refresh_seconds", 10)
+        )
+
     enabled = st.checkbox(
         "Auto refresh current page",
-        value=default_enabled,
+        key=enabled_state_key,
         disabled=not safe_page,
         help="Config stays manual so form edits are not interrupted.",
     )
@@ -40,7 +51,7 @@ def render_auto_refresh_controls(page_name: str) -> tuple[bool, int]:
         st.select_slider(
             "Refresh interval",
             options=[5, 10, 15, 30, 60],
-            value=int(st.session_state.get("ui_auto_refresh_seconds", 10)),
+            key=interval_state_key,
             disabled=not safe_page,
         )
     )

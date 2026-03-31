@@ -1,21 +1,42 @@
 import os
 from pathlib import Path
 
-ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+APP_ROOT = Path(__file__).resolve().parent.parent
+ENV_CANDIDATES = (".env", "env_dev", "env")
 _ENV_LOADED = False
+_ENV_PATH: Path | None = None
+
+
+def _resolve_env_path() -> Path | None:
+    explicit_path = os.getenv("BITKUB_ENV_FILE")
+    if explicit_path:
+        candidate = Path(explicit_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = APP_ROOT / candidate
+        return candidate
+
+    for name in ENV_CANDIDATES:
+        candidate = APP_ROOT / name
+        if candidate.exists():
+            return candidate
+
+    return None
 
 
 def load_env_file(*, override: bool = False):
-    global _ENV_LOADED
+    global _ENV_LOADED, _ENV_PATH
 
     if _ENV_LOADED and not override:
         return
 
-    if not ENV_PATH.exists():
+    env_path = _resolve_env_path()
+    _ENV_PATH = env_path
+
+    if env_path is None or not env_path.exists():
         _ENV_LOADED = True
         return
 
-    with open(ENV_PATH, "r", encoding="utf-8") as f:
+    with open(env_path, "r", encoding="utf-8") as f:
         for raw_line in f:
             line = raw_line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -32,6 +53,11 @@ def load_env_file(*, override: bool = False):
                 os.environ[key] = value
 
     _ENV_LOADED = True
+
+
+def get_loaded_env_path() -> Path | None:
+    load_env_file()
+    return _ENV_PATH
 
 
 def get_env(name: str, default: str | None = None) -> str | None:

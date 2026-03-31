@@ -1,6 +1,10 @@
 from typing import Any
 
-from clients.bitkub_private_client import BitkubPrivateClient, BitkubPrivateClientError
+from clients.bitkub_private_client import (
+    BitkubPrivateClient,
+    BitkubPrivateClientError,
+    is_unsupported_symbol_error_message,
+)
 from config import load_config
 from services.reconciliation_service import symbol_to_asset
 
@@ -13,13 +17,7 @@ def _capture_result(fetcher) -> dict[str, Any]:
 
 
 def _is_unsupported_open_orders_error(error: str | None) -> bool:
-    if not error:
-        return False
-    normalized = str(error)
-    return (
-        "Endpoint not found for path /api/market/my-open-orders" in normalized
-        or "Endpoint not found for path /api/v3/market/my-open-orders" in normalized
-    )
+    return is_unsupported_symbol_error_message(error)
 
 
 def fetch_account_snapshot(client: BitkubPrivateClient) -> dict[str, Any]:
@@ -78,6 +76,24 @@ def open_orders_error_map(snapshot: dict[str, Any] | None) -> dict[str, str]:
             errors[symbol] = str(entry["error"])
 
     return errors
+
+
+def unsupported_open_orders_symbol_map(snapshot: dict[str, Any] | None) -> dict[str, str]:
+    if not snapshot:
+        return {}
+
+    unsupported: dict[str, str] = {}
+    open_orders = snapshot.get("open_orders", {})
+    if not isinstance(open_orders, dict):
+        return unsupported
+
+    for symbol in sorted(open_orders):
+        entry = open_orders[symbol]
+        error = str((entry or {}).get("error") or "")
+        if isinstance(entry, dict) and not entry.get("ok", False) and _is_unsupported_open_orders_error(error):
+            unsupported[str(symbol)] = error
+
+    return unsupported
 
 
 def summarize_account_capabilities(snapshot: dict | None) -> list[str]:

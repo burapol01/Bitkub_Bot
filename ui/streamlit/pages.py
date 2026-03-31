@@ -10,6 +10,7 @@ from config import CONFIG_PATH
 
 from services.db_service import (
     DB_PATH,
+    fetch_daily_reporting_summary,
     fetch_reporting_summary,
     fetch_runtime_event_log,
     insert_runtime_event,
@@ -49,6 +50,28 @@ def _summarize_text_lines(lines: list[str]) -> list[dict[str, Any]]:
     ]
 
 
+def _sync_multiselect_state(*, key: str, options: list[str], default: list[str]) -> None:
+    normalized_options = [str(option) for option in options]
+    normalized_default = [
+        str(value) for value in default if str(value) in normalized_options
+    ]
+    signature = (tuple(normalized_options), tuple(normalized_default))
+    signature_key = f"{key}__signature"
+    current_value = st.session_state.get(key)
+
+    if st.session_state.get(signature_key) != signature:
+        st.session_state[key] = list(normalized_default)
+        st.session_state[signature_key] = signature
+        return
+
+    if isinstance(current_value, list):
+        filtered_value = [
+            str(value) for value in current_value if str(value) in normalized_options
+        ]
+        if filtered_value != list(current_value):
+            st.session_state[key] = filtered_value
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _cached_trade_analytics(symbol_key: str = "") -> dict[str, Any]:
     return fetch_trade_analytics(symbol=symbol_key or None)
@@ -57,6 +80,11 @@ def _cached_trade_analytics(symbol_key: str = "") -> dict[str, Any]:
 @st.cache_data(ttl=30, show_spinner=False)
 def _cached_market_snapshot_coverage(days: int) -> list[dict[str, Any]]:
     return fetch_market_snapshot_coverage(days=days)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_daily_reporting_summary(*, days: int, symbol_key: str = "") -> list[dict[str, Any]]:
+    return fetch_daily_reporting_summary(days=days, symbol=symbol_key or None)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -467,40 +495,55 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     for row in ranking["rows"]
                     if row["symbol"] not in config["rules"]
                 ]
-                with st.form("strategy_promote_ranked_symbols_form"):
-                    selected_promotions = st.multiselect(
-                        "Promote ranked symbols into live rules",
-                        promotable_symbols,
-                        default=(recommended_promotions or promotable_symbols)[: min(len(recommended_promotions or promotable_symbols), 5)],
-                        help="Adds a conservative starter rule for each selected ranked symbol and keeps them in the watchlist.",
+                if promotable_symbols:
+                    promotion_state_key = "strategy_promote_ranked_symbols"
+                    default_promotions = (recommended_promotions or promotable_symbols)[
+                        : min(len(recommended_promotions or promotable_symbols), 5)
+                    ]
+                    _sync_multiselect_state(
+                        key=promotion_state_key,
+                        options=promotable_symbols,
+                        default=default_promotions,
                     )
-                    submitted_promotions = st.form_submit_button(
-                        "Add Selected Ranked Symbols",
-                        width='stretch',
-                    )
-                if submitted_promotions:
-                    if not selected_promotions:
-                        st.warning("Select at least one ranked symbol to promote.")
-                    else:
-                        updated = dict(config)
-                        updated_rules = dict(config["rules"])
-                        for promoted_symbol in selected_promotions:
-                            if promoted_symbol not in updated_rules:
-                                updated_rules[promoted_symbol] = build_rule_seed(
-                                    config,
-                                    promoted_symbol,
-                                    market_price=ranking_last_close_by_symbol.get(promoted_symbol),
-                                )
-                        updated["rules"] = updated_rules
-                        updated["watchlist_symbols"] = sorted(
-                            set(config.get("watchlist_symbols", configured_symbols)) | set(selected_promotions)
+                    with st.form("strategy_promote_ranked_symbols_form"):
+                        selected_promotions = st.multiselect(
+                            "Promote ranked symbols into live rules",
+                            promotable_symbols,
+                            key=promotion_state_key,
+                            help="Adds a conservative starter rule for each selected ranked symbol and keeps them in the watchlist.",
                         )
-                        if save_config_with_feedback(
-                            config,
-                            updated,
-                            f"Promoted {len(selected_promotions)} ranked symbol(s) into live rules",
-                        ):
-                            st.rerun()
+                        submitted_promotions = st.form_submit_button(
+                            "Add Selected Ranked Symbols",
+                            width='stretch',
+                        )
+                    if submitted_promotions:
+                        if not selected_promotions:
+                            st.warning("Select at least one ranked symbol to promote.")
+                        else:
+                            updated = dict(config)
+                            updated_rules = dict(config["rules"])
+                            for promoted_symbol in selected_promotions:
+                                if promoted_symbol not in updated_rules:
+                                    updated_rules[promoted_symbol] = build_rule_seed(
+                                        config,
+                                        promoted_symbol,
+                                        market_price=ranking_last_close_by_symbol.get(promoted_symbol),
+                                    )
+                            updated["rules"] = updated_rules
+                            updated["watchlist_symbols"] = sorted(
+                                set(config.get("watchlist_symbols", configured_symbols))
+                                | set(selected_promotions)
+                            )
+                            if save_config_with_feedback(
+                                config,
+                                updated,
+                                f"Promoted {len(selected_promotions)} ranked symbol(s) into live rules",
+                            ):
+                                st.session_state.pop(promotion_state_key, None)
+                                st.session_state.pop(f"{promotion_state_key}__signature", None)
+                                st.rerun()
+                else:
+                    st.info("All ranked symbols in the current shortlist already exist in live rules.")
             else:
                 st.caption("No ranked symbols yet. Sync candles first or widen the lookback window.")
         with rank_right:
@@ -854,11 +897,24 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     )
                 with compare_right:
                     focus_variant_options = [row["variant"] for row in compare_rows]
+                    compare_scope = "|".join(
+                        [
+                            str(compare_payload.get("symbol", "")),
+                            str(compare_payload.get("source", "")),
+                            str(compare_payload.get("resolution", "")),
+                            str(compare_payload.get("days", "")),
+                        ]
+                    )
+                    preferred_variant = (
+                        str(best_variant.get("variant"))
+                        if best_variant and str(best_variant.get("variant")) in focus_variant_options
+                        else focus_variant_options[0]
+                    )
                     selected_variant = st.selectbox(
                         "Variant Focus",
                         focus_variant_options,
-                        index=0,
-                        key="strategy_compare_focus_variant",
+                        index=focus_variant_options.index(preferred_variant),
+                        key=f"strategy_compare_focus_variant::{compare_scope}",
                     )
                     focus_variant_row = next(row for row in compare_rows if row["variant"] == selected_variant)
                     decision_tone = "good" if str(focus_variant_row.get("decision")) in {"Clearly better", "Marginally better"} else "warn" if str(focus_variant_row.get("decision")) in {"Tied with baseline", "Needs more samples", "Current baseline"} else "bad"
@@ -887,6 +943,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                             "Apply Variant To Live Rule",
                             focus_variant_options,
                             index=focus_variant_options.index(selected_variant),
+                            key=f"strategy_compare_apply_variant::{compare_scope}::{selected_variant}",
                         )
                         apply_submitted = st.form_submit_button(
                             "Apply Compared Variant",
@@ -1228,8 +1285,25 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
         "Reporting",
     )
     symbols = ["ALL"] + sorted(config["rules"].keys())
-    selected_symbol = st.selectbox("Report Filter", symbols, index=0)
+    report_filter_col, report_window_col = st.columns([0.6, 0.4])
+    with report_filter_col:
+        selected_symbol = st.selectbox("Report Filter", symbols, index=0)
+    with report_window_col:
+        daily_window_days = int(
+            st.select_slider(
+                "Daily Summary Window",
+                options=[7, 14, 30, 60],
+                value=14,
+                key="reports_daily_window",
+            )
+        )
+
+    selected_symbol_key = "" if selected_symbol == "ALL" else selected_symbol
     report = fetch_reporting_summary(today=today, symbol=None if selected_symbol == "ALL" else selected_symbol)
+    daily_summary_rows = _cached_daily_reporting_summary(
+        days=daily_window_days,
+        symbol_key=selected_symbol_key,
+    )
     symbol_summary = report["symbol_summary"]
     recent_execution_orders = report["recent_execution_orders"]
     recent_auto_exit_events = report["recent_auto_exit_events"]
@@ -1237,47 +1311,59 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
     recent_trades = report["recent_trades"]
 
     total_signals = sum(int(row.get("signals", 0)) for row in symbol_summary)
-    total_trades = sum(int(row.get("trades", 0)) for row in symbol_summary)
-    total_pnl = sum(float(row.get("pnl_thb", 0.0)) for row in symbol_summary)
-    total_wins = sum(int(row.get("wins", 0)) for row in symbol_summary)
-    total_losses = sum(int(row.get("losses", 0)) for row in symbol_summary)
+    total_paper_trades = sum(int(row.get("trades", 0)) for row in symbol_summary)
+    total_live_trades = sum(int(row.get("live_closed_trades", 0)) for row in symbol_summary)
+    total_combined_trades = total_paper_trades + total_live_trades
+    total_paper_pnl = sum(float(row.get("pnl_thb", 0.0)) for row in symbol_summary)
+    total_live_pnl = sum(float(row.get("live_realized_pnl_thb", 0.0)) for row in symbol_summary)
+    total_combined_pnl = total_paper_pnl + total_live_pnl
     total_paper_fee = sum(float(row.get("paper_fee_thb", 0.0)) for row in symbol_summary)
     total_live_fee = sum(float(row.get("live_fee_thb", 0.0)) for row in symbol_summary)
     total_combined_fee = sum(float(row.get("combined_fee_thb", 0.0)) for row in symbol_summary)
 
-    report_alert_tone = "bad" if total_pnl < 0 else "warn" if total_combined_fee > max(abs(total_pnl) * 0.5, 1.0) else "good"
+    report_alert_tone = "bad" if total_combined_pnl < 0 else "warn" if total_combined_fee > max(abs(total_combined_pnl) * 0.5, 1.0) else "good"
     report_alert_message = (
-        f"PnL {total_pnl:,.2f} THB | Fee {total_combined_fee:,.2f} THB | Signals {total_signals} | Trades {total_trades}"
+        f"PnL {total_combined_pnl:,.2f} THB | Fee {total_combined_fee:,.2f} THB | Signals {total_signals} | Closed trades {total_combined_trades}"
     )
     render_callout("Report Snapshot", report_alert_message, report_alert_tone)
 
     status_badges = [
         badge(f"Filter {selected_symbol}", "info"),
-        badge("PnL NEGATIVE" if total_pnl < 0 else "PnL POSITIVE", "bad" if total_pnl < 0 else "good"),
-        badge("Fee HEAVY" if total_combined_fee > max(abs(total_pnl) * 0.5, 1.0) else "Fee OK", "warn" if total_combined_fee > max(abs(total_pnl) * 0.5, 1.0) else "good"),
+        badge("PnL NEGATIVE" if total_combined_pnl < 0 else "PnL POSITIVE", "bad" if total_combined_pnl < 0 else "good"),
+        badge("Fee HEAVY" if total_combined_fee > max(abs(total_combined_pnl) * 0.5, 1.0) else "Fee OK", "warn" if total_combined_fee > max(abs(total_combined_pnl) * 0.5, 1.0) else "good"),
         badge(f"Errors {len(recent_errors)}", "warn" if recent_errors else "good"),
     ]
     st.markdown(f'<div class="status-strip">{" ".join(status_badges)}</div>', unsafe_allow_html=True)
 
     card1, card2, card3, card4, card5 = st.columns(5)
     with card1:
-        render_metric_card("Report Filter", selected_symbol, f"Symbols {len(symbol_summary)}")
+        render_metric_card("Report Filter", selected_symbol, f"Symbols {len(symbol_summary)} | Window {daily_window_days}d")
     with card2:
-        render_metric_card("Signals Today", str(total_signals), f"Trades {total_trades}")
+        render_metric_card("Signals Today", str(total_signals), f"Closed {total_combined_trades} trade(s)")
     with card3:
-        render_metric_card("PnL Today", f"{total_pnl:,.2f} THB", f"W {total_wins} / L {total_losses}")
+        render_metric_card("Closed Trades", str(total_combined_trades), f"Paper {total_paper_trades} | Live {total_live_trades}")
     with card4:
         render_metric_card(
-            "Fee Today",
-            f"{total_combined_fee:,.2f} THB",
-            f"Paper {total_paper_fee:,.2f} | Live {total_live_fee:,.2f}",
+            "PnL Today",
+            f"{total_combined_pnl:,.2f} THB",
+            f"Paper {total_paper_pnl:,.2f} | Live {total_live_pnl:,.2f}",
         )
     with card5:
         render_metric_card(
-            "Execution Activity",
-            str(len(recent_execution_orders)),
-            f"Auto exits {len(recent_auto_exit_events)} | Errors {len(recent_errors)}",
+            "Fee Today",
+            f"{total_combined_fee:,.2f} THB",
+            f"Paper {total_paper_fee:,.2f} | Live {total_live_fee:,.2f} | Errors {len(recent_errors)}",
         )
+
+    render_section_intro(
+        "Daily PnL Summary",
+        f"Daily realized result for the last {daily_window_days} day(s), including paper and live columns in the same table.",
+        "Daily",
+    )
+    if daily_summary_rows:
+        st.dataframe(daily_summary_rows, width='stretch', hide_index=True)
+    else:
+        st.caption("No daily realized PnL rows were found for the selected filter and window.")
 
     left, right = st.columns([1.15, 0.85])
     with left:

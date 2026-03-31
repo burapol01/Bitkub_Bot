@@ -86,6 +86,8 @@ ipython_config.py
 .env_*
 .env copy
 .envrc
+env
+env_*
 .venv/
 env/
 venv/
@@ -122,4 +124,6 @@ __marimo__/
 runtime_state.json
 signal_log.csv
 paper_trade_log.csv
-data/bitkub.db
+data/*.db
+data/*.db-*
+data/*.tmp
