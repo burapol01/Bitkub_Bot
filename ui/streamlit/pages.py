@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 import streamlit as st
@@ -38,6 +37,7 @@ from ui.streamlit.strategy_support import (
     fetch_market_symbol_universe,
     run_strategy_compare_rows,
 )
+from utils.time_utils import now_text
 
 
 def _summarize_text_lines(lines: list[str]) -> list[dict[str, Any]]:
@@ -705,7 +705,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                 f"Pruned {len(prune_selection)} symbol(s) from live rules",
                             ):
                                 insert_runtime_event(
-                                    created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    created_at=now_text(),
                                     event_type="strategy_tuning",
                                     severity="info",
                                     message=f"Pruned {len(prune_selection)} symbol(s) from live rules",
@@ -964,7 +964,7 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                 f"Applied compared variant {apply_variant} to {compare_payload['symbol']}",
                             ):
                                 insert_runtime_event(
-                                    created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    created_at=now_text(),
                                     event_type="strategy_tuning",
                                     severity="info",
                                     message=f"Applied variant {apply_variant} to {compare_payload['symbol']}",

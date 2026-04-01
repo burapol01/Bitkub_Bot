@@ -16,6 +16,7 @@ from services.db_service import (
     fetch_market_candles,
     upsert_market_candles,
 )
+from utils.time_utils import format_time_text, from_timestamp, now_dt, parse_time_text
 
 _TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -40,7 +41,7 @@ def _connect() -> sqlite3.Connection:
 
 
 def _parse_time(value: str) -> datetime:
-    return datetime.strptime(value, _TIME_FMT)
+    return parse_time_text(value)
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
@@ -137,7 +138,7 @@ def fetch_trade_analytics(*, symbol: str | None = None) -> dict[str, Any]:
 
 
 def fetch_market_snapshot_coverage(*, days: int = 30) -> list[dict[str, Any]]:
-    cutoff = (datetime.now() - timedelta(days=days)).strftime(_TIME_FMT)
+    cutoff = format_time_text(now_dt() - timedelta(days=days))
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -158,7 +159,7 @@ def fetch_market_snapshot_coverage(*, days: int = 30) -> list[dict[str, Any]]:
 
 
 def load_market_snapshots(*, symbol: str, days: int = 7) -> list[dict[str, Any]]:
-    cutoff = (datetime.now() - timedelta(days=days)).strftime(_TIME_FMT)
+    cutoff = format_time_text(now_dt() - timedelta(days=days))
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -221,7 +222,7 @@ def sync_candles_for_symbols(
                 candles.append(
                     {
                         "open_time": open_time,
-                        "open_at": datetime.fromtimestamp(open_time).strftime(_TIME_FMT),
+                        "open_at": format_time_text(from_timestamp(open_time)),
                         "open_price": float(opens[index]),
                         "high_price": float(highs[index]),
                         "low_price": float(lows[index]),

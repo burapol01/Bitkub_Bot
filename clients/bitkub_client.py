@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 import requests
 
 from config import load_config
+from utils.time_utils import now_dt
 
 
 def _base_url() -> str:
@@ -63,6 +64,6 @@ def get_tradingview_history(
 
 
 def build_history_window(*, days: int) -> tuple[int, int]:
-    now = datetime.now()
+    now = now_dt()
     start = now - timedelta(days=int(days))
     return int(start.timestamp()), int(now.timestamp())

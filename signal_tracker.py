@@ -1,8 +1,8 @@
 import time
 import csv
 import os
-from datetime import datetime
 import requests
+from utils.time_utils import now_text
 
 try:
     import winsound
@@ -69,7 +69,7 @@ def write_log(timestamp: str, symbol: str, last_price: float, buy_below: float, 
 
 def check_signals(rules: dict, last_zones: dict):
     ticker = get_ticker()
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = now_text()
 
     print("=" * 110)
     print("BITKUB SIGNAL TRACKER")

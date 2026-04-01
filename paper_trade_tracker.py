@@ -1,8 +1,8 @@
 import time
 import csv
 import os
-from datetime import datetime
 import requests
+from utils.time_utils import now_text, today_key
 
 try:
     import winsound
@@ -154,7 +154,7 @@ def write_trade_log(
 
 
 def get_today_key() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    return today_key()
 
 
 def ensure_daily_stats(daily_stats: dict, symbol: str):
@@ -352,7 +352,7 @@ def print_daily_summary(daily_stats: dict):
 
 def check_signals(rules: dict, last_zones: dict, positions: dict, daily_stats: dict):
     ticker = get_ticker()
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = now_text()
 
     print("=" * 120)
     print("BITKUB PAPER TRADE TRACKER")

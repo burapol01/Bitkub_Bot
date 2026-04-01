@@ -1,10 +1,11 @@
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from services.env_service import get_env_path
+from utils.time_utils import coerce_time_text, format_date_text, format_time_text, now_dt
 
 DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
 DB_PATH = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_DIR / "bitkub.db")
@@ -174,6 +175,10 @@ def _to_json(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=True)
 
 
+def _normalize_time_text(value: Any) -> str:
+    return coerce_time_text(value)
+
+
 def insert_runtime_event(
     *,
     created_at: str,
@@ -193,7 +198,7 @@ def insert_runtime_event(
                 details_json
             ) VALUES (?, ?, ?, ?, ?)
             """,
-            (created_at, event_type, severity, message, _to_json(details)),
+            (_normalize_time_text(created_at), event_type, severity, message, _to_json(details)),
         )
 
 
@@ -218,7 +223,14 @@ def insert_telegram_outbox(
                 status
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (created_at, event_type, title, body, _to_json(payload), status),
+            (
+                _normalize_time_text(created_at),
+                event_type,
+                title,
+                body,
+                _to_json(payload),
+                status,
+            ),
         )
 
 
@@ -246,7 +258,7 @@ def insert_telegram_command_log(
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                created_at,
+                _normalize_time_text(created_at),
                 int(update_id),
                 str(chat_id),
                 username,
@@ -291,7 +303,7 @@ def expire_stale_telegram_command_logs(*, created_before: str) -> int:
             WHERE status = 'pending_confirmation'
               AND created_at <= ?
             """,
-            (str(created_before),),
+            (_normalize_time_text(created_before),),
         )
         return int(cursor.rowcount or 0)
 
@@ -320,7 +332,7 @@ def insert_signal_log(
             ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                created_at,
+                _normalize_time_text(created_at),
                 symbol,
                 last_price,
                 buy_below,
@@ -357,7 +369,7 @@ def insert_market_snapshot(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                created_at,
+                _normalize_time_text(created_at),
                 symbol,
                 last_price,
                 buy_below,
@@ -398,7 +410,7 @@ def upsert_market_candles(
                     symbol,
                     resolution,
                     int(candle["open_time"]),
-                    candle["open_at"],
+                    _normalize_time_text(candle["open_at"]),
                     float(candle["open_price"]),
                     float(candle["high_price"]),
                     float(candle["low_price"]),
@@ -416,9 +428,7 @@ def fetch_market_candles(
     resolution: str,
     lookback_days: int,
 ) -> list[dict[str, Any]]:
-    cutoff_text = (
-        datetime.now() - timedelta(days=lookback_days)
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_text = format_time_text(now_dt() - timedelta(days=lookback_days))
     with _connect() as conn:
         rows = conn.execute(
             """
@@ -494,8 +504,8 @@ def insert_paper_trade_log(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                buy_time,
-                sell_time,
+                _normalize_time_text(buy_time),
+                _normalize_time_text(sell_time),
                 symbol,
                 exit_reason,
                 budget_thb,
@@ -533,7 +543,7 @@ def insert_account_snapshot(
             ) VALUES (?, ?, ?, ?, ?)
             """,
             (
-                created_at,
+                _normalize_time_text(created_at),
                 source,
                 private_api_status,
                 _to_json(capabilities),
@@ -564,7 +574,7 @@ def insert_reconciliation_result(
             ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
-                created_at,
+                _normalize_time_text(created_at),
                 phase,
                 status,
                 _to_json(warnings),
@@ -608,8 +618,8 @@ def insert_execution_order(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                created_at,
-                updated_at,
+                _normalize_time_text(created_at),
+                _normalize_time_text(updated_at),
                 symbol,
                 side,
                 order_type,
@@ -648,7 +658,7 @@ def update_execution_order(
             WHERE id = ?
             """,
             (
-                updated_at,
+                _normalize_time_text(updated_at),
                 state,
                 _to_json(response_payload),
                 exchange_order_id,
@@ -684,7 +694,7 @@ def insert_execution_order_event(
             """,
             (
                 execution_order_id,
-                created_at,
+                _normalize_time_text(created_at),
                 from_state,
                 to_state,
                 event_type,
@@ -701,9 +711,7 @@ def _prune_table_older_than(
     timestamp_column: str,
     retention_days: int,
 ) -> int:
-    cutoff_text = (
-        datetime.now() - timedelta(days=retention_days)
-    ).strftime("%Y-%m-%d %H:%M:%S")
+    cutoff_text = format_time_text(now_dt() - timedelta(days=retention_days))
     cursor = conn.execute(
         f"""
         DELETE FROM {table}
@@ -996,7 +1004,7 @@ def fetch_daily_reporting_summary(
     symbol: str | None = None,
 ) -> list[dict[str, Any]]:
     window_days = max(1, int(days))
-    cutoff_day = (datetime.now() - timedelta(days=window_days - 1)).strftime("%Y-%m-%d")
+    cutoff_day = format_date_text(now_dt() - timedelta(days=window_days - 1))
     trade_symbol_clause = "AND symbol = ?" if symbol else ""
 
     with _connect() as conn:

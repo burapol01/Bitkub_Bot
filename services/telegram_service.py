@@ -13,6 +13,7 @@ from services.db_service import (
     insert_telegram_outbox,
     update_telegram_outbox_status,
 )
+from utils.time_utils import now_dt, parse_time_text
 
 DEFAULT_TELEGRAM_NOTIFY_EVENTS = [
     "config_reload",
@@ -30,7 +31,7 @@ TELEGRAM_POLL_BACKOFF_SECONDS = 1.0
 
 def _parse_created_at(value: str) -> datetime | None:
     try:
-        return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+        return parse_time_text(str(value))
     except Exception:
         return None
 
@@ -52,7 +53,7 @@ def _recent_duplicate_notification_exists(
     payload: dict[str, Any] | None,
     cooldown_seconds: int,
 ) -> bool:
-    now = datetime.now()
+    now = now_dt()
     recent_rows = fetch_recent_telegram_outbox(limit=100, newest_first=True)
     normalized_event_type = str(event_type or "")
     normalized_title = str(title or "")

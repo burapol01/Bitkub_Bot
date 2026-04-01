@@ -147,6 +147,21 @@ def render_reconciliation_block(live_reconciliation: dict[str, Any]) -> None:
         st.caption("No live reconciliation issues detected.")
 
 
+def _runtime_event_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "created_at": row.get("created_at"),
+            "severity": row.get("severity"),
+            "category": row.get("category"),
+            "topic": row.get("topic"),
+            "event_type": row.get("event_type"),
+            "message": row.get("message"),
+            "hint": row.get("hint"),
+        }
+        for row in rows
+    ]
+
+
 def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     render_section_intro(
         "Logs & Errors",
@@ -156,6 +171,10 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
 
     current_issue_rows = current_private_api_issues(private_ctx)
     historical_rows = [classify_runtime_event(row) for row in fetch_runtime_event_log(limit=200)]
+    error_rows = [
+        classify_runtime_event(row)
+        for row in fetch_runtime_event_log(limit=200, severity="error")
+    ]
     telegram_rows = fetch_recent_telegram_outbox(limit=50)
     telegram_command_rows = fetch_recent_telegram_command_log(limit=50)
     telegram_settings = telegram_settings_snapshot(reload_config()[0] or {})
@@ -205,7 +224,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     with card2:
         render_metric_card("Historical Events", str(len(historical_rows)), "Last 200 runtime events")
     with card3:
-        render_metric_card("Error Events", str(sum(1 for row in historical_rows if row.get("severity") == "error")), "Persisted runtime severity=error")
+        render_metric_card("Error Events", str(len(error_rows)), "Latest 200 persisted runtime errors")
     with card4:
         top_category = max(category_counts, key=category_counts.get) if category_counts else "None"
         render_metric_card("Top Category", top_category, f"Telegram queued {len(telegram_rows)}")
@@ -300,6 +319,55 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     else:
         st.caption("No auto-entry review has been recorded yet.")
 
+    error_event_types = ["ALL"] + sorted(
+        {str(row.get("event_type") or "runtime_error") for row in error_rows}
+    )
+    selected_error_event_type = st.selectbox(
+        "Error Event Filter",
+        error_event_types,
+        index=0,
+        key="logs_error_event_filter",
+    )
+    filtered_error_rows = [
+        row
+        for row in error_rows
+        if selected_error_event_type == "ALL"
+        or str(row.get("event_type") or "runtime_error") == selected_error_event_type
+    ]
+
+    render_section_intro(
+        "Error-Only Runtime Events",
+        "Fast path for real failures only. Use this before the broader history table when you are debugging.",
+        "Errors",
+    )
+    if filtered_error_rows:
+        st.dataframe(
+            _runtime_event_table_rows(filtered_error_rows),
+            width='stretch',
+            hide_index=True,
+        )
+    else:
+        st.caption("No runtime errors match the selected error filter.")
+
+    with st.expander("Error Details", expanded=False):
+        error_detail_rows = [
+            {
+                "created_at": row.get("created_at"),
+                "event_type": row.get("event_type"),
+                "severity": row.get("severity"),
+                "category": row.get("category"),
+                "topic": row.get("topic"),
+                "message": row.get("message"),
+                "hint": row.get("hint"),
+                "details": row.get("details", {}),
+            }
+            for row in filtered_error_rows[:50]
+        ]
+        if error_detail_rows:
+            st.json(error_detail_rows, expanded=False)
+        else:
+            st.caption("No error details to show.")
+
     log_categories = ["ALL"] + sorted({str(row.get("category") or "General") for row in historical_rows})
     selected_category = st.selectbox("Log Category Filter", log_categories, index=0, key="logs_category_filter")
     filtered_rows = [
@@ -311,18 +379,7 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     render_section_intro("Historical Runtime Events", "Lower-signal history lives here. Filter by category after you check current issues.", "History")
     if filtered_rows:
         st.dataframe(
-            [
-                {
-                    "created_at": row.get("created_at"),
-                    "severity": row.get("severity"),
-                    "category": row.get("category"),
-                    "topic": row.get("topic"),
-                    "event_type": row.get("event_type"),
-                    "message": row.get("message"),
-                    "hint": row.get("hint"),
-                }
-                for row in filtered_rows
-            ],
+            _runtime_event_table_rows(filtered_rows),
             width='stretch',
             hide_index=True,
         )

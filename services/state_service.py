@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from services.env_service import get_env_path
+from utils.time_utils import business_dt, parse_time_text
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parent.parent / "runtime_state.json"
 STATE_FILE_PATH = get_env_path("BITKUB_RUNTIME_STATE_PATH", DEFAULT_STATE_PATH)
@@ -20,7 +21,7 @@ def _replace_dict_contents(target: dict, source: dict):
 
 
 def _serialize_cooldowns(cooldowns: dict[str, datetime]) -> dict[str, str]:
-    return {symbol: value.isoformat() for symbol, value in cooldowns.items()}
+    return {symbol: business_dt(value).isoformat() for symbol, value in cooldowns.items()}
 
 
 def _deserialize_cooldowns(raw_cooldowns: dict[str, Any]) -> dict[str, datetime]:
@@ -29,7 +30,10 @@ def _deserialize_cooldowns(raw_cooldowns: dict[str, Any]) -> dict[str, datetime]
     for symbol, value in raw_cooldowns.items():
         if not isinstance(symbol, str) or not isinstance(value, str):
             continue
-        cooldowns[symbol] = datetime.fromisoformat(value)
+        try:
+            cooldowns[symbol] = parse_time_text(value)
+        except ValueError:
+            continue
 
     return cooldowns
 

@@ -2,6 +2,7 @@ import csv
 import os
 from config import load_config
 from services.db_service import insert_paper_trade_log, insert_signal_log
+from utils.time_utils import coerce_time_text
 
 
 def get_log_files():
@@ -55,11 +56,12 @@ def ensure_trade_log_file():
 
 def write_signal_log(timestamp, symbol, last_price, buy_below, sell_above, zone, status):
     signal_log_file, _ = get_log_files()
+    normalized_timestamp = coerce_time_text(timestamp)
 
     with open(signal_log_file, mode="a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            timestamp,
+            normalized_timestamp,
             symbol,
             last_price,
             buy_below,
@@ -69,7 +71,7 @@ def write_signal_log(timestamp, symbol, last_price, buy_below, sell_above, zone,
         ])
 
     insert_signal_log(
-        created_at=str(timestamp),
+        created_at=normalized_timestamp,
         symbol=str(symbol),
         last_price=float(last_price),
         buy_below=float(buy_below),
@@ -97,12 +99,14 @@ def write_trade_log(
     pnl_percent,
 ):
     _, trade_log_file = get_log_files()
+    normalized_buy_time = coerce_time_text(buy_time)
+    normalized_sell_time = coerce_time_text(sell_time)
 
     with open(trade_log_file, mode="a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
-            buy_time,
-            sell_time,
+            normalized_buy_time,
+            normalized_sell_time,
             symbol,
             exit_reason,
             budget_thb,
@@ -119,8 +123,8 @@ def write_trade_log(
         ])
 
     insert_paper_trade_log(
-        buy_time=str(buy_time),
-        sell_time=str(sell_time),
+        buy_time=normalized_buy_time,
+        sell_time=normalized_sell_time,
         symbol=str(symbol),
         exit_reason=str(exit_reason),
         budget_thb=float(budget_thb),

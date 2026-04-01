@@ -20,16 +20,87 @@ def _is_unsupported_open_orders_error(error: str | None) -> bool:
     return is_unsupported_symbol_error_message(error)
 
 
-def fetch_account_snapshot(client: BitkubPrivateClient) -> dict[str, Any]:
+def _unwrap_result(payload: Any) -> Any:
+    if isinstance(payload, dict) and "data" in payload:
+        payload = payload["data"]
+    if isinstance(payload, dict) and "result" in payload:
+        return payload["result"]
+    return payload
+
+
+def _normalize_exchange_symbol(
+    raw_symbol: Any,
+    *,
+    tracked_symbols: set[str],
+) -> str | None:
+    normalized = str(raw_symbol or "").strip().upper()
+    if not normalized:
+        return None
+    if normalized in tracked_symbols:
+        return normalized
+    if "_" not in normalized:
+        return normalized
+
+    left, right = normalized.split("_", 1)
+    flipped = f"{right}_{left}"
+    if flipped in tracked_symbols:
+        return flipped
+    return normalized
+
+
+def _group_global_open_orders(
+    payload: Any,
+    *,
+    tracked_symbols: list[str],
+) -> dict[str, Any]:
+    tracked_symbol_set = set(tracked_symbols)
+    grouped_rows = {symbol: [] for symbol in tracked_symbols}
+    raw_rows = _unwrap_result(payload)
+
+    if isinstance(raw_rows, list):
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = _normalize_exchange_symbol(
+                row.get("sym") or row.get("symbol"),
+                tracked_symbols=tracked_symbol_set,
+            )
+            if not symbol:
+                continue
+            grouped_rows.setdefault(symbol, []).append(row)
+
+    return {
+        symbol: {"ok": True, "data": {"result": rows}, "error": None}
+        for symbol, rows in grouped_rows.items()
+    }
+
+
+def fetch_account_snapshot(
+    client: BitkubPrivateClient,
+    *,
+    open_orders_mode: str = "per_symbol",
+) -> dict[str, Any]:
     config = load_config()
     rules = config.get("rules", {})
+    tracked_symbols = sorted(str(symbol) for symbol in rules)
 
-    open_orders_by_symbol: dict[str, Any] = {}
-
-    for symbol in sorted(rules):
-        open_orders_by_symbol[symbol] = _capture_result(
-            lambda symbol=symbol: client.get_open_orders(symbol)
-        )
+    if open_orders_mode == "none":
+        open_orders_by_symbol: dict[str, Any] | None = None
+    elif open_orders_mode == "global":
+        global_open_orders = _capture_result(client.get_open_orders)
+        if global_open_orders.get("ok", False):
+            open_orders_by_symbol = _group_global_open_orders(
+                global_open_orders.get("data"),
+                tracked_symbols=tracked_symbols,
+            )
+        else:
+            open_orders_by_symbol = {"ALL": global_open_orders}
+    else:
+        open_orders_by_symbol = {}
+        for symbol in tracked_symbols:
+            open_orders_by_symbol[symbol] = _capture_result(
+                lambda symbol=symbol: client.get_open_orders(symbol)
+            )
 
     return {
         "server_time": _capture_result(client.get_server_time),

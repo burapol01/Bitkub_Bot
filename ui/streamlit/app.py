@@ -4,7 +4,7 @@ import streamlit as st
 
 from config import reload_config
 from services.db_service import init_db
-from ui.streamlit.data import build_dashboard_context
+from ui.streamlit.data import build_dashboard_context, private_context, sidebar_private_context
 from ui.streamlit.pages import (
     render_account_page,
     render_config_page,
@@ -24,6 +24,7 @@ from ui.streamlit.refresh import (
     render_refreshable_fragment,
 )
 from ui.streamlit.styles import inject_css, render_hero
+from utils.time_utils import today_key
 
 
 st.set_page_config(
@@ -56,11 +57,30 @@ def main() -> None:
     if st.session_state.get("ui_page") not in PAGE_ORDER:
         st.session_state["ui_page"] = default_page
     current_page = str(st.session_state.get("ui_page", default_page))
+    rule_symbols = tuple(sorted(str(symbol) for symbol in config.get("rules", {})))
+    today = today_key()
+    private_ctx_cache: dict[str, dict] = {}
+    dashboard_ctx: dict | None = None
 
-    sidebar_ctx = build_dashboard_context(config)
+    def get_private_ctx(*, open_orders_mode: str) -> dict[str, object]:
+        cached = private_ctx_cache.get(open_orders_mode)
+        if cached is None:
+            cached = private_context(
+                rule_symbols=rule_symbols,
+                open_orders_mode=open_orders_mode,
+            )
+            private_ctx_cache[open_orders_mode] = cached
+        return cached
+
+    def get_dashboard_ctx() -> dict[str, object]:
+        nonlocal dashboard_ctx
+        if dashboard_ctx is None:
+            dashboard_ctx = build_dashboard_context(config)
+        return dashboard_ctx
+
     selected_page = render_sidebar(
         config=config,
-        private_ctx=sidebar_ctx["private_ctx"],
+        private_ctx=sidebar_private_context(),
         selected_page=current_page,
     )
     st.session_state["ui_page"] = selected_page
@@ -71,32 +91,28 @@ def main() -> None:
     run_every = get_auto_refresh_run_every(selected_page, auto_refresh_enabled, auto_refresh_seconds)
 
     def render_selected_page() -> None:
-        ctx = build_dashboard_context(config)
-        runtime = ctx["runtime"]
-        private_ctx = ctx["private_ctx"]
-        latest_prices = ctx["latest_prices"]
-        ticker_rows = ctx["ticker_rows"]
-        today = ctx["today"]
-
         if selected_page == "Overview":
+            ctx = get_dashboard_ctx()
             render_overview_page(
                 config=config,
-                runtime=runtime,
-                ticker_rows=ticker_rows,
-                private_ctx=private_ctx,
+                runtime=ctx["runtime"],
+                ticker_rows=ctx["ticker_rows"],
+                private_ctx=ctx["private_ctx"],
                 today=today,
             )
         elif selected_page == "Account":
+            ctx = get_dashboard_ctx()
             render_account_page(
-                private_ctx=private_ctx,
-                latest_prices=latest_prices,
+                private_ctx=ctx["private_ctx"],
+                latest_prices=ctx["latest_prices"],
             )
         elif selected_page == "Live Ops":
+            ctx = get_dashboard_ctx()
             render_live_ops_page(
                 config=config,
-                runtime=runtime,
-                private_ctx=private_ctx,
-                latest_prices=latest_prices,
+                runtime=ctx["runtime"],
+                private_ctx=ctx["private_ctx"],
+                latest_prices=ctx["latest_prices"],
                 auto_refresh_run_every=run_every,
             )
         elif selected_page == "Strategy":
@@ -104,12 +120,16 @@ def main() -> None:
         elif selected_page == "Reports":
             render_reports_page(today=today, config=config)
         elif selected_page == "Logs":
-            render_logs_page(private_ctx=private_ctx, today=today)
+            render_logs_page(
+                private_ctx=get_private_ctx(open_orders_mode="none"),
+                today=today,
+            )
         elif selected_page == "Diagnostics":
+            ctx = get_dashboard_ctx()
             render_diagnostics_page(
                 today=today,
-                private_ctx=private_ctx,
-                latest_prices=latest_prices,
+                private_ctx=ctx["private_ctx"],
+                latest_prices=ctx["latest_prices"],
             )
         else:
             render_config_page(config=config)

@@ -293,13 +293,34 @@ def render_account_page(
                 payload = entry.get("data", {})
                 rows = payload.get("result", payload) if isinstance(payload, dict) else payload
                 count = len(rows) if isinstance(rows, list) else 0
-                open_rows.append({"symbol": symbol, "status": "OK", "open_orders": count})
+                open_rows.append(
+                    {
+                        "symbol": symbol,
+                        "status": "OK",
+                        "open_orders": str(count),
+                        "detail": "",
+                    }
+                )
             else:
                 error_message = str(entry.get("error") or "")
                 if "Endpoint not found for path /api/market/my-open-orders" in error_message or "Endpoint not found for path /api/v3/market/my-open-orders" in error_message:
-                    open_rows.append({"symbol": symbol, "status": "UNSUPPORTED", "open_orders": "n/a"})
+                    open_rows.append(
+                        {
+                            "symbol": symbol,
+                            "status": "UNSUPPORTED",
+                            "open_orders": "n/a",
+                            "detail": "my-open-orders is unsupported for this symbol",
+                        }
+                    )
                 else:
-                    open_rows.append({"symbol": symbol, "status": "ERROR", "open_orders": error_message})
+                    open_rows.append(
+                        {
+                            "symbol": symbol,
+                            "status": "ERROR",
+                            "open_orders": "n/a",
+                            "detail": error_message,
+                        }
+                    )
 
     unsupported_open_order_symbols = sum(1 for row in open_rows if str(row.get("status")) == "UNSUPPORTED")
     error_open_order_symbols = sum(1 for row in open_rows if str(row.get("status")) == "ERROR")
