@@ -206,11 +206,17 @@ def render_sidebar(
     config: dict[str, Any],
     private_ctx: dict[str, Any],
     selected_page: str,
+    version_label: str,
+    version_detail: str,
 ) -> str:
     with st.sidebar:
         render_sidebar_block(
             "Workspace",
             f"Mode <strong>{str(config['mode']).upper()}</strong><br>Config <code>{CONFIG_PATH}</code><br>SQLite <code>{DB_PATH}</code>",
+        )
+        render_sidebar_block(
+            "Deployment",
+            f"Version <strong>{version_label}</strong><br>{version_detail}",
         )
         st.markdown("### Navigation")
         if st.session_state.get("sidebar_page") not in PAGE_ORDER:

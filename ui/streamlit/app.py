@@ -5,6 +5,11 @@ import streamlit as st
 from config import reload_config
 from services.db_service import init_db
 from ui.streamlit.data import build_dashboard_context, sidebar_private_context
+from services.version_service import (
+    format_app_version_detail,
+    format_app_version_label,
+    get_app_version_snapshot,
+)
 from ui.streamlit.pages import (
     render_account_page,
     render_config_page,
@@ -38,7 +43,10 @@ st.set_page_config(
 def main() -> None:
     inject_css()
     init_db()
-    render_hero()
+    version_snapshot = get_app_version_snapshot()
+    version_label = format_app_version_label(version_snapshot)
+    version_detail = format_app_version_detail(version_snapshot)
+    render_hero(version_label=version_label, version_detail=version_detail)
 
     config, config_errors = reload_config()
     if config is None:
@@ -70,6 +78,8 @@ def main() -> None:
         config=config,
         private_ctx=sidebar_private_context(),
         selected_page=current_page,
+        version_label=version_label,
+        version_detail=version_detail,
     )
     st.session_state["ui_page"] = selected_page
     if st.query_params.get("page") != selected_page:

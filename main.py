@@ -103,6 +103,11 @@ from services.ui_service import (
     render_header,
     section_title,
 )
+from services.version_service import (
+    format_app_version_detail,
+    format_app_version_label,
+    get_app_version_snapshot,
+)
 from state import cooldowns, daily_stats, last_zones, positions
 from utils.time_utils import now_dt, now_text, today_key
 
@@ -290,6 +295,20 @@ def main():
     init_db()
     ensure_signal_log_file()
     ensure_trade_log_file()
+    version_snapshot = get_app_version_snapshot()
+    app_version_label = format_app_version_label(version_snapshot)
+    app_version_detail = format_app_version_detail(version_snapshot)
+    version_message = f"Application version {app_version_label}"
+    print(version_message)
+    if app_version_detail:
+        print(f"Version details: {app_version_detail}")
+    insert_runtime_event(
+        created_at=now_text(),
+        event_type="app_version",
+        severity="info",
+        message=version_message,
+        details=version_snapshot,
+    )
 
     manual_pause, restore_messages = load_runtime_state(
         last_zones, positions, daily_stats, cooldowns
@@ -3076,6 +3095,8 @@ def main():
             )
             render_header(
                 timestamp=timestamp,
+                app_version_label=app_version_label,
+                app_version_detail=app_version_detail,
                 trading_mode=trading_mode,
                 fee_rate=fee_rate,
                 interval_seconds=interval_seconds,

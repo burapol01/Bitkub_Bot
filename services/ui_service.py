@@ -56,6 +56,8 @@ def pause_hotkey_text(manual_pause: bool, safety_pause: bool) -> str:
 def render_header(
     *,
     timestamp: str,
+    app_version_label: str,
+    app_version_detail: str,
     trading_mode: str,
     fee_rate: float,
     interval_seconds: int,
@@ -107,6 +109,10 @@ def render_header(
     print(runtime_line)
     print(totals_line)
     print(pause_line)
+    if app_version_detail:
+        print(f"Version: {app_version_label} | {app_version_detail}")
+    else:
+        print(f"Version: {app_version_label}")
     print(f"Private API: {private_api_status}")
     if private_api_capabilities:
         print(f"Capabilities: {' | '.join(private_api_capabilities)}")

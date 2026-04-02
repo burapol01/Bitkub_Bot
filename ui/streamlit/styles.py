@@ -82,6 +82,16 @@ html, body, [class*="css"] {
   font-size: 1rem;
 }
 
+.hero-meta {
+  margin-top: 0.75rem;
+}
+
+.hero-meta-sub {
+  margin-top: 0.35rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .metric-card {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -335,13 +345,28 @@ def render_sidebar_block(title: str, body: str) -> None:
     )
 
 
-def render_hero() -> None:
+def render_hero(*, version_label: str = "", version_detail: str = "") -> None:
+    version_html = ""
+    if version_label or version_detail:
+        detail_html = (
+            f'<div class="hero-meta-sub">{version_detail}</div>'
+            if version_detail
+            else ""
+        )
+        version_html = (
+            '<div class="hero-meta">'
+            f'{badge(f"Version {version_label}", "info")}'
+            f"{detail_html}"
+            "</div>"
+        )
+
     st.markdown(
-        """
+        f"""
         <div class="hero">
           <div class="hero-kicker">Bitkub Bot Control Surface</div>
           <div class="hero-title">Live operations, diagnostics, and reports in one place</div>
           <p class="hero-sub">This dashboard sits on top of the current console bot and reuses the same SQLite, private API, and execution services.</p>
+          {version_html}
         </div>
         """,
         unsafe_allow_html=True,
