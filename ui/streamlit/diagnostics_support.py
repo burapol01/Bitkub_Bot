@@ -5,17 +5,14 @@ from typing import Any
 
 import streamlit as st
 
-from config import reload_config
-from services.account_service import build_live_holdings_snapshot
+from services.account_service import account_snapshot_errors, build_live_holdings_snapshot
 from services.db_service import (
     fetch_dashboard_summary,
     fetch_db_maintenance_summary,
     fetch_execution_console_summary,
     fetch_latest_filled_execution_orders_by_symbol,
+    fetch_logs_page_dataset,
     fetch_open_execution_orders,
-    fetch_recent_telegram_command_log,
-    fetch_recent_telegram_outbox,
-    fetch_runtime_event_log,
 )
 from services.reconciliation_service import summarize_live_reconciliation
 from services.telegram_service import telegram_settings_snapshot
@@ -162,32 +159,72 @@ def _runtime_event_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
-def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_logs_page_payload(today: str) -> dict[str, Any]:
+    dataset = fetch_logs_page_dataset(today=today)
+    return {
+        "latest_account_snapshot": dataset.get("latest_account_snapshot"),
+        "historical_rows": [
+            classify_runtime_event(row)
+            for row in list(dataset.get("historical_rows") or [])
+        ],
+        "error_rows": [
+            classify_runtime_event(row)
+            for row in list(dataset.get("error_rows") or [])
+        ],
+        "telegram_rows": list(dataset.get("telegram_rows") or []),
+        "telegram_command_rows": list(dataset.get("telegram_command_rows") or []),
+        "today_reporting": dict(dataset.get("today_reporting") or {}),
+    }
+
+
+def _current_issue_rows_from_latest_snapshot(
+    latest_account_snapshot: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not latest_account_snapshot:
+        return []
+
+    snapshot = latest_account_snapshot.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return []
+
+    current_issue_rows = current_private_api_issues(
+        {
+            "errors": account_snapshot_errors(snapshot),
+            "account_snapshot": snapshot,
+        }
+    )
+    snapshot_created_at = str(latest_account_snapshot.get("created_at") or "latest snapshot")
+    for row in current_issue_rows:
+        row["created_at"] = snapshot_created_at
+    return current_issue_rows
+
+
+def render_logs_page(*, config: dict[str, Any], today: str) -> None:
     render_section_intro(
         "Logs & Errors",
         "Start with the current issues and fee watch, then go deeper into runtime history only when needed.",
         "Diagnostics",
     )
 
-    current_issue_rows = current_private_api_issues(private_ctx)
-    historical_rows = [classify_runtime_event(row) for row in fetch_runtime_event_log(limit=200)]
-    error_rows = [
-        classify_runtime_event(row)
-        for row in fetch_runtime_event_log(limit=200, severity="error")
-    ]
-    telegram_rows = fetch_recent_telegram_outbox(limit=50)
-    telegram_command_rows = fetch_recent_telegram_command_log(limit=50)
-    telegram_settings = telegram_settings_snapshot(reload_config()[0] or {})
-    dashboard_summary = fetch_dashboard_summary(today=today)
-    paper_today = dict(dashboard_summary.get("paper_trades") or {})
-    live_today = dict(dashboard_summary.get("live_execution_pnl") or {})
-    paper_realized_today = float(paper_today.get("today_realized_pnl", 0.0) or 0.0)
-    live_realized_today = float(live_today.get("today_realized_pnl", 0.0) or 0.0)
-    paper_fee_today = float(paper_today.get("today_fee_thb", 0.0) or 0.0)
-    live_fee_today = float(live_today.get("today_fee_thb", 0.0) or 0.0)
+    logs_payload = _cached_logs_page_payload(today)
+    latest_account_snapshot = logs_payload.get("latest_account_snapshot")
+    current_issue_rows = _current_issue_rows_from_latest_snapshot(latest_account_snapshot)
+    historical_rows = list(logs_payload.get("historical_rows") or [])
+    error_rows = list(logs_payload.get("error_rows") or [])
+    telegram_rows = list(logs_payload.get("telegram_rows") or [])
+    telegram_command_rows = list(logs_payload.get("telegram_command_rows") or [])
+    telegram_settings = telegram_settings_snapshot(config)
+    today_reporting = dict(logs_payload.get("today_reporting") or {})
+    paper_realized_today = float(today_reporting.get("paper_pnl_thb", 0.0) or 0.0)
+    live_realized_today = float(today_reporting.get("live_realized_pnl_thb", 0.0) or 0.0)
+    paper_fee_today = float(today_reporting.get("paper_fee_thb", 0.0) or 0.0)
+    live_fee_today = float(today_reporting.get("live_fee_thb", 0.0) or 0.0)
     combined_realized_today = paper_realized_today + live_realized_today
     combined_fee_today = paper_fee_today + live_fee_today
-    combined_trades_today = int(paper_today.get("today", 0) or 0) + int(live_today.get("today", 0) or 0)
+    combined_trades_today = int(today_reporting.get("paper_trades", 0) or 0) + int(
+        today_reporting.get("live_closed_trades", 0) or 0
+    )
     combined_avg_pnl_today = (combined_realized_today / combined_trades_today) if combined_trades_today else 0.0
     combined_avg_fee_today = (combined_fee_today / combined_trades_today) if combined_trades_today else 0.0
     fee_drag_reference = combined_realized_today + combined_fee_today if combined_realized_today > 0 else 0.0
@@ -205,7 +242,13 @@ def render_logs_page(*, private_ctx: dict[str, Any], today: str) -> None:
     for row in current_issue_rows + historical_rows:
         category_counts[str(row.get("category") or "General")] += 1
 
-    if current_issue_rows:
+    if latest_account_snapshot is None:
+        render_callout(
+            "No Account Snapshot Recorded Yet",
+            "Logs are showing persisted runtime history, but the engine has not written an account snapshot yet.",
+            "info",
+        )
+    elif current_issue_rows:
         render_callout(
             "Current Issues Need Attention",
             f"There are {len(current_issue_rows)} current issue(s) in the latest snapshot. Start with the Current Issues table before reviewing historical events.",
