@@ -46,53 +46,53 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-from config import reload_config
+          from config import reload_config
 
-config, errors = reload_config()
-if config is None:
-    raise SystemExit("Config validation failed: " + "; ".join(errors))
+          config, errors = reload_config()
+          if config is None:
+              raise SystemExit("Config validation failed: " + "; ".join(errors))
 
-print("Config validation ok")
-print("Mode:", config.get("mode"))
-PY
+          print("Config validation ok")
+          print("Mode:", config.get("mode"))
+          PY
 
       - name: Compile tracked Python files
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-import subprocess
-from pathlib import Path
+          import subprocess
+          from pathlib import Path
 
-files = [
-    line.strip()
-    for line in subprocess.check_output(
-        ["git", "ls-files", "*.py"],
-        text=True,
-        encoding="utf-8",
-    ).splitlines()
-    if line.strip()
-]
+          files = [
+              line.strip()
+              for line in subprocess.check_output(
+                  ["git", "ls-files", "*.py"],
+                  text=True,
+                  encoding="utf-8",
+              ).splitlines()
+              if line.strip()
+          ]
 
-for path in files:
-    compile(Path(path).read_text(encoding="utf-8"), path, "exec")
+          for path in files:
+              compile(Path(path).read_text(encoding="utf-8"), path, "exec")
 
-print(f"Compile smoke check ok for {len(files)} Python files")
-PY
+          print(f"Compile smoke check ok for {len(files)} Python files")
+          PY
 
       - name: Check version metadata resolution
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-from services.version_service import (
-    format_app_version_detail,
-    format_app_version_label,
-    get_app_version_snapshot,
-)
+          from services.version_service import (
+              format_app_version_detail,
+              format_app_version_label,
+              get_app_version_snapshot,
+          )
 
-get_app_version_snapshot.cache_clear()
-snapshot = get_app_version_snapshot()
-print("Version label:", format_app_version_label(snapshot))
-print("Version detail:", format_app_version_detail(snapshot))
-PY
+          get_app_version_snapshot.cache_clear()
+          snapshot = get_app_version_snapshot()
+          print("Version label:", format_app_version_label(snapshot))
+          print("Version detail:", format_app_version_detail(snapshot))
+          PY
