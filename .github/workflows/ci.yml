@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BITKUB_CONFIG_BASE_PATH: config.base.json
+      BITKUB_CONFIG_PATH: config.json
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Validate layered config
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+from config import reload_config
+
+config, errors = reload_config()
+if config is None:
+    raise SystemExit("Config validation failed: " + "; ".join(errors))
+
+print("Config validation ok")
+print("Mode:", config.get("mode"))
+PY
+
+      - name: Compile tracked Python files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import subprocess
+from pathlib import Path
+
+files = [
+    line.strip()
+    for line in subprocess.check_output(
+        ["git", "ls-files", "*.py"],
+        text=True,
+        encoding="utf-8",
+    ).splitlines()
+    if line.strip()
+]
+
+for path in files:
+    compile(Path(path).read_text(encoding="utf-8"), path, "exec")
+
+print(f"Compile smoke check ok for {len(files)} Python files")
+PY
+
+      - name: Check version metadata resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+from services.version_service import (
+    format_app_version_detail,
+    format_app_version_label,
+    get_app_version_snapshot,
+)
+
+get_app_version_snapshot.cache_clear()
+snapshot = get_app_version_snapshot()
+print("Version label:", format_app_version_label(snapshot))
+print("Version detail:", format_app_version_detail(snapshot))
+PY
