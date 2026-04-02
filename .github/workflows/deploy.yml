@@ -1,9 +1,11 @@
 name: Deploy Production
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -16,6 +18,13 @@ concurrency:
 jobs:
   deploy:
     name: Deploy To DigitalOcean
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
@@ -23,6 +32,7 @@ jobs:
       APP_ROOT: /opt/bitkub/Bitkub_Bot
       VENV_PATH: /opt/bitkub/Bitkub_Bot/.venv
       DEPLOY_BRANCH: main
+      DEPLOY_EXPECT_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
     steps:
       - name: Configure SSH
         shell: bash
@@ -46,7 +56,6 @@ jobs:
           DO_SSH_HOST: ${{ secrets.DO_SSH_HOST }}
           DO_SSH_PORT: ${{ secrets.DO_SSH_PORT }}
           DO_SSH_USER: ${{ secrets.DO_SSH_USER }}
-          DEPLOY_EXPECT_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           : "${DO_SSH_HOST:?Missing GitHub secret DO_SSH_HOST}"

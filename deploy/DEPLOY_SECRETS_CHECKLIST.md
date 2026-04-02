@@ -1,11 +1,15 @@
 # GitHub Actions SSH Deploy Checklist
 
-This project now supports a simple production deploy flow:
+This project now supports a simple CI-before-CD production flow:
 
-1. Push to `main`
-2. GitHub Actions opens an SSH session to the DigitalOcean droplet
-3. The runner calls `deploy/deploy_prod.sh`
-4. The droplet pulls the latest code, installs dependencies, runs smoke checks, and restarts `bitkub-engine` plus `bitkub-streamlit`
+1. Work on a feature or fix branch
+2. Open a pull request into `main`
+3. GitHub Actions runs `CI`
+4. Merge into `main` only after `CI` passes
+5. GitHub Actions waits for the `CI` run on `main` to finish successfully
+6. The deploy workflow opens an SSH session to the DigitalOcean droplet
+7. The runner calls `deploy/deploy_prod.sh`
+8. The droplet pulls the latest code, installs dependencies, runs smoke checks, and restarts `bitkub-engine` plus `bitkub-streamlit`
 
 ## 1. Server Prerequisites
 
@@ -130,14 +134,15 @@ cd /opt/bitkub/Bitkub_Bot
 bash deploy/deploy_prod.sh
 ```
 
-If that works manually, the GitHub Actions workflow should work too.
+If that works manually, the GitHub Actions deploy workflow should work too.
 
 ## 7. Recommended Rollout Order
 
 - run `deploy/deploy_prod.sh` manually once on the droplet
 - confirm both services restart cleanly
-- push a tiny commit to `main`
-- watch the GitHub Actions run
+- open a PR and confirm `CI` passes
+- merge into `main`
+- watch the `CI` run on `main`, then the deploy workflow
 - confirm the app version shown in UI and engine logs matches the new commit
 
 ## 8. Notes
