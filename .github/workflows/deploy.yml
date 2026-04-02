@@ -1,0 +1,56 @@
+name: Deploy Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy To DigitalOcean
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      APP_ROOT: /opt/bitkub/Bitkub_Bot
+      VENV_PATH: /opt/bitkub/Bitkub_Bot/.venv
+      DEPLOY_BRANCH: main
+    steps:
+      - name: Configure SSH
+        shell: bash
+        env:
+          DO_SSH_PRIVATE_KEY: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          DO_SSH_KNOWN_HOSTS: ${{ secrets.DO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${DO_SSH_PRIVATE_KEY:?Missing GitHub secret DO_SSH_PRIVATE_KEY}"
+          : "${DO_SSH_KNOWN_HOSTS:?Missing GitHub secret DO_SSH_KNOWN_HOSTS}"
+
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DO_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DO_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run Remote Deploy Script
+        shell: bash
+        env:
+          DO_SSH_HOST: ${{ secrets.DO_SSH_HOST }}
+          DO_SSH_PORT: ${{ secrets.DO_SSH_PORT }}
+          DO_SSH_USER: ${{ secrets.DO_SSH_USER }}
+          DEPLOY_EXPECT_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          : "${DO_SSH_HOST:?Missing GitHub secret DO_SSH_HOST}"
+          : "${DO_SSH_USER:?Missing GitHub secret DO_SSH_USER}"
+
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "${DO_SSH_PORT:-22}" "${DO_SSH_USER}@${DO_SSH_HOST}" \
+            "if [ ! -f '${APP_ROOT}/deploy/deploy_prod.sh' ]; then cd '${APP_ROOT}' && git fetch origin '${DEPLOY_BRANCH}' && git pull --ff-only origin '${DEPLOY_BRANCH}'; fi; export BITKUB_APP_ROOT='${APP_ROOT}' BITKUB_VENV_PATH='${VENV_PATH}' BITKUB_DEPLOY_REMOTE='origin' BITKUB_DEPLOY_BRANCH='${DEPLOY_BRANCH}' BITKUB_DEPLOY_EXPECT_COMMIT='${DEPLOY_EXPECT_COMMIT}'; bash '${APP_ROOT}/deploy/deploy_prod.sh'"
