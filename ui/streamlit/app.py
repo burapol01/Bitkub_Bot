@@ -4,7 +4,7 @@ import streamlit as st
 
 from config import reload_config
 from services.db_service import init_db
-from ui.streamlit.data import build_dashboard_context, private_context, sidebar_private_context
+from ui.streamlit.data import build_dashboard_context, sidebar_private_context
 from ui.streamlit.pages import (
     render_account_page,
     render_config_page,
@@ -57,20 +57,8 @@ def main() -> None:
     if st.session_state.get("ui_page") not in PAGE_ORDER:
         st.session_state["ui_page"] = default_page
     current_page = str(st.session_state.get("ui_page", default_page))
-    rule_symbols = tuple(sorted(str(symbol) for symbol in config.get("rules", {})))
     today = today_key()
-    private_ctx_cache: dict[str, dict] = {}
     dashboard_ctx: dict | None = None
-
-    def get_private_ctx(*, open_orders_mode: str) -> dict[str, object]:
-        cached = private_ctx_cache.get(open_orders_mode)
-        if cached is None:
-            cached = private_context(
-                rule_symbols=rule_symbols,
-                open_orders_mode=open_orders_mode,
-            )
-            private_ctx_cache[open_orders_mode] = cached
-        return cached
 
     def get_dashboard_ctx() -> dict[str, object]:
         nonlocal dashboard_ctx
@@ -121,7 +109,7 @@ def main() -> None:
             render_reports_page(today=today, config=config)
         elif selected_page == "Logs":
             render_logs_page(
-                private_ctx=get_private_ctx(open_orders_mode="none"),
+                config=config,
                 today=today,
             )
         elif selected_page == "Diagnostics":

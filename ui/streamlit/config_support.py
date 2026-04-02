@@ -10,6 +10,17 @@ from ui.streamlit.strategy_support import build_rule_seed, fetch_market_symbol_u
 from ui.streamlit.styles import badge, render_metric_card
 
 
+def _sync_form_defaults(*, prefix: str, values: dict[str, Any]) -> None:
+    signature_key = f"{prefix}__signature"
+    signature = tuple((key, values[key]) for key in sorted(values))
+    if st.session_state.get(signature_key) == signature:
+        return
+
+    for key, value in values.items():
+        st.session_state[f"{prefix}_{key}"] = value
+    st.session_state[signature_key] = signature
+
+
 def _show_config_save_feedback() -> None:
     summary_lines = st.session_state.get("config_save_summary")
     summary_title = st.session_state.get("config_save_title")
@@ -120,56 +131,123 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     with left:
         st.markdown("#### System Settings")
         st.caption("These fields shape the console engine behavior after it reloads config.")
+        modes = ["paper", "read-only", "live-disabled", "live"]
+        rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
+        current_rank_resolution = str(config.get("live_auto_entry_rank_resolution", "240"))
+        if current_rank_resolution not in {"1", "5", "15", "60", "240", "1D"}:
+            current_rank_resolution = "240"
+        current_biases = [
+            bias
+            for bias in list(config.get("live_auto_entry_allowed_biases", ["bullish", "mixed"]))
+            if bias in {"bullish", "mixed", "weak"}
+        ] or ["bullish", "mixed"]
+        _sync_form_defaults(
+            prefix="config_system",
+            values={
+                "mode": str(config["mode"]),
+                "base_url": str(config["base_url"]),
+                "fee_rate": float(config["fee_rate"]),
+                "interval_seconds": int(config["interval_seconds"]),
+                "cooldown_seconds": int(config["cooldown_seconds"]),
+                "live_execution_enabled": bool(config["live_execution_enabled"]),
+                "live_auto_entry_enabled": bool(config.get("live_auto_entry_enabled", False)),
+                "live_auto_exit_enabled": bool(config.get("live_auto_exit_enabled", False)),
+                "live_auto_entry_require_ranking": bool(config.get("live_auto_entry_require_ranking", True)),
+                "live_auto_entry_rank_resolution": current_rank_resolution,
+                "live_auto_entry_rank_lookback_days": int(config.get("live_auto_entry_rank_lookback_days", 14)),
+                "live_auto_entry_min_score": float(config.get("live_auto_entry_min_score", 50.0)),
+                "live_auto_entry_allowed_biases": list(current_biases),
+                "live_max_order_thb": float(config["live_max_order_thb"]),
+                "live_min_thb_balance": float(config["live_min_thb_balance"]),
+                "live_slippage_tolerance_percent": float(config["live_slippage_tolerance_percent"]),
+                "live_daily_loss_limit_thb": float(config["live_daily_loss_limit_thb"]),
+            },
+        )
         with st.form("config_system_form"):
-            modes = ["paper", "read-only", "live-disabled", "live"]
-            mode = st.selectbox("Mode", modes, index=modes.index(str(config["mode"])))
-            base_url = st.text_input("Base URL", value=str(config["base_url"]))
-            fee_rate = st.number_input("Fee Rate", min_value=0.0, max_value=0.9999, value=float(config["fee_rate"]), format="%.6f")
-            interval_seconds = st.number_input("Interval Seconds", min_value=1, value=int(config["interval_seconds"]), step=1)
-            cooldown_seconds = st.number_input("Cooldown Seconds", min_value=0, value=int(config["cooldown_seconds"]), step=1)
-            live_execution_enabled = st.checkbox("Live Execution Enabled", value=bool(config["live_execution_enabled"]))
-            live_auto_entry_enabled = st.checkbox("Live Auto Entry Enabled", value=bool(config.get("live_auto_entry_enabled", False)))
-            live_auto_exit_enabled = st.checkbox("Live Auto Exit Enabled", value=bool(config.get("live_auto_exit_enabled", False)))
+            mode = st.selectbox("Mode", modes, key="config_system_mode")
+            base_url = st.text_input("Base URL", key="config_system_base_url")
+            fee_rate = st.number_input(
+                "Fee Rate",
+                min_value=0.0,
+                max_value=0.9999,
+                format="%.6f",
+                key="config_system_fee_rate",
+            )
+            interval_seconds = st.number_input(
+                "Interval Seconds",
+                min_value=1,
+                step=1,
+                key="config_system_interval_seconds",
+            )
+            cooldown_seconds = st.number_input(
+                "Cooldown Seconds",
+                min_value=0,
+                step=1,
+                key="config_system_cooldown_seconds",
+            )
+            live_execution_enabled = st.checkbox(
+                "Live Execution Enabled",
+                key="config_system_live_execution_enabled",
+            )
+            live_auto_entry_enabled = st.checkbox(
+                "Live Auto Entry Enabled",
+                key="config_system_live_auto_entry_enabled",
+            )
+            live_auto_exit_enabled = st.checkbox(
+                "Live Auto Exit Enabled",
+                key="config_system_live_auto_exit_enabled",
+            )
             live_auto_entry_require_ranking = st.checkbox(
                 "Auto Entry Require Ranking",
-                value=bool(config.get("live_auto_entry_require_ranking", True)),
+                key="config_system_live_auto_entry_require_ranking",
             )
             live_auto_entry_rank_resolution = st.selectbox(
                 "Auto Entry Rank Resolution",
-                ["1", "5", "15", "60", "240", "1D"],
-                index=["1", "5", "15", "60", "240", "1D"].index(str(config.get("live_auto_entry_rank_resolution", "240")) if str(config.get("live_auto_entry_rank_resolution", "240")) in {"1", "5", "15", "60", "240", "1D"} else "240"),
+                rank_resolution_options,
+                key="config_system_live_auto_entry_rank_resolution",
             )
             live_auto_entry_rank_lookback_days = st.number_input(
                 "Auto Entry Rank Lookback Days",
                 min_value=1,
-                value=int(config.get("live_auto_entry_rank_lookback_days", 14)),
                 step=1,
+                key="config_system_live_auto_entry_rank_lookback_days",
             )
             live_auto_entry_min_score = st.number_input(
                 "Auto Entry Minimum Score",
                 min_value=0.0,
                 max_value=100.0,
-                value=float(config.get("live_auto_entry_min_score", 50.0)),
                 step=1.0,
+                key="config_system_live_auto_entry_min_score",
             )
             live_auto_entry_allowed_biases = st.multiselect(
                 "Auto Entry Allowed Biases",
                 ["bullish", "mixed", "weak"],
-                default=[
-                    bias
-                    for bias in list(config.get("live_auto_entry_allowed_biases", ["bullish", "mixed"]))
-                    if bias in {"bullish", "mixed", "weak"}
-                ] or ["bullish", "mixed"],
+                key="config_system_live_auto_entry_allowed_biases",
             )
-            live_max_order_thb = st.number_input("Live Max Order THB", min_value=1.0, value=float(config["live_max_order_thb"]), step=10.0)
-            live_min_thb_balance = st.number_input("Live Min THB Balance", min_value=0.0, value=float(config["live_min_thb_balance"]), step=10.0)
+            live_max_order_thb = st.number_input(
+                "Live Max Order THB",
+                min_value=1.0,
+                step=10.0,
+                key="config_system_live_max_order_thb",
+            )
+            live_min_thb_balance = st.number_input(
+                "Live Min THB Balance",
+                min_value=0.0,
+                step=10.0,
+                key="config_system_live_min_thb_balance",
+            )
             live_slippage_tolerance_percent = st.number_input(
                 "Live Slippage Tolerance %",
                 min_value=0.01,
-                value=float(config["live_slippage_tolerance_percent"]),
                 format="%.2f",
+                key="config_system_live_slippage_tolerance_percent",
             )
-            live_daily_loss_limit_thb = st.number_input("Live Daily Loss Limit THB", min_value=1.0, value=float(config["live_daily_loss_limit_thb"]), step=50.0)
+            live_daily_loss_limit_thb = st.number_input(
+                "Live Daily Loss Limit THB",
+                min_value=1.0,
+                step=50.0,
+                key="config_system_live_daily_loss_limit_thb",
+            )
             submitted_system = st.form_submit_button("Save System Settings", width='stretch')
 
         if submitted_system:

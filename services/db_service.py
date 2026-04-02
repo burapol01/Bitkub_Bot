@@ -850,17 +850,20 @@ def _extract_execution_fee_thb(response_payload: dict[str, Any]) -> float:
         return 0.0
 
 
-def _build_live_execution_trade_history() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, created_at, updated_at, symbol, side, request_json, response_json
-            FROM execution_orders
-            WHERE state = 'filled'
-            ORDER BY created_at ASC, id ASC
-            """
-        ).fetchall()
+def _fetch_filled_execution_order_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT id, created_at, updated_at, symbol, side, request_json, response_json
+        FROM execution_orders
+        WHERE state = 'filled'
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
 
+
+def _build_live_execution_trade_history_from_rows(
+    rows: list[sqlite3.Row],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     inventory: dict[str, list[dict[str, float]]] = {}
     closed_trades: list[dict[str, Any]] = []
     filled_orders: list[dict[str, Any]] = []
@@ -956,6 +959,18 @@ def _build_live_execution_trade_history() -> tuple[list[dict[str, Any]], list[di
         )
 
     return filled_orders, closed_trades
+
+
+def _build_live_execution_trade_history(
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if conn is None:
+        with _connect() as local_conn:
+            rows = _fetch_filled_execution_order_rows(local_conn)
+    else:
+        rows = _fetch_filled_execution_order_rows(conn)
+    return _build_live_execution_trade_history_from_rows(rows)
 
 
 
@@ -1112,6 +1127,155 @@ def fetch_daily_reporting_summary(
         results.append(summary)
 
     return results
+
+
+def fetch_logs_page_dataset(
+    *,
+    today: str,
+    runtime_limit: int = 200,
+    telegram_limit: int = 50,
+) -> dict[str, Any]:
+    with _connect() as conn:
+        latest_account_snapshot = conn.execute(
+            """
+            SELECT id, created_at, source, private_api_status, capabilities_json, snapshot_json
+            FROM account_snapshots
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        runtime_rows = conn.execute(
+            """
+            SELECT id, created_at, event_type, severity, message, details_json
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(runtime_limit),),
+        ).fetchall()
+        error_rows = conn.execute(
+            """
+            SELECT id, created_at, event_type, severity, message, details_json
+            FROM runtime_events
+            WHERE severity = 'error'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(runtime_limit),),
+        ).fetchall()
+        telegram_rows = conn.execute(
+            """
+            SELECT id, created_at, event_type, title, body, payload_json, status
+            FROM telegram_outbox
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(telegram_limit),),
+        ).fetchall()
+        telegram_command_rows = conn.execute(
+            """
+            SELECT id, created_at, update_id, chat_id, username, command_text, status, response_text
+            FROM telegram_command_log
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(telegram_limit),),
+        ).fetchall()
+        paper_today_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS paper_trades,
+                COALESCE(SUM(pnl_thb), 0) AS paper_pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS paper_fee_thb
+            FROM paper_trade_logs
+            WHERE sell_time LIKE ?
+            """,
+            (f"{today}%",),
+        ).fetchone()
+        filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+
+    today_closed_trades = [
+        row
+        for row in closed_trades
+        if str(row.get("updated_at") or row.get("created_at") or "").startswith(f"{today}")
+    ]
+    today_filled_orders = [
+        row
+        for row in filled_orders
+        if str(row.get("event_time") or "").startswith(f"{today}")
+    ]
+
+    return {
+        "latest_account_snapshot": (
+            {
+                "id": int(latest_account_snapshot["id"]),
+                "created_at": latest_account_snapshot["created_at"],
+                "source": latest_account_snapshot["source"],
+                "private_api_status": latest_account_snapshot["private_api_status"],
+                "capabilities": _load_json(
+                    latest_account_snapshot["capabilities_json"], []
+                ),
+                "snapshot": _load_json(latest_account_snapshot["snapshot_json"], {}),
+            }
+            if latest_account_snapshot
+            else None
+        ),
+        "historical_rows": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "event_type": row["event_type"],
+                "severity": row["severity"],
+                "message": row["message"],
+                "details": _load_json(row["details_json"], {}),
+            }
+            for row in runtime_rows
+        ],
+        "error_rows": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "event_type": row["event_type"],
+                "severity": row["severity"],
+                "message": row["message"],
+                "details": _load_json(row["details_json"], {}),
+            }
+            for row in error_rows
+        ],
+        "telegram_rows": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "event_type": row["event_type"],
+                "title": row["title"],
+                "body": row["body"],
+                "payload": _load_json(row["payload_json"], {}),
+                "status": row["status"],
+            }
+            for row in telegram_rows
+        ],
+        "telegram_command_rows": [dict(row) for row in telegram_command_rows],
+        "today_reporting": {
+            "paper_trades": int((paper_today_row or {})["paper_trades"] or 0)
+            if paper_today_row
+            else 0,
+            "paper_pnl_thb": float((paper_today_row or {})["paper_pnl_thb"] or 0.0)
+            if paper_today_row
+            else 0.0,
+            "paper_fee_thb": float((paper_today_row or {})["paper_fee_thb"] or 0.0)
+            if paper_today_row
+            else 0.0,
+            "live_closed_trades": len(today_closed_trades),
+            "live_realized_pnl_thb": sum(
+                float(row.get("pnl_thb", 0.0) or 0.0)
+                for row in today_closed_trades
+            ),
+            "live_fee_thb": sum(
+                float(row.get("fee_thb", 0.0) or 0.0)
+                for row in today_filled_orders
+            ),
+        },
+    }
 
 
 def fetch_dashboard_summary(
