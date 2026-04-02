@@ -35,6 +35,18 @@ def is_unsupported_symbol_error_message(error: str | None) -> bool:
     )
 
 
+def is_symbol_required_error_message(error: str | None) -> bool:
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return False
+
+    return (
+        "bitkub api error=10" in normalized
+        and "sym" in normalized
+        and "required" in normalized
+    )
+
+
 def _json_body(payload: dict[str, Any] | None) -> str:
     if not payload:
         return ""
@@ -341,7 +353,14 @@ class BitkubPrivateClient:
 
     def get_open_orders(self, symbol: str | None = None) -> Any:
         if symbol is None:
-            return self._request("GET", self.OPEN_ORDERS_PATHS)
+            try:
+                return self._request("GET", self.OPEN_ORDERS_PATHS)
+            except BitkubPrivateClientError as e:
+                if is_symbol_required_error_message(str(e)):
+                    raise BitkubPrivateClientError(
+                        "Open-orders endpoint requires sym; global open-orders query is not supported by this API path."
+                    ) from e
+                raise
 
         symbol_variants = (
             _quote_base_lower_symbol(symbol),
@@ -405,7 +424,14 @@ class BitkubPrivateClient:
         base_params = {"p": page, "lmt": limit}
 
         if symbol is None:
-            return self._request("GET", self.ORDER_HISTORY_PATHS, params=base_params)
+            try:
+                return self._request("GET", self.ORDER_HISTORY_PATHS, params=base_params)
+            except BitkubPrivateClientError as e:
+                if is_symbol_required_error_message(str(e)):
+                    raise BitkubPrivateClientError(
+                        "Order-history endpoint requires sym; global order-history query is not supported by this API path."
+                    ) from e
+                raise
 
         symbol_variants = (
             _base_quote_upper_symbol(symbol),

@@ -85,11 +85,17 @@ def _cached_private_context(
                 private_api_status = "wallet/balance ready, some order endpoints unavailable"
                 errors = snapshot_errors
             else:
-                private_api_status = (
-                    "wallet/balance ready"
-                    if open_orders_mode == "none"
-                    else "wallet/balance/open-orders ready"
+                open_orders_meta = (
+                    account_snapshot.get("open_orders_meta", {})
+                    if isinstance(account_snapshot, dict)
+                    else {}
                 )
+                if open_orders_mode == "none":
+                    private_api_status = "wallet/balance ready"
+                elif isinstance(open_orders_meta, dict) and open_orders_meta.get("requires_symbol"):
+                    private_api_status = "wallet/balance ready; open-orders requires per-symbol queries"
+                else:
+                    private_api_status = "wallet/balance/open-orders ready"
     except BitkubMissingCredentialsError:
         private_api_status = "missing credentials"
     except BitkubPrivateClientError as e:

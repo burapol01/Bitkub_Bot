@@ -3,6 +3,7 @@ from typing import Any
 from clients.bitkub_private_client import (
     BitkubPrivateClient,
     BitkubPrivateClientError,
+    is_symbol_required_error_message,
     is_unsupported_symbol_error_message,
 )
 from config import load_config
@@ -18,6 +19,10 @@ def _capture_result(fetcher) -> dict[str, Any]:
 
 def _is_unsupported_open_orders_error(error: str | None) -> bool:
     return is_unsupported_symbol_error_message(error)
+
+
+def _is_symbol_required_open_orders_error(error: str | None) -> bool:
+    return is_symbol_required_error_message(error)
 
 
 def _unwrap_result(payload: Any) -> Any:
@@ -86,6 +91,7 @@ def fetch_account_snapshot(
 
     if open_orders_mode == "none":
         open_orders_by_symbol: dict[str, Any] | None = None
+        open_orders_meta: dict[str, Any] = {"mode": "none", "requires_symbol": False}
     elif open_orders_mode == "global":
         global_open_orders = _capture_result(client.get_open_orders)
         if global_open_orders.get("ok", False):
@@ -93,10 +99,24 @@ def fetch_account_snapshot(
                 global_open_orders.get("data"),
                 tracked_symbols=tracked_symbols,
             )
+            open_orders_meta = {"mode": "global", "requires_symbol": False}
+        elif _is_symbol_required_open_orders_error(str(global_open_orders.get("error") or "")):
+            open_orders_by_symbol = {}
+            open_orders_meta = {
+                "mode": "global",
+                "requires_symbol": True,
+                "error": str(global_open_orders.get("error") or ""),
+            }
         else:
             open_orders_by_symbol = {"ALL": global_open_orders}
+            open_orders_meta = {
+                "mode": "global",
+                "requires_symbol": False,
+                "error": str(global_open_orders.get("error") or ""),
+            }
     else:
         open_orders_by_symbol = {}
+        open_orders_meta = {"mode": "per_symbol", "requires_symbol": False}
         for symbol in tracked_symbols:
             open_orders_by_symbol[symbol] = _capture_result(
                 lambda symbol=symbol: client.get_open_orders(symbol)
@@ -107,6 +127,7 @@ def fetch_account_snapshot(
         "wallet": _capture_result(client.get_wallet),
         "balances": _capture_result(client.get_balances),
         "open_orders": open_orders_by_symbol,
+        "open_orders_meta": open_orders_meta,
     }
 
 
@@ -123,6 +144,8 @@ def account_snapshot_errors(snapshot: dict[str, Any]) -> list[str]:
         for symbol in sorted(open_orders):
             entry = open_orders[symbol]
             if isinstance(entry, dict) and not entry.get("ok", False) and entry.get("error"):
+                if symbol == "ALL" and _is_symbol_required_open_orders_error(str(entry["error"])):
+                    continue
                 if _is_unsupported_open_orders_error(str(entry["error"])):
                     continue
                 errors.append(f"open_orders[{symbol}]: {entry['error']}")
@@ -182,6 +205,10 @@ def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
     open_order_entries = (
         list(open_orders.values()) if isinstance(open_orders, dict) else []
     )
+    open_orders_meta = snapshot.get("open_orders_meta", {})
+    requires_symbol = bool(
+        isinstance(open_orders_meta, dict) and open_orders_meta.get("requires_symbol")
+    )
 
     unsupported_entries = [
         entry
@@ -190,7 +217,9 @@ def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
     ]
     supported_entries = [entry for entry in open_order_entries if entry not in unsupported_entries]
 
-    if not open_order_entries:
+    if requires_symbol:
+        open_orders_status = "PARTIAL"
+    elif not open_order_entries:
         open_orders_status = "UNKNOWN"
     elif supported_entries and all(isinstance(entry, dict) and entry.get("ok", False) for entry in supported_entries):
         open_orders_status = "PARTIAL" if unsupported_entries else "OK"
