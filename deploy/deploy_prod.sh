@@ -12,6 +12,8 @@ DEPLOY_RESTART_STREAMLIT="${BITKUB_DEPLOY_RESTART_STREAMLIT:-1}"
 ENGINE_SERVICE="${BITKUB_ENGINE_SERVICE:-bitkub-engine}"
 STREAMLIT_SERVICE="${BITKUB_STREAMLIT_SERVICE:-bitkub-streamlit}"
 VERSION_FILE="${BITKUB_APP_VERSION_FILE:-$APP_ROOT/.bitkub-app-version.json}"
+RUNTIME_USER="${BITKUB_RUNTIME_USER:-bitkub}"
+RUNTIME_GROUP="${BITKUB_RUNTIME_GROUP:-$RUNTIME_USER}"
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -34,6 +36,25 @@ run_systemctl() {
   else
     fail "systemctl requires root or passwordless sudo"
   fi
+}
+
+ensure_runtime_ownership() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    local current_user
+    current_user="$(id -un)"
+    if [[ "$current_user" != "$RUNTIME_USER" ]]; then
+      log "Deploy is running as $current_user while services run as $RUNTIME_USER; prefer using the runtime user for SSH deploys"
+    fi
+    return
+  fi
+
+  if ! id "$RUNTIME_USER" >/dev/null 2>&1; then
+    log "Skipping ownership normalization because runtime user $RUNTIME_USER does not exist"
+    return
+  fi
+
+  log "Normalizing ownership to $RUNTIME_USER:$RUNTIME_GROUP for $APP_ROOT"
+  chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$APP_ROOT"
 }
 
 switch_branch() {
@@ -167,6 +188,7 @@ main() {
   "$VENV_PATH/bin/python" -m pip install -r requirements.txt
 
   write_version_metadata "$DEPLOY_BRANCH" "$current_commit" "$current_short"
+  ensure_runtime_ownership
   run_smoke_checks
   restart_services
 
