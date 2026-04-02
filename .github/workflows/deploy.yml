@@ -6,7 +6,14 @@ on:
       - CI
     types:
       - completed
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      deploy_branch:
+        description: Branch to deploy manually
+        required: false
+        default: main
 
 permissions:
   contents: read
@@ -31,8 +38,6 @@ jobs:
     env:
       APP_ROOT: /opt/bitkub/Bitkub_Bot
       VENV_PATH: /opt/bitkub/Bitkub_Bot/.venv
-      DEPLOY_BRANCH: main
-      DEPLOY_EXPECT_COMMIT: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
     steps:
       - name: Configure SSH
         shell: bash
@@ -56,6 +61,8 @@ jobs:
           DO_SSH_HOST: ${{ secrets.DO_SSH_HOST }}
           DO_SSH_PORT: ${{ secrets.DO_SSH_PORT }}
           DO_SSH_USER: ${{ secrets.DO_SSH_USER }}
+          DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_branch || 'main' }}
+          DEPLOY_EXPECT_COMMIT: ${{ github.event_name == 'workflow_dispatch' && '' || github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           : "${DO_SSH_HOST:?Missing GitHub secret DO_SSH_HOST}"
