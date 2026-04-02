@@ -1,33 +1,5 @@
 {
   "mode": "paper",
-  "base_url": "https://api.bitkub.com",
-  "fee_rate": 0.0025,
-  "interval_seconds": 10,
-  "cooldown_seconds": 60,
-  "live_execution_enabled": true,
-  "live_auto_entry_enabled": true,
-  "live_auto_exit_enabled": true,
-  "live_auto_entry_require_ranking": true,
-  "live_auto_entry_rank_resolution": "240",
-  "live_auto_entry_rank_lookback_days": 14,
-  "live_auto_entry_min_score": 50.0,
-  "live_auto_entry_allowed_biases": [
-    "bullish",
-    "mixed"
-  ],
-  "live_max_order_thb": 500.0,
-  "live_min_thb_balance": 100.0,
-  "live_slippage_tolerance_percent": 1.0,
-  "live_daily_loss_limit_thb": 1000.0,
-  "live_manual_order": {
-    "enabled": true,
-    "symbol": "THB_L3",
-    "side": "sell",
-    "order_type": "limit",
-    "amount_thb": 500.0,
-    "amount_coin": 3.41413451,
-    "rate": 30.0
-  },
   "watchlist_symbols": [
     "THB_0G",
     "THB_1INCH",
@@ -305,23 +277,6 @@
     "THB_ZRO",
     "THB_ZRX"
   ],
-  "telegram_enabled": true,
-  "telegram_control_enabled": true,
-  "telegram_notify_events": [
-    "config_reload",
-    "safety_pause",
-    "manual_live_order",
-    "auto_live_entry",
-    "auto_live_exit",
-    "runtime_error"
-  ],
-  "market_snapshot_retention_days": 30,
-  "signal_log_retention_days": 30,
-  "runtime_event_retention_days": 30,
-  "account_snapshot_retention_days": 30,
-  "reconciliation_retention_days": 30,
-  "signal_log_file": "signal_log.csv",
-  "trade_log_file": "paper_trade_log.csv",
   "rules": {
     "THB_BTC": {
       "buy_below": 2267100.0,

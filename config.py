@@ -8,6 +8,10 @@ CONFIG_PATH = get_env_path(
     "BITKUB_CONFIG_PATH",
     Path(__file__).resolve().parent / "config.json",
 )
+CONFIG_BASE_PATH = get_env_path(
+    "BITKUB_CONFIG_BASE_PATH",
+    Path(__file__).resolve().parent / "config.base.json",
+)
 
 ROOT_REQUIRED_FIELDS = {
     "mode",
@@ -75,9 +79,46 @@ SUPPORTED_TELEGRAM_NOTIFY_EVENTS = {
 _ACTIVE_CONFIG: dict[str, Any] | None = None
 
 
-def _read_config_file() -> dict[str, Any]:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+def _is_layered_config_enabled() -> bool:
+    try:
+        return CONFIG_BASE_PATH.resolve() != CONFIG_PATH.resolve() and CONFIG_BASE_PATH.exists()
+    except OSError:
+        return CONFIG_BASE_PATH != CONFIG_PATH and CONFIG_BASE_PATH.exists()
+
+
+def _read_json_object_file(path: Path, *, required: bool) -> dict[str, Any]:
+    if not path.exists():
+        if required:
+            raise OSError(f"{path} does not exist")
+        return {}
+
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+
+    if not isinstance(data, dict):
+        raise ValueError(f"{path.name} must contain a JSON object at the top level")
+
+    return data
+
+
+def _merge_config_layers(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _merge_config_layers(current, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _read_config_file() -> dict[str, Any]:
+    if _is_layered_config_enabled():
+        base_data = _read_json_object_file(CONFIG_BASE_PATH, required=True)
+        override_data = _read_json_object_file(CONFIG_PATH, required=False)
+        data = _merge_config_layers(base_data, override_data)
+    else:
+        data = _read_json_object_file(CONFIG_PATH, required=True)
 
     if not isinstance(data, dict):
         raise ValueError("config.json must contain a JSON object at the top level")
@@ -146,6 +187,23 @@ def _read_config_file() -> dict[str, Any]:
         data["reconciliation_retention_days"] = 30
 
     return data
+
+
+def _build_config_override(base: Any, current: Any) -> Any:
+    if isinstance(base, dict) and isinstance(current, dict):
+        diff: dict[str, Any] = {}
+        for key in sorted(current):
+            current_value = current[key]
+            base_value = base.get(key)
+            delta = _build_config_override(base_value, current_value)
+            if delta is not None:
+                diff[key] = delta
+        return diff or None
+
+    if base == current:
+        return None
+
+    return current
 
 
 def _is_number(value: Any) -> bool:
@@ -393,7 +451,7 @@ def reload_config() -> tuple[dict[str, Any] | None, list[str]]:
     except json.JSONDecodeError as e:
         return None, [f"invalid JSON at line {e.lineno}, column {e.colno}: {e.msg}"]
     except OSError as e:
-        return None, [f"unable to read config.json: {e}"]
+        return None, [f"unable to read config file: {e}"]
     except ValueError as e:
         return None, [str(e)]
 
@@ -410,13 +468,25 @@ def save_config(config: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str
     if errors:
         return None, errors
 
-    tmp_path = CONFIG_PATH.with_suffix(".tmp")
+    payload = config
+    target_path = CONFIG_PATH
+    if _is_layered_config_enabled():
+        try:
+            base_config = _read_json_object_file(CONFIG_BASE_PATH, required=True)
+        except json.JSONDecodeError as e:
+            return None, [f"invalid JSON at line {e.lineno}, column {e.colno}: {e.msg}"]
+        except (OSError, ValueError) as e:
+            return None, [f"unable to read base config: {e}"]
+        payload = _build_config_override(base_config, config) or {}
+
+    tmp_path = target_path.with_suffix(".tmp")
     try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=True)
-        tmp_path.replace(CONFIG_PATH)
+            json.dump(payload, f, indent=2, ensure_ascii=True)
+        tmp_path.replace(target_path)
     except OSError as e:
-        return None, [f"unable to write config.json: {e}"]
+        return None, [f"unable to write config file: {e}"]
 
     activate_config(config)
     return config, []

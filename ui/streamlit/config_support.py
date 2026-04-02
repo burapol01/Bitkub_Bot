@@ -4,7 +4,7 @@ from typing import Any
 
 import streamlit as st
 
-from config import CONFIG_PATH, save_config, summarize_config_changes
+from config import CONFIG_BASE_PATH, CONFIG_PATH, save_config, summarize_config_changes
 from services.telegram_service import DEFAULT_TELEGRAM_NOTIFY_EVENTS
 from ui.streamlit.strategy_support import build_rule_seed, fetch_market_symbol_universe
 from ui.streamlit.styles import badge, render_metric_card
@@ -56,7 +56,12 @@ def save_config_with_feedback(
 
 def render_config_page(*, config: dict[str, Any]) -> None:
     st.markdown('<div class="panel-title">Config Editor</div>', unsafe_allow_html=True)
-    st.caption(f"Source of truth: `{CONFIG_PATH}`")
+    if CONFIG_BASE_PATH.exists() and CONFIG_BASE_PATH != CONFIG_PATH:
+        st.caption(
+            f"Merged config: base=`{CONFIG_BASE_PATH}` + override=`{CONFIG_PATH}`"
+        )
+    else:
+        st.caption(f"Source of truth: `{CONFIG_PATH}`")
     _show_config_save_feedback()
 
     market_universe = fetch_market_symbol_universe()
@@ -73,8 +78,8 @@ def render_config_page(*, config: dict[str, Any]) -> None:
         """
         <div class="note-strip">
           <strong>Apply Model</strong><br>
-          Changes saved here write to <code>config.json</code> only.
-          The console engine remains the runner, so it still needs its own reload/apply step.
+          Changes saved here write to the active override file only.
+          The merged result still uses the base config underneath, and the console engine remains the runner so it still needs its own reload/apply step.
         </div>
         """,
         unsafe_allow_html=True,
