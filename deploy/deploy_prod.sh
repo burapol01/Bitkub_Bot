@@ -11,6 +11,7 @@ DEPLOY_UPGRADE_PIP="${BITKUB_DEPLOY_UPGRADE_PIP:-0}"
 DEPLOY_RESTART_STREAMLIT="${BITKUB_DEPLOY_RESTART_STREAMLIT:-1}"
 ENGINE_SERVICE="${BITKUB_ENGINE_SERVICE:-bitkub-engine}"
 STREAMLIT_SERVICE="${BITKUB_STREAMLIT_SERVICE:-bitkub-streamlit}"
+VERSION_FILE="${BITKUB_APP_VERSION_FILE:-$APP_ROOT/.bitkub-app-version.json}"
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -50,6 +51,38 @@ ensure_virtualenv() {
 
   log "Creating virtualenv at $VENV_PATH"
   "$DEPLOY_PYTHON_BIN" -m venv "$VENV_PATH"
+}
+
+write_version_metadata() {
+  local version_branch="$1"
+  local version_commit="$2"
+  local version_commit_short="$3"
+
+  log "Writing deploy version metadata to $VERSION_FILE"
+  BITKUB_WRITE_VERSION_FILE="$VERSION_FILE" \
+  BITKUB_WRITE_VERSION_BRANCH="$version_branch" \
+  BITKUB_WRITE_VERSION_COMMIT="$version_commit" \
+  BITKUB_WRITE_VERSION_COMMIT_SHORT="$version_commit_short" \
+  "$VENV_PATH/bin/python" -B - <<'PY'
+import json
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+payload = {
+    "source": "deploy",
+    "label": f"{os.environ['BITKUB_WRITE_VERSION_BRANCH']}@{os.environ['BITKUB_WRITE_VERSION_COMMIT_SHORT']}",
+    "branch": os.environ["BITKUB_WRITE_VERSION_BRANCH"],
+    "commit": os.environ["BITKUB_WRITE_VERSION_COMMIT"],
+    "commit_short": os.environ["BITKUB_WRITE_VERSION_COMMIT_SHORT"],
+    "dirty": False,
+    "deployed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+
+path = Path(os.environ["BITKUB_WRITE_VERSION_FILE"])
+path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+PY
+  chmod 644 "$VERSION_FILE"
 }
 
 run_smoke_checks() {
@@ -133,6 +166,7 @@ main() {
   log "Installing Python dependencies"
   "$VENV_PATH/bin/python" -m pip install -r requirements.txt
 
+  write_version_metadata "$DEPLOY_BRANCH" "$current_commit" "$current_short"
   run_smoke_checks
   restart_services
 

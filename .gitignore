@@ -133,3 +133,4 @@ backup/
 config.prod.override.json
 config.*.bak
 config.tmp
+.bitkub-app-version.json
