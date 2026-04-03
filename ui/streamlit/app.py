@@ -4,7 +4,11 @@ import streamlit as st
 
 from config import reload_config
 from services.db_service import init_db
-from ui.streamlit.data import build_dashboard_context, sidebar_private_context
+from ui.streamlit.data import (
+    build_dashboard_context,
+    build_overview_context,
+    sidebar_private_context,
+)
 from services.version_service import (
     format_app_version_detail,
     format_app_version_label,
@@ -67,12 +71,19 @@ def main() -> None:
     current_page = str(st.session_state.get("ui_page", default_page))
     today = today_key()
     dashboard_ctx: dict | None = None
+    overview_ctx: dict | None = None
 
     def get_dashboard_ctx() -> dict[str, object]:
         nonlocal dashboard_ctx
         if dashboard_ctx is None:
             dashboard_ctx = build_dashboard_context(config)
         return dashboard_ctx
+
+    def get_overview_ctx() -> dict[str, object]:
+        nonlocal overview_ctx
+        if overview_ctx is None:
+            overview_ctx = build_overview_context(config)
+        return overview_ctx
 
     selected_page = render_sidebar(
         config=config,
@@ -90,7 +101,7 @@ def main() -> None:
 
     def render_selected_page() -> None:
         if selected_page == "Overview":
-            ctx = get_dashboard_ctx()
+            ctx = get_overview_ctx()
             render_overview_page(
                 config=config,
                 runtime=ctx["runtime"],

@@ -61,6 +61,17 @@ def calc_daily_totals(daily_stats: dict[str, Any]) -> tuple[int, int, int, float
     return total_trades, total_wins, total_losses, total_pnl
 
 
+def capability_badge_tone(item: str) -> str:
+    capability = str(item or "")
+    if capability.endswith("=OK"):
+        return "good"
+    if capability.endswith("=PARTIAL"):
+        return "warn"
+    if capability.endswith("=SKIPPED") or capability.endswith("=UNKNOWN"):
+        return "info"
+    return "bad"
+
+
 @st.cache_data(ttl=5, show_spinner=False)
 def _cached_private_context(
     rule_symbols: tuple[str, ...],
@@ -162,6 +173,52 @@ def _cached_ticker() -> dict[str, Any]:
     return get_ticker()
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_overview_market_payload(
+    rule_signature: tuple[tuple[str, float, float], ...],
+) -> dict[str, Any]:
+    ticker = get_ticker()
+    latest_prices = {
+        symbol: float(payload["last"])
+        for symbol, payload in ticker.items()
+        if isinstance(payload, dict) and "last" in payload
+    }
+    rows: list[dict[str, Any]] = []
+
+    for symbol, buy_below, sell_above in rule_signature:
+        last_price = latest_prices.get(symbol)
+        current_zone = "n/a"
+        if last_price is not None:
+            if last_price <= buy_below:
+                current_zone = "BUY"
+            elif last_price >= sell_above:
+                current_zone = "SELL"
+            else:
+                current_zone = "WAIT"
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "last_price": last_price,
+                "buy_below": buy_below,
+                "sell_above": sell_above,
+                "zone": current_zone,
+            }
+        )
+
+    return {
+        "latest_prices": latest_prices,
+        "ticker_rows": rows,
+    }
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_overview_private_context(
+    rule_symbols: tuple[str, ...],
+) -> dict[str, Any]:
+    return dict(_cached_private_context(rule_symbols, "none"))
+
+
 def market_rows(config: dict[str, Any], ticker: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for symbol, rule in sorted(config["rules"].items()):
@@ -214,4 +271,27 @@ def build_dashboard_context(config: dict[str, Any]) -> dict[str, Any]:
         "private_ctx": private_ctx,
         "latest_prices": latest_prices,
         "ticker_rows": market_rows(config, ticker),
+    }
+
+
+def build_overview_context(config: dict[str, Any]) -> dict[str, Any]:
+    runtime = runtime_snapshot()
+    rule_symbols = tuple(sorted(str(symbol) for symbol in config.get("rules", {})))
+    private_ctx = _cached_overview_private_context(rule_symbols)
+    rule_signature = tuple(
+        (
+            str(symbol),
+            float(rule["buy_below"]),
+            float(rule["sell_above"]),
+        )
+        for symbol, rule in sorted(config.get("rules", {}).items())
+    )
+    market_payload = _cached_overview_market_payload(rule_signature)
+
+    return {
+        "today": today_key(),
+        "runtime": runtime,
+        "private_ctx": private_ctx,
+        "latest_prices": dict(market_payload.get("latest_prices") or {}),
+        "ticker_rows": list(market_payload.get("ticker_rows") or []),
     }

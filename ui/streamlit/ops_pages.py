@@ -6,9 +6,9 @@ import streamlit as st
 
 from services.account_service import build_live_holdings_snapshot
 from services.db_service import (
-    fetch_dashboard_summary,
     fetch_execution_console_summary,
     fetch_latest_filled_execution_orders_by_symbol,
+    fetch_overview_summary,
 )
 from services.execution_service import (
     LiveExecutionGuardrailError,
@@ -21,11 +21,16 @@ from ui.streamlit.actions import (
     persist_execution_order_update,
     submit_manual_order_from_ui,
 )
-from ui.streamlit.data import calc_daily_totals
+from ui.streamlit.data import calc_daily_totals, capability_badge_tone
 from ui.streamlit.refresh import render_refreshable_fragment
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
 from ui.streamlit.strategy_support import evaluate_fee_guardrail
 from utils.time_utils import now_text
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_overview_summary(today: str) -> dict[str, Any]:
+    return fetch_overview_summary(today=today)
 
 
 def _set_live_ops_feedback(title: str, lines: list[str], tone: str = "success") -> None:
@@ -67,9 +72,9 @@ def render_overview_page(
     today: str,
 ) -> None:
     paper_trades_today, paper_wins_today, paper_losses_today, paper_realized_today = calc_daily_totals(runtime["daily_stats"])
-    dashboard_summary = fetch_dashboard_summary(today=today)
-    live_execution_pnl = dict(dashboard_summary.get("live_execution_pnl") or {})
-    paper_fee_today = float((dashboard_summary.get("paper_trades") or {}).get("today_fee_thb", 0.0) or 0.0)
+    overview_summary = _cached_overview_summary(today)
+    live_execution_pnl = dict(overview_summary.get("live_execution_pnl") or {})
+    paper_fee_today = float((overview_summary.get("paper_trades") or {}).get("today_fee_thb", 0.0) or 0.0)
     live_fee_today = float(live_execution_pnl.get("today_fee_thb", 0.0) or 0.0)
     combined_fee_today = paper_fee_today + live_fee_today
     live_realized_today = float(live_execution_pnl.get("today_realized_pnl", 0.0) or 0.0)
@@ -197,7 +202,7 @@ def render_overview_page(
         st.markdown(" ".join(pause_badges), unsafe_allow_html=True)
         st.markdown(
             " ".join(
-                badge(item, "good" if item.endswith("=OK") else "warn" if item.endswith("=PARTIAL") else "bad")
+                badge(item, capability_badge_tone(item))
                 for item in private_ctx["private_api_capabilities"]
             ),
             unsafe_allow_html=True,
@@ -205,7 +210,7 @@ def render_overview_page(
         st.caption(private_ctx["private_api_status"])
     with status_right:
         render_section_intro("Latest Execution", "The newest execution-order state recorded by the engine.", "Execution")
-        latest_execution = dashboard_summary.get("latest_execution_order")
+        latest_execution = overview_summary.get("latest_execution_order")
         if latest_execution:
             st.write(
                 f"{latest_execution['symbol']} | {latest_execution['side']} | {latest_execution['state']}"
@@ -243,7 +248,7 @@ def render_account_page(
         "Wallet & Orders",
     )
     capability_tones = [
-        "good" if item.endswith("=OK") else "warn" if item.endswith("=PARTIAL") else "bad"
+        capability_badge_tone(item)
         for item in private_ctx["private_api_capabilities"]
     ]
     status_badges = [
@@ -255,7 +260,7 @@ def render_account_page(
     render_section_intro("Capability Matrix", "Private API readiness, open-order support, and partial capability signals live here.", "Status")
     st.markdown(
         " ".join(
-            badge(item, "good" if item.endswith("=OK") else "warn" if item.endswith("=PARTIAL") else "bad")
+            badge(item, capability_badge_tone(item))
             for item in private_ctx["private_api_capabilities"]
         ),
         unsafe_allow_html=True,

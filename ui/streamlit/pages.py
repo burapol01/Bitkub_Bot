@@ -25,7 +25,7 @@ from services.strategy_lab_service import (
 from ui.streamlit.config_support import render_config_page, save_config_with_feedback
 from ui.streamlit.ops_pages import render_account_page, render_live_ops_page, render_overview_page
 from ui.streamlit.diagnostics_support import render_diagnostics_page, render_logs_page
-from ui.streamlit.data import calc_daily_totals
+from ui.streamlit.data import calc_daily_totals, capability_badge_tone
 from ui.streamlit.refresh import PAGE_ORDER, render_refreshable_fragment
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro, render_sidebar_block
 from ui.streamlit.strategy_support import (
@@ -242,7 +242,7 @@ def render_sidebar(
             str(private_ctx["private_api_status"]),
         )
         for item in private_ctx["private_api_capabilities"]:
-            tone = "good" if item.endswith("=OK") else "warn" if item.endswith("=PARTIAL") else "bad"
+            tone = capability_badge_tone(item)
             st.markdown(badge(item, tone), unsafe_allow_html=True)
 
         render_sidebar_block(
