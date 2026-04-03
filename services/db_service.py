@@ -973,12 +973,22 @@ def _build_live_execution_trade_history(
     return _build_live_execution_trade_history_from_rows(rows)
 
 
-
-def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
-    filled_orders, closed_trades = _build_live_execution_trade_history()
-
-    today_rows = [row for row in closed_trades if str(row.get("updated_at") or row.get("created_at") or "").startswith(f"{today}")]
-    today_filled_orders = [row for row in filled_orders if str(row.get("event_time") or "").startswith(f"{today}")]
+def _summarize_live_execution_realized_from_history(
+    *,
+    today: str,
+    filled_orders: list[dict[str, Any]],
+    closed_trades: list[dict[str, Any]],
+) -> dict[str, Any]:
+    today_rows = [
+        row
+        for row in closed_trades
+        if str(row.get("updated_at") or row.get("created_at") or "").startswith(f"{today}")
+    ]
+    today_filled_orders = [
+        row
+        for row in filled_orders
+        if str(row.get("event_time") or "").startswith(f"{today}")
+    ]
     wins = sum(1 for row in today_rows if float(row.get("pnl_thb", 0.0)) > 0)
     losses = sum(1 for row in today_rows if float(row.get("pnl_thb", 0.0)) <= 0)
 
@@ -986,14 +996,26 @@ def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
     for row in today_filled_orders:
         summary = symbol_summary_today.setdefault(
             str(row["symbol"]),
-            {"symbol": str(row["symbol"]), "live_fee_thb": 0.0, "live_filled_orders": 0, "live_realized_pnl_thb": 0.0, "live_closed_trades": 0},
+            {
+                "symbol": str(row["symbol"]),
+                "live_fee_thb": 0.0,
+                "live_filled_orders": 0,
+                "live_realized_pnl_thb": 0.0,
+                "live_closed_trades": 0,
+            },
         )
         summary["live_fee_thb"] += float(row.get("fee_thb", 0.0) or 0.0)
         summary["live_filled_orders"] += 1
     for row in today_rows:
         summary = symbol_summary_today.setdefault(
             str(row["symbol"]),
-            {"symbol": str(row["symbol"]), "live_fee_thb": 0.0, "live_filled_orders": 0, "live_realized_pnl_thb": 0.0, "live_closed_trades": 0},
+            {
+                "symbol": str(row["symbol"]),
+                "live_fee_thb": 0.0,
+                "live_filled_orders": 0,
+                "live_realized_pnl_thb": 0.0,
+                "live_closed_trades": 0,
+            },
         )
         summary["live_realized_pnl_thb"] += float(row.get("pnl_thb", 0.0) or 0.0)
         summary["live_closed_trades"] += 1
@@ -1013,39 +1035,47 @@ def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
     }
 
 
-def fetch_daily_reporting_summary(
-    *,
-    days: int = 14,
-    symbol: str | None = None,
-) -> list[dict[str, Any]]:
-    window_days = max(1, int(days))
-    cutoff_day = format_date_text(now_dt() - timedelta(days=window_days - 1))
-    trade_symbol_clause = "AND symbol = ?" if symbol else ""
 
-    with _connect() as conn:
-        paper_rows = conn.execute(
-            f"""
-            SELECT
-                substr(sell_time, 1, 10) AS report_date,
-                COUNT(*) AS paper_trades,
-                COALESCE(SUM(pnl_thb), 0) AS paper_pnl_thb,
-                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS paper_fee_thb,
-                SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS paper_wins,
-                SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS paper_losses
-            FROM paper_trade_logs
-            WHERE sell_time >= ?
-            {trade_symbol_clause}
-            GROUP BY substr(sell_time, 1, 10)
-            ORDER BY report_date DESC
-            """,
-            tuple(
-                value
-                for value in (f"{cutoff_day} 00:00:00", symbol)
-                if value is not None
-            ),
-        ).fetchall()
-
+def fetch_live_execution_realized_summary(*, today: str) -> dict[str, Any]:
     filled_orders, closed_trades = _build_live_execution_trade_history()
+    return _summarize_live_execution_realized_from_history(
+        today=today,
+        filled_orders=filled_orders,
+        closed_trades=closed_trades,
+    )
+
+
+def _build_daily_reporting_summary_from_history(
+    *,
+    conn: sqlite3.Connection,
+    cutoff_day: str,
+    symbol: str | None,
+    filled_orders: list[dict[str, Any]],
+    closed_trades: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    trade_symbol_clause = "AND symbol = ?" if symbol else ""
+    paper_rows = conn.execute(
+        f"""
+        SELECT
+            substr(sell_time, 1, 10) AS report_date,
+            COUNT(*) AS paper_trades,
+            COALESCE(SUM(pnl_thb), 0) AS paper_pnl_thb,
+            COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS paper_fee_thb,
+            SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS paper_wins,
+            SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS paper_losses
+        FROM paper_trade_logs
+        WHERE sell_time >= ?
+        {trade_symbol_clause}
+        GROUP BY substr(sell_time, 1, 10)
+        ORDER BY report_date DESC
+        """,
+        tuple(
+            value
+            for value in (f"{cutoff_day} 00:00:00", symbol)
+            if value is not None
+        ),
+    ).fetchall()
+
     daily_rows: dict[str, dict[str, Any]] = {}
 
     def ensure_daily_row(report_date: str) -> dict[str, Any]:
@@ -1127,6 +1157,24 @@ def fetch_daily_reporting_summary(
         results.append(summary)
 
     return results
+
+
+def fetch_daily_reporting_summary(
+    *,
+    days: int = 14,
+    symbol: str | None = None,
+) -> list[dict[str, Any]]:
+    window_days = max(1, int(days))
+    cutoff_day = format_date_text(now_dt() - timedelta(days=window_days - 1))
+    with _connect() as conn:
+        filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+        return _build_daily_reporting_summary_from_history(
+            conn=conn,
+            cutoff_day=cutoff_day,
+            symbol=symbol,
+            filled_orders=filled_orders,
+            closed_trades=closed_trades,
+        )
 
 
 def fetch_logs_page_dataset(
@@ -1628,6 +1676,33 @@ def fetch_reporting_summary(
     recent_auto_exit_limit: int = 10,
     recent_error_limit: int = 10,
 ) -> dict[str, Any]:
+    with _connect() as conn:
+        filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+        return _build_reporting_summary_from_history(
+            conn=conn,
+            today=today,
+            symbol=symbol,
+            recent_trade_limit=recent_trade_limit,
+            recent_execution_limit=recent_execution_limit,
+            recent_auto_exit_limit=recent_auto_exit_limit,
+            recent_error_limit=recent_error_limit,
+            filled_orders=filled_orders,
+            closed_trades=closed_trades,
+        )
+
+
+def _build_reporting_summary_from_history(
+    *,
+    conn: sqlite3.Connection,
+    today: str,
+    symbol: str | None,
+    recent_trade_limit: int,
+    recent_execution_limit: int,
+    recent_auto_exit_limit: int,
+    recent_error_limit: int,
+    filled_orders: list[dict[str, Any]],
+    closed_trades: list[dict[str, Any]],
+) -> dict[str, Any]:
     like_today = f"{today}%"
     market_symbol_clause = "AND m.symbol = ?" if symbol else ""
     subquery_symbol_clause = "AND ms.symbol = ?" if symbol else ""
@@ -1637,140 +1712,143 @@ def fetch_reporting_summary(
     if symbol:
         error_details["symbol"] = symbol
 
-    with _connect() as conn:
-        market_rows = conn.execute(
-            f"""
-            SELECT
-                m.symbol AS symbol,
-                COUNT(*) AS snapshots,
-                MIN(m.last_price) AS min_price,
-                MAX(m.last_price) AS max_price,
-                (
-                    SELECT ms.last_price
-                    FROM market_snapshots ms
-                    WHERE ms.created_at LIKE ?
-                    AND ms.symbol = m.symbol
-                    {subquery_symbol_clause}
-                    ORDER BY ms.id ASC
-                    LIMIT 1
-                ) AS first_price,
-                (
-                    SELECT ms.last_price
-                    FROM market_snapshots ms
-                    WHERE ms.created_at LIKE ?
-                    AND ms.symbol = m.symbol
-                    {subquery_symbol_clause}
-                    ORDER BY ms.id DESC
-                    LIMIT 1
-                ) AS latest_price,
-                (
-                    SELECT ms.zone
-                    FROM market_snapshots ms
-                    WHERE ms.created_at LIKE ?
-                    AND ms.symbol = m.symbol
-                    {subquery_symbol_clause}
-                    ORDER BY ms.id DESC
-                    LIMIT 1
-                ) AS latest_zone
-            FROM market_snapshots m
-            WHERE m.created_at LIKE ?
-            {market_symbol_clause}
-            GROUP BY m.symbol
-            """,
-            tuple(
-                value
-                for value in (
-                    like_today,
-                    symbol,
-                    like_today,
-                    symbol,
-                    like_today,
-                    symbol,
-                    like_today,
-                    symbol,
-                )
-                if value is not None
-            ),
-        ).fetchall()
-        signal_rows = conn.execute(
-            f"""
-            SELECT symbol, COUNT(*) AS signals
-            FROM signal_logs
-            WHERE created_at LIKE ?
-            {signal_symbol_clause}
-            GROUP BY symbol
-            """,
-            tuple(value for value in (like_today, symbol) if value is not None),
-        ).fetchall()
-        trade_rows = conn.execute(
-            f"""
-            SELECT
+    market_rows = conn.execute(
+        f"""
+        SELECT
+            m.symbol AS symbol,
+            COUNT(*) AS snapshots,
+            MIN(m.last_price) AS min_price,
+            MAX(m.last_price) AS max_price,
+            (
+                SELECT ms.last_price
+                FROM market_snapshots ms
+                WHERE ms.created_at LIKE ?
+                AND ms.symbol = m.symbol
+                {subquery_symbol_clause}
+                ORDER BY ms.id ASC
+                LIMIT 1
+            ) AS first_price,
+            (
+                SELECT ms.last_price
+                FROM market_snapshots ms
+                WHERE ms.created_at LIKE ?
+                AND ms.symbol = m.symbol
+                {subquery_symbol_clause}
+                ORDER BY ms.id DESC
+                LIMIT 1
+            ) AS latest_price,
+            (
+                SELECT ms.zone
+                FROM market_snapshots ms
+                WHERE ms.created_at LIKE ?
+                AND ms.symbol = m.symbol
+                {subquery_symbol_clause}
+                ORDER BY ms.id DESC
+                LIMIT 1
+            ) AS latest_zone
+        FROM market_snapshots m
+        WHERE m.created_at LIKE ?
+        {market_symbol_clause}
+        GROUP BY m.symbol
+        """,
+        tuple(
+            value
+            for value in (
+                like_today,
                 symbol,
-                COUNT(*) AS trades,
-                COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
-                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb,
-                SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS wins,
-                SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS losses
-            FROM paper_trade_logs
-            WHERE sell_time LIKE ?
-            {trade_symbol_clause}
-            GROUP BY symbol
-            """,
-            tuple(value for value in (like_today, symbol) if value is not None),
-        ).fetchall()
-        recent_trades = conn.execute(
-            f"""
-            SELECT sell_time, symbol, exit_reason, pnl_thb, pnl_percent
-            FROM paper_trade_logs
-            WHERE 1 = 1
-            {trade_symbol_clause}
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            tuple(
-                value
-                for value in (symbol, recent_trade_limit)
-                if value is not None
-            ),
-        ).fetchall()
-        recent_errors = conn.execute(
-            """
-            SELECT created_at, event_type, message
-            FROM runtime_events
-            WHERE severity = 'error'
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (recent_error_limit,),
-        ).fetchall()
-        recent_execution_orders = conn.execute(
-            f"""
-            SELECT id, created_at, updated_at, symbol, side, order_type, state,
-                   exchange_order_id, message
-            FROM execution_orders
-            WHERE 1 = 1
-            {trade_symbol_clause}
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            tuple(
-                value
-                for value in (symbol, recent_execution_limit)
-                if value is not None
-            ),
-        ).fetchall()
-        recent_auto_exit_events = conn.execute(
-            """
-            SELECT created_at, severity, message
-            FROM runtime_events
-            WHERE event_type = 'auto_live_exit'
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (recent_auto_exit_limit,),
-        ).fetchall()
+                like_today,
+                symbol,
+                like_today,
+                symbol,
+                like_today,
+                symbol,
+            )
+            if value is not None
+        ),
+    ).fetchall()
+    signal_rows = conn.execute(
+        f"""
+        SELECT symbol, COUNT(*) AS signals
+        FROM signal_logs
+        WHERE created_at LIKE ?
+        {signal_symbol_clause}
+        GROUP BY symbol
+        """,
+        tuple(value for value in (like_today, symbol) if value is not None),
+    ).fetchall()
+    trade_rows = conn.execute(
+        f"""
+        SELECT
+            symbol,
+            COUNT(*) AS trades,
+            COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
+            COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb,
+            SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS losses
+        FROM paper_trade_logs
+        WHERE sell_time LIKE ?
+        {trade_symbol_clause}
+        GROUP BY symbol
+        """,
+        tuple(value for value in (like_today, symbol) if value is not None),
+    ).fetchall()
+    recent_trades = conn.execute(
+        f"""
+        SELECT sell_time, symbol, exit_reason, pnl_thb, pnl_percent
+        FROM paper_trade_logs
+        WHERE 1 = 1
+        {trade_symbol_clause}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        tuple(
+            value
+            for value in (symbol, recent_trade_limit)
+            if value is not None
+        ),
+    ).fetchall()
+    recent_errors = conn.execute(
+        """
+        SELECT created_at, event_type, message
+        FROM runtime_events
+        WHERE severity = 'error'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (recent_error_limit,),
+    ).fetchall()
+    recent_execution_orders = conn.execute(
+        f"""
+        SELECT id, created_at, updated_at, symbol, side, order_type, state,
+               exchange_order_id, message
+        FROM execution_orders
+        WHERE 1 = 1
+        {trade_symbol_clause}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        tuple(
+            value
+            for value in (symbol, recent_execution_limit)
+            if value is not None
+        ),
+    ).fetchall()
+    recent_auto_exit_events = conn.execute(
+        """
+        SELECT created_at, severity, message
+        FROM runtime_events
+        WHERE event_type = 'auto_live_exit'
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (recent_auto_exit_limit,),
+    ).fetchall()
 
-    live_execution_summary = fetch_live_execution_realized_summary(today=today)
+    live_execution_summary = _summarize_live_execution_realized_from_history(
+        today=today,
+        filled_orders=filled_orders,
+        closed_trades=closed_trades,
+    )
     live_symbol_rows = [
         row for row in list(live_execution_summary.get("symbol_summary_today") or [])
         if symbol is None or str(row.get("symbol")) == symbol
@@ -1898,6 +1976,46 @@ def fetch_reporting_summary(
         "recent_auto_exit_events": [dict(row) for row in recent_auto_exit_events],
         "recent_errors": [dict(row) for row in recent_errors],
         "live_execution_pnl": live_execution_summary,
+    }
+
+
+def fetch_reports_page_dataset(
+    *,
+    today: str,
+    days: int = 14,
+    symbol: str | None = None,
+    recent_trade_limit: int = 10,
+    recent_execution_limit: int = 10,
+    recent_auto_exit_limit: int = 10,
+    recent_error_limit: int = 10,
+) -> dict[str, Any]:
+    window_days = max(1, int(days))
+    cutoff_day = format_date_text(now_dt() - timedelta(days=window_days - 1))
+
+    with _connect() as conn:
+        filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+        report = _build_reporting_summary_from_history(
+            conn=conn,
+            today=today,
+            symbol=symbol,
+            recent_trade_limit=recent_trade_limit,
+            recent_execution_limit=recent_execution_limit,
+            recent_auto_exit_limit=recent_auto_exit_limit,
+            recent_error_limit=recent_error_limit,
+            filled_orders=filled_orders,
+            closed_trades=closed_trades,
+        )
+        daily_summary = _build_daily_reporting_summary_from_history(
+            conn=conn,
+            cutoff_day=cutoff_day,
+            symbol=symbol,
+            filled_orders=filled_orders,
+            closed_trades=closed_trades,
+        )
+
+    return {
+        "report": report,
+        "daily_summary": daily_summary,
     }
 
 
