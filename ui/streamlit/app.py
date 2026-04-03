@@ -29,6 +29,7 @@ from ui.streamlit.refresh import (
     PAGE_ORDER,
     get_auto_refresh_run_every,
     render_auto_refresh_controls,
+    render_deploy_refresh_watcher,
     render_auto_refresh_status,
     render_refreshable_fragment,
 )
@@ -50,6 +51,7 @@ def main() -> None:
     version_snapshot = get_app_version_snapshot()
     version_label = format_app_version_label(version_snapshot)
     version_detail = format_app_version_detail(version_snapshot)
+    render_deploy_refresh_watcher(version_snapshot)
     render_hero(version_label=version_label, version_detail=version_detail)
 
     config, config_errors = reload_config()
