@@ -4,6 +4,8 @@ from collections.abc import Callable
 
 import streamlit as st
 
+from services.version_service import get_runtime_version_snapshot
+
 
 PAGE_ORDER = (
     "Overview",
@@ -25,6 +27,9 @@ AUTO_REFRESH_SAFE_PAGES = {
     "Logs",
     "Diagnostics",
 }
+
+DEPLOY_VERSION_POLL_SECONDS = 30
+DEPLOY_VERSION_STATE_KEY = "ui_seen_app_version_signature"
 
 
 def render_auto_refresh_controls(page_name: str) -> tuple[bool, int]:
@@ -91,3 +96,53 @@ def render_auto_refresh_status(page_name: str, enabled: bool, interval_seconds: 
         f"Auto refresh every {interval_seconds}s on {page_name}. "
         "Live data panels rerun without reloading the whole browser page."
     )
+
+
+def _app_version_signature(snapshot: dict[str, object]) -> str:
+    branch = str(snapshot.get("branch") or "").strip()
+    commit = str(snapshot.get("commit") or "").strip()
+    label = str(snapshot.get("label") or "").strip()
+
+    if branch and commit:
+        return f"{branch}@{commit}"
+    if commit:
+        return commit
+    if label:
+        return label
+    return "unknown"
+
+
+def render_deploy_refresh_watcher(
+    current_snapshot: dict[str, object],
+    *,
+    interval_seconds: int = DEPLOY_VERSION_POLL_SECONDS,
+) -> None:
+    current_signature = _app_version_signature(current_snapshot)
+    known_signature = str(st.session_state.get(DEPLOY_VERSION_STATE_KEY) or "").strip()
+
+    if not known_signature:
+        st.session_state[DEPLOY_VERSION_STATE_KEY] = current_signature
+    elif known_signature != current_signature:
+        # The app is already running on the new version, so just sync the marker.
+        st.session_state[DEPLOY_VERSION_STATE_KEY] = current_signature
+
+    poll_seconds = max(5, int(interval_seconds))
+
+    @st.fragment(run_every=f"{poll_seconds}s")
+    def _deploy_refresh_fragment() -> None:
+        latest_snapshot = get_runtime_version_snapshot()
+        latest_signature = _app_version_signature(latest_snapshot)
+        known = str(st.session_state.get(DEPLOY_VERSION_STATE_KEY) or "").strip()
+
+        if not latest_signature:
+            return
+        if not known:
+            st.session_state[DEPLOY_VERSION_STATE_KEY] = latest_signature
+            return
+        if latest_signature == known:
+            return
+
+        st.session_state[DEPLOY_VERSION_STATE_KEY] = latest_signature
+        st.rerun()
+
+    _deploy_refresh_fragment()

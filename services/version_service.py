@@ -88,18 +88,32 @@ def _read_version_file(path: Path) -> dict[str, Any]:
     return snapshot
 
 
-@lru_cache(maxsize=1)
-def get_app_version_snapshot() -> dict[str, Any]:
+def _has_version_metadata(snapshot: dict[str, Any]) -> bool:
+    for key in ("label", "branch", "commit", "commit_short", "describe"):
+        if str(snapshot.get(key) or "").strip():
+            return True
+    return False
+
+
+def _build_app_version_snapshot(*, prefer_runtime_metadata: bool = False) -> dict[str, Any]:
     root = _app_root()
     version_file = _version_file_path(root)
     env_version = str(os.getenv("BITKUB_APP_VERSION") or "").strip()
-
-    git_branch = _run_git(root, "branch", "--show-current")
-    git_commit = _run_git(root, "rev-parse", "HEAD")
-    git_commit_short = _run_git(root, "rev-parse", "--short=12", "HEAD")
-    git_describe = _run_git(root, "describe", "--tags", "--always", "--dirty")
-    dirty_output = _run_git(root, "status", "--porcelain", "--untracked-files=no")
     file_snapshot = _read_version_file(version_file)
+
+    git_branch = None
+    git_commit = None
+    git_commit_short = None
+    git_describe = None
+    dirty_output = None
+    has_runtime_metadata = bool(env_version) or _has_version_metadata(file_snapshot)
+
+    if not prefer_runtime_metadata or not has_runtime_metadata:
+        git_branch = _run_git(root, "branch", "--show-current")
+        git_commit = _run_git(root, "rev-parse", "HEAD")
+        git_commit_short = _run_git(root, "rev-parse", "--short=12", "HEAD")
+        git_describe = _run_git(root, "describe", "--tags", "--always", "--dirty")
+        dirty_output = _run_git(root, "status", "--porcelain", "--untracked-files=no")
 
     branch = git_branch or str(file_snapshot.get("branch") or "").strip() or None
     commit = git_commit or str(file_snapshot.get("commit") or "").strip() or None
@@ -150,6 +164,20 @@ def get_app_version_snapshot() -> dict[str, Any]:
         "app_root": str(root),
         "version_file": str(version_file),
     }
+
+
+@lru_cache(maxsize=1)
+def get_app_version_snapshot() -> dict[str, Any]:
+    return _build_app_version_snapshot()
+
+
+def refresh_app_version_snapshot() -> dict[str, Any]:
+    get_app_version_snapshot.cache_clear()
+    return get_app_version_snapshot()
+
+
+def get_runtime_version_snapshot() -> dict[str, Any]:
+    return _build_app_version_snapshot(prefer_runtime_metadata=True)
 
 
 def format_app_version_label(snapshot: dict[str, Any]) -> str:
