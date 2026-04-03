@@ -206,6 +206,11 @@ def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
         list(open_orders.values()) if isinstance(open_orders, dict) else []
     )
     open_orders_meta = snapshot.get("open_orders_meta", {})
+    open_orders_mode = (
+        str(open_orders_meta.get("mode"))
+        if isinstance(open_orders_meta, dict)
+        else ""
+    )
     requires_symbol = bool(
         isinstance(open_orders_meta, dict) and open_orders_meta.get("requires_symbol")
     )
@@ -219,6 +224,8 @@ def summarize_account_capabilities(snapshot: dict | None) -> list[str]:
 
     if requires_symbol:
         open_orders_status = "PARTIAL"
+    elif open_orders_mode == "none":
+        open_orders_status = "SKIPPED"
     elif not open_order_entries:
         open_orders_status = "UNKNOWN"
     elif supported_entries and all(isinstance(entry, dict) and entry.get("ok", False) for entry in supported_entries):

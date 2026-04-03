@@ -1560,6 +1560,65 @@ def fetch_dashboard_summary(
     }
 
 
+def fetch_overview_summary(
+    *,
+    today: str,
+) -> dict[str, Any]:
+    with _connect() as conn:
+        today_trade_totals = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS count,
+                COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb
+            FROM paper_trade_logs
+            WHERE sell_time LIKE ?
+            """,
+            (f"{today}%",),
+        ).fetchone()
+        latest_execution_order = conn.execute(
+            """
+            SELECT id, created_at, updated_at, symbol, side, order_type, state,
+                   exchange_order_id, exchange_client_id, message, guardrails_json
+            FROM execution_orders
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    live_execution_pnl = fetch_live_execution_realized_summary(today=today)
+
+    return {
+        "paper_trades": {
+            "today": int(today_trade_totals["count"] if today_trade_totals else 0),
+            "today_realized_pnl": float(
+                today_trade_totals["pnl_thb"] if today_trade_totals else 0.0
+            ),
+            "today_fee_thb": float(
+                today_trade_totals["fee_thb"] if today_trade_totals else 0.0
+            ),
+        },
+        "live_execution_pnl": live_execution_pnl,
+        "latest_execution_order": (
+            {
+                "id": int(latest_execution_order["id"]),
+                "created_at": latest_execution_order["created_at"],
+                "updated_at": latest_execution_order["updated_at"],
+                "symbol": latest_execution_order["symbol"],
+                "side": latest_execution_order["side"],
+                "order_type": latest_execution_order["order_type"],
+                "state": latest_execution_order["state"],
+                "exchange_order_id": latest_execution_order["exchange_order_id"],
+                "exchange_client_id": latest_execution_order["exchange_client_id"],
+                "message": latest_execution_order["message"],
+                "guardrails": _load_json(latest_execution_order["guardrails_json"], {}),
+            }
+            if latest_execution_order
+            else None
+        ),
+    }
+
+
 def fetch_reporting_summary(
     *,
     today: str,
