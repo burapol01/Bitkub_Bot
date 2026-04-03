@@ -9,8 +9,7 @@ from config import CONFIG_PATH
 
 from services.db_service import (
     DB_PATH,
-    fetch_daily_reporting_summary,
-    fetch_reporting_summary,
+    fetch_reports_page_dataset,
     fetch_runtime_event_log,
     insert_runtime_event,
 )
@@ -82,9 +81,18 @@ def _cached_market_snapshot_coverage(days: int) -> list[dict[str, Any]]:
     return fetch_market_snapshot_coverage(days=days)
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def _cached_daily_reporting_summary(*, days: int, symbol_key: str = "") -> list[dict[str, Any]]:
-    return fetch_daily_reporting_summary(days=days, symbol=symbol_key or None)
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_reports_page_payload(
+    *,
+    today: str,
+    days: int,
+    symbol_key: str = "",
+) -> dict[str, Any]:
+    return fetch_reports_page_dataset(
+        today=today,
+        days=days,
+        symbol=symbol_key or None,
+    )
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -1305,11 +1313,13 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
         )
 
     selected_symbol_key = "" if selected_symbol == "ALL" else selected_symbol
-    report = fetch_reporting_summary(today=today, symbol=None if selected_symbol == "ALL" else selected_symbol)
-    daily_summary_rows = _cached_daily_reporting_summary(
+    reports_payload = _cached_reports_page_payload(
+        today=today,
         days=daily_window_days,
         symbol_key=selected_symbol_key,
     )
+    report = dict(reports_payload.get("report") or {})
+    daily_summary_rows = list(reports_payload.get("daily_summary") or [])
     symbol_summary = report["symbol_summary"]
     recent_execution_orders = report["recent_execution_orders"]
     recent_auto_exit_events = report["recent_auto_exit_events"]
