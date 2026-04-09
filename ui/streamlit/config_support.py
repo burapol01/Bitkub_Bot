@@ -28,6 +28,25 @@ def _sync_form_defaults(*, prefix: str, values: dict[str, Any]) -> None:
     st.session_state[signature_key] = signature
 
 
+def _parse_watchlist_fallback_symbols(raw_value: str) -> list[str]:
+    return [
+        entry.strip().upper()
+        for entry in str(raw_value or "").split(",")
+        if entry.strip()
+    ]
+
+
+def build_saved_watchlist_symbols(
+    *,
+    selected_watchlist: list[str],
+    watchlist_fallback: str,
+) -> list[str]:
+    return ordered_unique_symbols(
+        selected_watchlist,
+        _parse_watchlist_fallback_symbols(watchlist_fallback),
+    )
+
+
 def _show_config_save_feedback() -> None:
     summary_lines = st.session_state.get("config_save_summary")
     summary_title = st.session_state.get("config_save_title")
@@ -86,7 +105,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
         <div class="note-strip">
           <strong>Apply Model</strong><br>
           Changes saved here write to the active override file only.
-          The merged result still uses the base config underneath, and the console engine remains the runner so it still needs its own reload/apply step.
+          The merged result still uses the base config underneath, and the console engine remains the runner so it still needs its own reload/apply step from the console hotkey <code>R</code> or Telegram <code>/reload</code>.
         </div>
         """,
         unsafe_allow_html=True,
@@ -313,7 +332,9 @@ def render_config_page(*, config: dict[str, Any]) -> None:
 
     with right:
         st.markdown("#### Watchlist")
-        st.caption("Watchlist symbols drive research, candle sync, and ranking. Live auto-entry still uses config rules only.")
+        st.caption(
+            "Watchlist symbols drive research, candle sync, and ranking. They are independent from live rules, so removing a symbol here stops research coverage after the console reload even if the live rule still exists."
+        )
         watchlist_options = market_symbols or sorted(set(watchlist_symbols) | set(configured_symbols))
         with st.form("config_watchlist_form"):
             selected_watchlist = st.multiselect(
@@ -329,16 +350,10 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             )
             submitted_watchlist = st.form_submit_button("Save Watchlist", width='stretch')
         if submitted_watchlist:
-            extra_symbols = [
-                entry.strip().upper()
-                for entry in str(watchlist_fallback).split(",")
-                if entry.strip()
-            ]
             updated = dict(config)
-            updated["watchlist_symbols"] = ordered_unique_symbols(
-                selected_watchlist,
-                extra_symbols,
-                configured_symbols,
+            updated["watchlist_symbols"] = build_saved_watchlist_symbols(
+                selected_watchlist=list(selected_watchlist),
+                watchlist_fallback=watchlist_fallback,
             )
             if save_config_with_feedback(config, updated, "Saved watchlist symbols"):
                 st.rerun()
