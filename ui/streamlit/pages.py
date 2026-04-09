@@ -902,8 +902,6 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                     },
                                 )
                                 _cached_strategy_tuning_history.clear()
-                                st.session_state[prune_remove_key] = []
-                                st.session_state[prune_add_key] = []
                                 st.rerun()
             with tuning_tabs[1]:
                 if tuning_rows:
