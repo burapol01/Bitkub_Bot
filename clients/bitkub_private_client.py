@@ -41,9 +41,13 @@ def is_symbol_required_error_message(error: str | None) -> bool:
         return False
 
     return (
-        "bitkub api error=10" in normalized
-        and "sym" in normalized
-        and "required" in normalized
+        "open-orders endpoint requires sym" in normalized
+        or "order-history endpoint requires sym" in normalized
+        or (
+            "bitkub api error=10" in normalized
+            and "sym" in normalized
+            and "required" in normalized
+        )
     )
 
 

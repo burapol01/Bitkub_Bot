@@ -210,6 +210,23 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def ordered_unique_symbols(*groups: Any) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    for group in groups:
+        if group is None:
+            continue
+        for value in group:
+            symbol = str(value or "").strip()
+            if not symbol or symbol in seen:
+                continue
+            ordered.append(symbol)
+            seen.add(symbol)
+
+    return ordered
+
+
 def validate_config(config: dict[str, Any]) -> list[str]:
     errors: list[str] = []
 

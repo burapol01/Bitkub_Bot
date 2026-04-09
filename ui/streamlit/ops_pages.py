@@ -4,10 +4,15 @@ from typing import Any
 
 import streamlit as st
 
-from services.account_service import build_live_holdings_snapshot
+from config import load_config, ordered_unique_symbols
+from services.account_service import (
+    build_live_holdings_snapshot,
+    fetch_open_orders_by_symbol_snapshot,
+)
 from services.db_service import (
     fetch_execution_console_summary,
     fetch_latest_filled_execution_orders_by_symbol,
+    fetch_open_execution_orders,
     fetch_overview_summary,
 )
 from services.execution_service import (
@@ -74,6 +79,14 @@ def render_overview_page(
     paper_trades_today, paper_wins_today, paper_losses_today, paper_realized_today = calc_daily_totals(runtime["daily_stats"])
     overview_summary = _cached_overview_summary(today)
     live_execution_pnl = dict(overview_summary.get("live_execution_pnl") or {})
+    paper_total_realized = float((overview_summary.get("paper_trades") or {}).get("total_realized_pnl", 0.0) or 0.0)
+    live_total_realized = float(live_execution_pnl.get("total_realized_pnl", 0.0) or 0.0)
+    combined_total_realized = paper_total_realized + live_total_realized
+    paper_total_fee = float((overview_summary.get("paper_trades") or {}).get("total_fee_thb", 0.0) or 0.0)
+    live_total_fee = float(live_execution_pnl.get("total_fee_thb", 0.0) or 0.0)
+    combined_total_fee = paper_total_fee + live_total_fee
+    paper_total_trades = int((overview_summary.get("paper_trades") or {}).get("total", 0) or 0)
+    live_total_trades = int(live_execution_pnl.get("total", 0) or 0)
     paper_fee_today = float((overview_summary.get("paper_trades") or {}).get("today_fee_thb", 0.0) or 0.0)
     live_fee_today = float(live_execution_pnl.get("today_fee_thb", 0.0) or 0.0)
     combined_fee_today = paper_fee_today + live_fee_today
@@ -110,7 +123,7 @@ def render_overview_page(
     ]
     st.markdown(f'<div class="status-strip">{" ".join(status_badges)}</div>', unsafe_allow_html=True)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         render_metric_card("Trading Mode", str(config["mode"]).upper(), private_ctx["private_api_status"])
     with col2:
@@ -126,6 +139,12 @@ def render_overview_page(
             "Realized Today",
             f"{combined_realized_today:,.2f} THB",
             f"Paper {paper_realized_today:,.2f} | Live {live_realized_today:,.2f}",
+        )
+    with col5:
+        render_metric_card(
+            "Realized Since Start",
+            f"{combined_total_realized:,.2f} THB",
+            f"Paper {paper_total_realized:,.2f} | Live {live_total_realized:,.2f}",
         )
 
     render_section_intro("Market Overview", "Live prices against the current entry/exit zones for each configured rule.", "Market")
@@ -147,7 +166,7 @@ def render_overview_page(
     pnl_left, pnl_right = st.columns([1.0, 1.0])
     with pnl_left:
         render_section_intro("Realized PnL Breakdown", "Combined paper and live outcomes for the current day, including fee drag.", "P&L")
-        pnl_cards = st.columns(4)
+        pnl_cards = st.columns(5)
         with pnl_cards[0]:
             render_metric_card("Combined Today", f"{combined_realized_today:,.2f} THB", f"{today}")
         with pnl_cards[1]:
@@ -167,6 +186,12 @@ def render_overview_page(
                 "Fee Today",
                 f"{combined_fee_today:,.2f} THB",
                 f"Paper {paper_fee_today:,.2f} | Live {live_fee_today:,.2f}",
+            )
+        with pnl_cards[4]:
+            render_metric_card(
+                "Combined Since Start",
+                f"{combined_total_realized:,.2f} THB",
+                f"Trades {paper_total_trades + live_total_trades} | Fee {combined_total_fee:,.2f}",
             )
         st.caption(
             "Paper realized comes from runtime daily_stats/paper trade flow. Live realized is estimated from filled execution_orders using FIFO cost basis across filled buy/sell orders. Fee Today combines paper_trade_logs fees with filled live execution fees."
@@ -288,17 +313,19 @@ def render_account_page(
         1 for row in holdings if float(row.get("reserved_qty", 0.0)) > 0
     )
 
-    open_orders = account_snapshot.get("open_orders", {})
-    open_rows: list[dict[str, Any]] = []
-    if isinstance(open_orders, dict):
-        for symbol, entry in sorted(open_orders.items()):
+    def _build_open_order_rows(open_order_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        if not isinstance(open_order_snapshot, dict):
+            return rows
+
+        for symbol, entry in sorted(open_order_snapshot.items()):
             if not isinstance(entry, dict):
                 continue
             if entry.get("ok", False):
                 payload = entry.get("data", {})
-                rows = payload.get("result", payload) if isinstance(payload, dict) else payload
-                count = len(rows) if isinstance(rows, list) else 0
-                open_rows.append(
+                payload_rows = payload.get("result", payload) if isinstance(payload, dict) else payload
+                count = len(payload_rows) if isinstance(payload_rows, list) else 0
+                rows.append(
                     {
                         "symbol": symbol,
                         "status": "OK",
@@ -309,7 +336,7 @@ def render_account_page(
             else:
                 error_message = str(entry.get("error") or "")
                 if "Endpoint not found for path /api/market/my-open-orders" in error_message or "Endpoint not found for path /api/v3/market/my-open-orders" in error_message:
-                    open_rows.append(
+                    rows.append(
                         {
                             "symbol": symbol,
                             "status": "UNSUPPORTED",
@@ -318,7 +345,7 @@ def render_account_page(
                         }
                     )
                 else:
-                    open_rows.append(
+                    rows.append(
                         {
                             "symbol": symbol,
                             "status": "ERROR",
@@ -326,9 +353,66 @@ def render_account_page(
                             "detail": error_message,
                         }
                     )
+        return rows
+
+    open_orders_meta = dict(account_snapshot.get("open_orders_meta") or {})
+    requires_symbol_probe = bool(open_orders_meta.get("requires_symbol"))
+    open_orders = account_snapshot.get("open_orders", {})
+    configured_symbols = sorted(load_config().get("rules", {}).keys())
+    default_probe_symbols = ordered_unique_symbols(
+        [
+            str(order.get("symbol", ""))
+            for order in fetch_open_execution_orders()
+            if str(order.get("symbol", "")).strip()
+        ],
+        [
+            str(row.get("symbol", ""))
+            for row in holdings
+            if str(row.get("symbol", "")) != "THB"
+        ],
+    )[:12]
+
+    if requires_symbol_probe:
+        with st.expander("Per-Symbol Open Order Probe", expanded=bool(st.session_state.get("account_open_order_probe_results"))):
+            st.caption(
+                "This Bitkub API path does not support a global open-orders query. Probe specific symbols here to see which coin returns an unsupported or error state."
+            )
+            with st.form("account_open_order_probe_form"):
+                probe_symbols = st.multiselect(
+                    "Probe Symbols",
+                    configured_symbols,
+                    default=[symbol for symbol in default_probe_symbols if symbol in configured_symbols],
+                    help="Start with current holdings or open execution-order symbols, then widen if needed.",
+                )
+                run_probe = st.form_submit_button(
+                    "Probe Selected Symbols",
+                    width='stretch',
+                )
+            if run_probe:
+                if not probe_symbols:
+                    st.warning("Select at least one symbol before probing open orders.")
+                elif private_ctx.get("client") is None:
+                    st.error("Private API client is unavailable for per-symbol open-order probes.")
+                else:
+                    st.session_state["account_open_order_probe_results"] = fetch_open_orders_by_symbol_snapshot(
+                        private_ctx["client"],
+                        symbols=list(probe_symbols),
+                    )
+
+    open_rows = _build_open_order_rows(open_orders)
+    probe_results = st.session_state.get("account_open_order_probe_results", {})
+    if requires_symbol_probe and isinstance(probe_results, dict) and probe_results:
+        open_rows = _build_open_order_rows(probe_results)
 
     unsupported_open_order_symbols = sum(1 for row in open_rows if str(row.get("status")) == "UNSUPPORTED")
     error_open_order_symbols = sum(1 for row in open_rows if str(row.get("status")) == "ERROR")
+    open_rows.sort(
+        key=lambda row: (
+            {"ERROR": 0, "UNSUPPORTED": 1, "OK": 2}.get(str(row.get("status")), 9),
+            str(row.get("symbol") or ""),
+        )
+    )
+    error_symbol_labels = [str(row.get("symbol") or "n/a") for row in open_rows if str(row.get("status")) == "ERROR"]
 
     metric1, metric2, metric3 = st.columns(3)
     with metric1:
@@ -336,12 +420,22 @@ def render_account_page(
     with metric2:
         render_metric_card("Total Holding Value", f"{total_holdings_value:,.2f} THB", "Mark-to-market estimate")
     with metric3:
-        render_metric_card("Open Order Symbols", str(len(open_rows)), "Exchange snapshot summary")
+        render_metric_card(
+            "Open Order Symbols",
+            str(len(open_rows)) if open_rows else ("Probe needed" if requires_symbol_probe else "0"),
+            "Per-symbol probe pending" if requires_symbol_probe and not open_rows else "Exchange snapshot summary",
+        )
 
-    if error_open_order_symbols:
+    if requires_symbol_probe and not open_rows:
         render_callout(
             "Open Order Coverage",
-            f"{error_open_order_symbols} symbol(s) returned hard open-order errors. Check the right-hand table before trusting the exchange snapshot.",
+            "Global open-orders is unsupported by this Bitkub API path. Use the per-symbol probe above to identify the specific coin(s) that need handling.",
+            "info",
+        )
+    elif error_open_order_symbols:
+        render_callout(
+            "Open Order Coverage",
+            f"{error_open_order_symbols} symbol(s) returned hard open-order errors: {', '.join(error_symbol_labels)}. Check the right-hand table before trusting the exchange snapshot.",
             "bad",
         )
     elif unsupported_open_order_symbols:

@@ -4,7 +4,14 @@ from typing import Any
 
 import streamlit as st
 
-from config import CONFIG_BASE_PATH, CONFIG_PATH, save_config, summarize_config_changes
+from config import (
+    CONFIG_BASE_PATH,
+    CONFIG_PATH,
+    ordered_unique_symbols,
+    save_config,
+    summarize_config_changes,
+)
+from services.db_service import fetch_open_execution_orders
 from services.telegram_service import DEFAULT_TELEGRAM_NOTIFY_EVENTS
 from ui.streamlit.strategy_support import build_rule_seed, fetch_market_symbol_universe
 from ui.streamlit.styles import badge, render_metric_card
@@ -328,7 +335,11 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                 if entry.strip()
             ]
             updated = dict(config)
-            updated["watchlist_symbols"] = sorted(set(selected_watchlist) | set(extra_symbols) | set(configured_symbols))
+            updated["watchlist_symbols"] = ordered_unique_symbols(
+                selected_watchlist,
+                extra_symbols,
+                configured_symbols,
+            )
             if save_config_with_feedback(config, updated, "Saved watchlist symbols"):
                 st.rerun()
 
@@ -463,7 +474,10 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     updated_rules = dict(config["rules"])
                     updated_rules[new_symbol] = build_rule_seed(config, new_symbol)
                     updated["rules"] = updated_rules
-                    updated["watchlist_symbols"] = sorted(set(config.get("watchlist_symbols", configured_symbols)) | {new_symbol})
+                    updated["watchlist_symbols"] = ordered_unique_symbols(
+                        config.get("watchlist_symbols", configured_symbols),
+                        [new_symbol],
+                    )
                     if save_config_with_feedback(config, updated, f"Added new rule {new_symbol}"):
                         st.rerun()
         with remove_col:
@@ -473,12 +487,22 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                     st.error("Tick confirm before removing a rule.")
                 elif len(config["rules"]) <= 1:
                     st.error("At least one rule must remain in config.")
+                elif selected_rule_symbol in {
+                    str(order.get("symbol", ""))
+                    for order in fetch_open_execution_orders()
+                }:
+                    st.error(
+                        f"Cannot remove {selected_rule_symbol} while it still has an open execution order. Cancel or refresh it from Live Ops first."
+                    )
                 else:
                     updated = dict(config)
                     updated_rules = dict(config["rules"])
                     updated_rules.pop(selected_rule_symbol, None)
                     updated["rules"] = updated_rules
-                    updated["watchlist_symbols"] = sorted(set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()))
+                    updated["watchlist_symbols"] = ordered_unique_symbols(
+                        config.get("watchlist_symbols", []),
+                        updated_rules.keys(),
+                    )
                     if save_config_with_feedback(config, updated, f"Removed rule {selected_rule_symbol}"):
                         st.rerun()
 

@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +165,21 @@ def init_db():
                 status TEXT NOT NULL,
                 response_text TEXT
             );
+
+            CREATE INDEX IF NOT EXISTS idx_market_snapshots_created_symbol_id
+            ON market_snapshots(created_at, symbol, id);
+
+            CREATE INDEX IF NOT EXISTS idx_signal_logs_created_symbol
+            ON signal_logs(created_at, symbol);
+
+            CREATE INDEX IF NOT EXISTS idx_paper_trade_logs_sell_symbol
+            ON paper_trade_logs(sell_time, symbol);
+
+            CREATE INDEX IF NOT EXISTS idx_execution_orders_state_id
+            ON execution_orders(state, id);
+
+            CREATE INDEX IF NOT EXISTS idx_runtime_events_severity_id
+            ON runtime_events(severity, id);
             """
         )
 
@@ -177,6 +192,15 @@ def _to_json(value: Any) -> str | None:
 
 def _normalize_time_text(value: Any) -> str:
     return coerce_time_text(value)
+
+
+def _day_range_bounds(day_text: str) -> tuple[str, str]:
+    day = datetime.strptime(str(day_text), "%Y-%m-%d")
+    next_day = day + timedelta(days=1)
+    return (
+        f"{day.strftime('%Y-%m-%d')} 00:00:00",
+        f"{next_day.strftime('%Y-%m-%d')} 00:00:00",
+    )
 
 
 def insert_runtime_event(
@@ -1612,6 +1636,7 @@ def fetch_overview_summary(
     *,
     today: str,
 ) -> dict[str, Any]:
+    report_day_start, report_day_end = _day_range_bounds(today)
     with _connect() as conn:
         today_trade_totals = conn.execute(
             """
@@ -1620,9 +1645,19 @@ def fetch_overview_summary(
                 COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
                 COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb
             FROM paper_trade_logs
-            WHERE sell_time LIKE ?
+            WHERE sell_time >= ?
+            AND sell_time < ?
             """,
-            (f"{today}%",),
+            (report_day_start, report_day_end),
+        ).fetchone()
+        total_trade_totals = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS count,
+                COALESCE(SUM(pnl_thb), 0) AS pnl_thb,
+                COALESCE(SUM(buy_fee_thb + sell_fee_thb), 0) AS fee_thb
+            FROM paper_trade_logs
+            """
         ).fetchone()
         latest_execution_order = conn.execute(
             """
@@ -1644,6 +1679,13 @@ def fetch_overview_summary(
             ),
             "today_fee_thb": float(
                 today_trade_totals["fee_thb"] if today_trade_totals else 0.0
+            ),
+            "total": int(total_trade_totals["count"] if total_trade_totals else 0),
+            "total_realized_pnl": float(
+                total_trade_totals["pnl_thb"] if total_trade_totals else 0.0
+            ),
+            "total_fee_thb": float(
+                total_trade_totals["fee_thb"] if total_trade_totals else 0.0
             ),
         },
         "live_execution_pnl": live_execution_pnl,
@@ -1703,78 +1745,70 @@ def _build_reporting_summary_from_history(
     filled_orders: list[dict[str, Any]],
     closed_trades: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    like_today = f"{today}%"
-    market_symbol_clause = "AND m.symbol = ?" if symbol else ""
-    subquery_symbol_clause = "AND ms.symbol = ?" if symbol else ""
+    report_day_start, report_day_end = _day_range_bounds(today)
+    market_symbol_clause = "AND symbol = ?" if symbol else ""
     signal_symbol_clause = "AND symbol = ?" if symbol else ""
     trade_symbol_clause = "AND symbol = ?" if symbol else ""
-    error_details: dict[str, Any] = {"today": today}
-    if symbol:
-        error_details["symbol"] = symbol
 
     market_rows = conn.execute(
         f"""
-        SELECT
-            m.symbol AS symbol,
-            COUNT(*) AS snapshots,
-            MIN(m.last_price) AS min_price,
-            MAX(m.last_price) AS max_price,
-            (
-                SELECT ms.last_price
-                FROM market_snapshots ms
-                WHERE ms.created_at LIKE ?
-                AND ms.symbol = m.symbol
-                {subquery_symbol_clause}
-                ORDER BY ms.id ASC
-                LIMIT 1
-            ) AS first_price,
-            (
-                SELECT ms.last_price
-                FROM market_snapshots ms
-                WHERE ms.created_at LIKE ?
-                AND ms.symbol = m.symbol
-                {subquery_symbol_clause}
-                ORDER BY ms.id DESC
-                LIMIT 1
-            ) AS latest_price,
-            (
-                SELECT ms.zone
-                FROM market_snapshots ms
-                WHERE ms.created_at LIKE ?
-                AND ms.symbol = m.symbol
-                {subquery_symbol_clause}
-                ORDER BY ms.id DESC
-                LIMIT 1
-            ) AS latest_zone
-        FROM market_snapshots m
-        WHERE m.created_at LIKE ?
-        {market_symbol_clause}
-        GROUP BY m.symbol
-        """,
-        tuple(
-            value
-            for value in (
-                like_today,
-                symbol,
-                like_today,
-                symbol,
-                like_today,
-                symbol,
-                like_today,
-                symbol,
-            )
-            if value is not None
+        WITH day_market AS (
+            SELECT id, symbol, last_price, zone
+            FROM market_snapshots
+            WHERE created_at >= ?
+            AND created_at < ?
+            {market_symbol_clause}
         ),
+        ranked_market AS (
+            SELECT
+                symbol,
+                COUNT(*) OVER (PARTITION BY symbol) AS snapshots,
+                MIN(last_price) OVER (PARTITION BY symbol) AS min_price,
+                MAX(last_price) OVER (PARTITION BY symbol) AS max_price,
+                FIRST_VALUE(last_price) OVER (
+                    PARTITION BY symbol
+                    ORDER BY id ASC
+                ) AS first_price,
+                FIRST_VALUE(last_price) OVER (
+                    PARTITION BY symbol
+                    ORDER BY id DESC
+                ) AS latest_price,
+                FIRST_VALUE(zone) OVER (
+                    PARTITION BY symbol
+                    ORDER BY id DESC
+                ) AS latest_zone,
+                ROW_NUMBER() OVER (
+                    PARTITION BY symbol
+                    ORDER BY id DESC
+                ) AS row_num
+            FROM day_market
+        )
+        SELECT
+            symbol,
+            snapshots,
+            min_price,
+            max_price,
+            first_price,
+            latest_price,
+            latest_zone
+        FROM ranked_market
+        WHERE row_num = 1
+        ORDER BY symbol
+        """,
+        tuple(value for value in (report_day_start, report_day_end, symbol) if value is not None),
     ).fetchall()
     signal_rows = conn.execute(
         f"""
         SELECT symbol, COUNT(*) AS signals
         FROM signal_logs
-        WHERE created_at LIKE ?
+        WHERE created_at >= ?
+        AND created_at < ?
         {signal_symbol_clause}
         GROUP BY symbol
         """,
-        tuple(value for value in (like_today, symbol) if value is not None),
+        tuple(
+            value for value in (report_day_start, report_day_end, symbol) if value is not None
+        ),
     ).fetchall()
     trade_rows = conn.execute(
         f"""
@@ -1786,11 +1820,14 @@ def _build_reporting_summary_from_history(
             SUM(CASE WHEN pnl_thb > 0 THEN 1 ELSE 0 END) AS wins,
             SUM(CASE WHEN pnl_thb <= 0 THEN 1 ELSE 0 END) AS losses
         FROM paper_trade_logs
-        WHERE sell_time LIKE ?
+        WHERE sell_time >= ?
+        AND sell_time < ?
         {trade_symbol_clause}
         GROUP BY symbol
         """,
-        tuple(value for value in (like_today, symbol) if value is not None),
+        tuple(
+            value for value in (report_day_start, report_day_end, symbol) if value is not None
+        ),
     ).fetchall()
     recent_trades = conn.execute(
         f"""
