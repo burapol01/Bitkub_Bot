@@ -380,10 +380,14 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
     default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
     if default_strategy_workspace not in strategy_workspace_options:
         default_strategy_workspace = "Sync & Rank"
+    _sync_select_state(
+        key="strategy_workspace",
+        options=strategy_workspace_options,
+        default=default_strategy_workspace,
+    )
     strategy_workspace = st.radio(
         "Strategy Workspace",
         strategy_workspace_options,
-        index=strategy_workspace_options.index(default_strategy_workspace),
         horizontal=True,
         key="strategy_workspace",
     )
@@ -981,16 +985,65 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         )
 
         compare_symbol_options = configured_symbols or symbols
-        compare_default_symbol = st.session_state.get("strategy_compare_symbol", compare_symbol_options[0])
+        compare_source_options = ["candles", "snapshots"]
+        compare_symbol_key = "strategy_compare_symbol"
+        compare_source_key = "strategy_compare_source"
+        compare_resolution_key = "strategy_compare_resolution"
+        compare_days_key = "strategy_compare_days"
+        compare_symbol_input_key = f"{compare_symbol_key}__input"
+        compare_source_input_key = f"{compare_source_key}__input"
+        compare_resolution_input_key = f"{compare_resolution_key}__input"
+        compare_days_input_key = f"{compare_days_key}__input"
+        compare_autorun = st.session_state.pop("strategy_compare_autorun", None)
+
+        if compare_autorun:
+            autorun_symbol = str(compare_autorun.get("symbol", compare_symbol_options[0]))
+            autorun_source = str(compare_autorun.get("source", "candles"))
+            autorun_resolution = str(compare_autorun.get("resolution", ranking_resolution))
+            autorun_days = int(compare_autorun.get("days", ranking_days) or ranking_days)
+            if autorun_symbol in compare_symbol_options:
+                st.session_state[compare_symbol_key] = autorun_symbol
+                st.session_state[compare_symbol_input_key] = autorun_symbol
+            if autorun_source in compare_source_options:
+                st.session_state[compare_source_key] = autorun_source
+                st.session_state[compare_source_input_key] = autorun_source
+            if autorun_resolution in rank_resolution_options:
+                st.session_state[compare_resolution_key] = autorun_resolution
+                st.session_state[compare_resolution_input_key] = autorun_resolution
+            st.session_state[compare_days_key] = min(max(int(autorun_days), 1), 90)
+            st.session_state[compare_days_input_key] = st.session_state[compare_days_key]
+
+        compare_default_symbol = str(st.session_state.get(compare_symbol_key, compare_symbol_options[0]))
         if compare_default_symbol not in compare_symbol_options:
             compare_default_symbol = compare_symbol_options[0]
-        compare_source_options = ["candles", "snapshots"]
-        compare_default_source = str(st.session_state.get("strategy_compare_source", "candles"))
+        compare_default_source = str(st.session_state.get(compare_source_key, "candles"))
         if compare_default_source not in compare_source_options:
             compare_default_source = "candles"
-        compare_default_resolution = str(st.session_state.get("strategy_compare_resolution", ranking_resolution))
+        compare_default_resolution = str(st.session_state.get(compare_resolution_key, ranking_resolution))
         if compare_default_resolution not in rank_resolution_options:
             compare_default_resolution = ranking_resolution
+        compare_default_days = int(st.session_state.get(compare_days_key, ranking_days))
+        compare_default_days = min(max(compare_default_days, 1), 90)
+
+        _sync_select_state(
+            key=compare_symbol_input_key,
+            options=compare_symbol_options,
+            default=compare_default_symbol,
+        )
+        _sync_select_state(
+            key=compare_source_input_key,
+            options=compare_source_options,
+            default=compare_default_source,
+        )
+        _sync_select_state(
+            key=compare_resolution_input_key,
+            options=rank_resolution_options,
+            default=compare_default_resolution,
+        )
+        current_compare_days_raw = int(st.session_state.get(compare_days_input_key, compare_default_days))
+        current_compare_days = min(max(current_compare_days_raw, 1), 90)
+        if compare_days_input_key not in st.session_state or current_compare_days_raw != current_compare_days:
+            st.session_state[compare_days_input_key] = current_compare_days
 
         with st.form("strategy_compare_form"):
             compare_meta_left, compare_meta_right = st.columns(2)
@@ -998,38 +1051,40 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                 compare_symbol = st.selectbox(
                     "Compare Symbol",
                     compare_symbol_options,
-                    index=compare_symbol_options.index(compare_default_symbol),
+                    key=compare_symbol_input_key,
                 )
                 compare_source = st.selectbox(
                     "Compare Source",
                     compare_source_options,
-                    index=compare_source_options.index(compare_default_source),
+                    key=compare_source_input_key,
                 )
             with compare_meta_right:
                 compare_resolution = st.selectbox(
                     "Compare Resolution",
                     rank_resolution_options,
-                    index=rank_resolution_options.index(compare_default_resolution),
+                    key=compare_resolution_input_key,
                     help="Used when Compare Source = candles.",
                 )
                 compare_days = st.number_input(
                     "Compare Lookback Days",
                     min_value=1,
                     max_value=90,
-                    value=int(st.session_state.get("strategy_compare_days", ranking_days)),
+                    key=compare_days_input_key,
                     step=1,
                 )
             run_compare = st.form_submit_button("Run Compare", type="primary", width='stretch')
 
         if configured_symbols:
-            compare_autorun = st.session_state.pop("strategy_compare_autorun", None)
             should_run_compare = run_compare or "strategy_compare_payload" not in st.session_state or bool(compare_autorun)
             if should_run_compare:
-                if compare_autorun:
-                    compare_symbol = str(compare_autorun.get("symbol", compare_symbol))
-                    compare_source = str(compare_autorun.get("source", compare_source))
-                    compare_resolution = str(compare_autorun.get("resolution", compare_resolution))
-                    compare_days = int(compare_autorun.get("days", compare_days))
+                compare_symbol = str(compare_symbol)
+                compare_source = str(compare_source)
+                compare_resolution = str(compare_resolution)
+                compare_days = int(compare_days)
+                st.session_state[compare_symbol_key] = compare_symbol
+                st.session_state[compare_source_key] = compare_source
+                st.session_state[compare_resolution_key] = compare_resolution
+                st.session_state[compare_days_key] = compare_days
                 compare_base_rule = build_rule_seed(config, compare_symbol)
                 compare_variants = build_rule_compare_variants(base_rule=compare_base_rule)
                 compare_rows = run_strategy_compare_rows(
@@ -1050,10 +1105,6 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     "rows": compare_rows,
                     "variant_rules": {row["variant"]: dict(row["rule"]) for row in compare_rows},
                 }
-                st.session_state["strategy_compare_symbol"] = compare_symbol
-                st.session_state["strategy_compare_source"] = compare_source
-                st.session_state["strategy_compare_resolution"] = str(compare_resolution)
-                st.session_state["strategy_compare_days"] = int(compare_days)
 
             compare_payload = st.session_state.get("strategy_compare_payload")
             if compare_payload:
@@ -1208,7 +1259,6 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                     },
                                 )
                                 _cached_strategy_tuning_history.clear()
-                                st.session_state["strategy_compare_symbol"] = str(compare_payload["symbol"])
                                 st.session_state["strategy_tuning_focus_autorun"] = str(compare_payload["symbol"])
                                 st.session_state[focus_variant_persist_key] = str(apply_variant)
                                 _cached_strategy_compare_selection_history.clear()

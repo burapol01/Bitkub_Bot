@@ -7,12 +7,9 @@ import streamlit as st
 
 from services.account_service import account_snapshot_errors, build_live_holdings_snapshot
 from services.db_service import (
-    fetch_dashboard_summary,
-    fetch_db_maintenance_summary,
+    fetch_diagnostics_page_dataset,
     fetch_execution_console_summary,
-    fetch_latest_filled_execution_orders_by_symbol,
     fetch_logs_page_dataset,
-    fetch_open_execution_orders,
 )
 from services.reconciliation_service import summarize_live_reconciliation
 from services.telegram_service import telegram_settings_snapshot
@@ -198,6 +195,16 @@ def _current_issue_rows_from_latest_snapshot(
     for row in current_issue_rows:
         row["created_at"] = snapshot_created_at
     return current_issue_rows
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_execution_console_summary() -> dict[str, Any]:
+    return fetch_execution_console_summary()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _cached_diagnostics_page_dataset() -> dict[str, Any]:
+    return fetch_diagnostics_page_dataset()
 
 
 def render_logs_page(*, config: dict[str, Any], today: str) -> None:
@@ -496,18 +503,30 @@ def render_diagnostics_page(
     private_ctx: dict[str, Any],
     latest_prices: dict[str, float],
 ) -> None:
-    db_summary = fetch_db_maintenance_summary()
-    dashboard_summary = fetch_dashboard_summary(today=today)
-    execution_console_summary = fetch_execution_console_summary()
-    live_reconciliation = summarize_live_reconciliation(
-        execution_orders=fetch_open_execution_orders(),
-        live_holdings_rows=build_live_holdings_snapshot(
-            account_snapshot=private_ctx["account_snapshot"],
-            latest_prices=latest_prices,
-            latest_filled_execution_orders=fetch_latest_filled_execution_orders_by_symbol(),
-        ),
+    diagnostics_dataset = _cached_diagnostics_page_dataset()
+    db_summary = dict(diagnostics_dataset.get("db_summary") or {})
+    dashboard_summary = dict(diagnostics_dataset.get("summary") or {})
+    execution_console_counts = dict(diagnostics_dataset.get("execution_console_counts") or {})
+    open_execution_orders = list(diagnostics_dataset.get("open_execution_orders") or [])
+    latest_filled_execution_orders = dict(
+        diagnostics_dataset.get("latest_filled_execution_orders_by_symbol") or {}
+    )
+    live_holdings_rows = build_live_holdings_snapshot(
         account_snapshot=private_ctx["account_snapshot"],
-        private_client=private_ctx["client"],
+        latest_prices=latest_prices,
+        latest_filled_execution_orders=latest_filled_execution_orders,
+    )
+    use_deep_reconciliation = st.toggle(
+        "Deep Exchange Reconciliation",
+        value=False,
+        key="diagnostics_deep_reconciliation",
+        help="Slower but more thorough. When enabled, Diagnostics may call exchange order_info per open execution order to confirm anything missing from the latest account snapshot.",
+    )
+    live_reconciliation = summarize_live_reconciliation(
+        execution_orders=open_execution_orders,
+        live_holdings_rows=live_holdings_rows,
+        account_snapshot=private_ctx["account_snapshot"],
+        private_client=private_ctx["client"] if use_deep_reconciliation else None,
     )
     latest_account_snapshot = dashboard_summary.get("latest_account_snapshot")
     latest_reconciliation = dashboard_summary.get("latest_reconciliation")
@@ -591,22 +610,36 @@ def render_diagnostics_page(
         st.dataframe(latest_rows, width='stretch', hide_index=True)
     with col2:
         st.markdown('<div class="panel-title">Live Reconciliation</div>', unsafe_allow_html=True)
+        st.caption(
+            "Mode: deep exchange confirmation"
+            if use_deep_reconciliation
+            else "Mode: fast snapshot check only"
+        )
         render_reconciliation_block(live_reconciliation)
         st.markdown('<div class="panel-title">Execution Console Summary</div>', unsafe_allow_html=True)
         summary_rows = [
             {
                 "group": "open_orders",
-                "count": len(execution_console_summary["open_orders"]),
+                "count": int(execution_console_counts.get("open_orders", 0)),
             },
             {
                 "group": "recent_orders",
-                "count": len(execution_console_summary["recent_orders"]),
+                "count": int(execution_console_counts.get("recent_orders", 0)),
             },
             {
                 "group": "recent_events",
-                "count": len(execution_console_summary["recent_events"]),
+                "count": int(execution_console_counts.get("recent_events", 0)),
             },
         ]
         st.dataframe(summary_rows, width='stretch', hide_index=True)
-        with st.expander("Execution Details", expanded=False):
-            st.json(execution_console_summary, expanded=False)
+        load_execution_details = st.toggle(
+            "Load Execution Details",
+            value=False,
+            key="diagnostics_load_execution_details",
+            help="Disabled by default to keep Diagnostics faster. Turn this on only when you need the full open-order and event payloads.",
+        )
+        if load_execution_details:
+            with st.expander("Execution Details", expanded=False):
+                st.json(_cached_execution_console_summary(), expanded=False)
+        else:
+            st.caption("Execution details are skipped by default for faster page loads.")

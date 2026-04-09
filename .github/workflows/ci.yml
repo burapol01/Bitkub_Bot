@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - main
+      - fixbug/**
   workflow_dispatch:
 
 permissions:
@@ -26,10 +27,10 @@ jobs:
       BITKUB_CONFIG_PATH: config.json
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
           cache: pip
@@ -79,6 +80,12 @@ jobs:
 
           print(f"Compile smoke check ok for {len(files)} Python files")
           PY
+
+      - name: Run Streamlit strategy smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Check version metadata resolution
         shell: bash
