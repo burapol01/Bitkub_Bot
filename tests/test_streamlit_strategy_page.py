@@ -178,15 +178,20 @@ def _app_script(*, workspace: str, body: str) -> str:
     return "\n".join(
         [
             "import sys",
+            "import os",
+            "import tempfile",
             "from pathlib import Path",
             "",
+            "os.environ['BITKUB_DB_PATH'] = str(Path(tempfile.gettempdir()) / 'bitkub_streamlit_strategy_page_tests.db')",
             "sys.path.insert(0, str(Path.cwd()))",
             "",
             "import json",
             "import streamlit as st",
+            "from services.db_service import init_db",
             "from ui.streamlit import pages",
             "",
             f"CONFIG = json.loads({_json_string(_base_config())})",
+            "init_db()",
             "",
             textwrap.dedent(body).strip(),
             "",
@@ -231,7 +236,7 @@ class StrategyPageAppTests(unittest.TestCase):
         )
 
         at = AppTest.from_string(script)
-        at.run()
+        at.run(timeout=10)
 
         self.assertEqual(len(at.exception), 0)
         prune_widget = at.multiselect(key="strategy_prune_live_rules_selection")
@@ -242,7 +247,7 @@ class StrategyPageAppTests(unittest.TestCase):
             button for button in at.button if button.label == "Prune Selected Live Rules"
         )
         submit_button.click()
-        at.run()
+        at.run(timeout=10)
 
         self.assertEqual(len(at.exception), 0)
 
@@ -275,7 +280,7 @@ class StrategyPageAppTests(unittest.TestCase):
         )
 
         at = AppTest.from_string(script)
-        at.run()
+        at.run(timeout=10)
 
         focus_key = "strategy_compare_focus_variant::THB_TRX|candles|240|14"
         apply_key = "strategy_compare_apply_variant::THB_TRX|candles|240|14"
@@ -314,11 +319,11 @@ class StrategyPageAppTests(unittest.TestCase):
         )
 
         at = AppTest.from_string(script)
-        at.run()
+        at.run(timeout=10)
 
         at.selectbox(key="strategy_compare_symbol__input").set_value("THB_SUMX")
         next(button for button in at.button if button.label == "Run Compare").click()
-        at.run()
+        at.run(timeout=10)
 
         self.assertEqual(len(at.exception), 0)
         self.assertEqual(at.selectbox(key="strategy_compare_symbol__input").value, "THB_SUMX")

@@ -380,10 +380,14 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
     default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
     if default_strategy_workspace not in strategy_workspace_options:
         default_strategy_workspace = "Sync & Rank"
+    _sync_select_state(
+        key="strategy_workspace",
+        options=strategy_workspace_options,
+        default=default_strategy_workspace,
+    )
     strategy_workspace = st.radio(
         "Strategy Workspace",
         strategy_workspace_options,
-        index=strategy_workspace_options.index(default_strategy_workspace),
         horizontal=True,
         key="strategy_workspace",
     )
