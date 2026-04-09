@@ -148,6 +148,11 @@ def daily_totals() -> tuple[int, int, int, float]:
     return total_trades, total_wins, total_losses, total_pnl
 
 
+def should_queue_config_reload_telegram_notification(*, source: str) -> bool:
+    normalized_source = str(source or "").strip().lower()
+    return normalized_source not in {"telegram", "telegram_confirmation"}
+
+
 def missing_position_symbols(rules: dict, active_positions: dict) -> list[str]:
     return sorted(symbol for symbol in active_positions if symbol not in rules)
 
@@ -1035,7 +1040,7 @@ def main():
         payload = dict(pending.get("payload") or {})
 
         if action == "reload":
-            reload_config_action()
+            reload_config_action(source="telegram_confirmation")
             return notice or "Config reload completed", notice_lines or ["Config reload finished."], "processed"
         if action == "pause":
             set_manual_pause_action(True)
@@ -1782,7 +1787,7 @@ def main():
                 safety_pause = False
                 safety_pause_lines = None
 
-            def reload_config_action():
+            def reload_config_action(*, source: str = "console"):
                 nonlocal config, notice, notice_lines, report_filter_symbol
                 old_config = config
                 new_config, errors = reload_config()
@@ -1832,12 +1837,13 @@ def main():
                     message=notice,
                     details={"changes": change_lines},
                 )
-                notify_telegram(
-                    "config_reload",
-                    notice,
-                    change_lines[:8],
-                    payload={"changes": change_lines},
-                )
+                if should_queue_config_reload_telegram_notification(source=source):
+                    notify_telegram(
+                        "config_reload",
+                        notice,
+                        change_lines[:8],
+                        payload={"changes": change_lines, "source": source},
+                    )
                 new_mode = str(new_config.get("mode", "paper"))
                 guardrail_message = execution_guardrail_message(
                     new_mode,
