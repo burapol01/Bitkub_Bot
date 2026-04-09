@@ -97,6 +97,23 @@ def _sync_select_state(*, key: str, options: list[str], default: str) -> None:
         st.session_state[key] = normalized_default
 
 
+def _strategy_compare_scope_key(
+    *,
+    symbol: str,
+    source: str,
+    resolution: str,
+    days: int,
+) -> str:
+    return "|".join(
+        [
+            str(symbol or "").strip(),
+            str(source or "").strip(),
+            str(resolution or "").strip(),
+            str(int(days)),
+        ]
+    )
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _cached_trade_analytics(symbol_key: str = "") -> dict[str, Any]:
     return fetch_trade_analytics(symbol=symbol_key or None)
@@ -138,6 +155,50 @@ def _cached_coin_ranking(
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_strategy_tuning_history(limit: int = 8) -> list[dict[str, Any]]:
     return fetch_runtime_event_log(limit=limit, event_type="strategy_tuning")
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_strategy_compare_selection_history(limit: int = 200) -> list[dict[str, Any]]:
+    return fetch_runtime_event_log(limit=limit, event_type="strategy_compare_selection")
+
+
+def _latest_strategy_compare_selection_map(limit: int = 200) -> dict[str, dict[str, Any]]:
+    selections: dict[str, dict[str, Any]] = {}
+    for row in _cached_strategy_compare_selection_history(limit=limit):
+        details = dict(row.get("details") or {})
+        scope = _strategy_compare_scope_key(
+            symbol=str(details.get("symbol") or ""),
+            source=str(details.get("source") or ""),
+            resolution=str(details.get("resolution") or ""),
+            days=int(details.get("days") or 0),
+        )
+        if scope.strip("|") and scope not in selections:
+            selections[scope] = {
+                "focus_variant": str(details.get("focus_variant") or ""),
+                "created_at": str(row.get("created_at") or ""),
+            }
+    return selections
+
+
+def _latest_strategy_compare_applied_map(limit: int = 200) -> dict[str, dict[str, Any]]:
+    applied: dict[str, dict[str, Any]] = {}
+    for row in _cached_strategy_tuning_history(limit=limit):
+        details = dict(row.get("details") or {})
+        if str(details.get("action") or "") != "apply_compared_variant":
+            continue
+        scope = _strategy_compare_scope_key(
+            symbol=str(details.get("symbol") or ""),
+            source=str(details.get("source") or ""),
+            resolution=str(details.get("resolution") or ""),
+            days=int(details.get("days") or 0),
+        )
+        if scope.strip("|") and scope not in applied:
+            applied[scope] = {
+                "variant": str(details.get("variant") or ""),
+                "rule": dict(details.get("rule") or {}),
+                "created_at": str(row.get("created_at") or ""),
+            }
+    return applied
 
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -714,14 +775,76 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     st.caption("No action queue right now. All current live rules are either stable or still accumulating evidence.")
 
                 if prune_rows:
-                    prune_default_symbols = [row["symbol"] for row in prune_rows]
                     prune_option_symbols = [row["symbol"] for row in actionable_rows]
+                    open_execution_symbols = {
+                        str(order.get("symbol", ""))
+                        for order in fetch_open_execution_orders()
+                        if str(order.get("symbol", "")).strip()
+                    }
+                    blocked_prune_symbols = [
+                        symbol for symbol in prune_option_symbols if symbol in open_execution_symbols
+                    ]
+                    selectable_prune_symbols = [
+                        symbol for symbol in prune_option_symbols if symbol not in open_execution_symbols
+                    ]
+                    prune_default_symbols = [
+                        row["symbol"] for row in prune_rows if row["symbol"] not in open_execution_symbols
+                    ]
+                    prune_selection_key = "strategy_prune_live_rules_selection"
+                    prune_remove_key = "strategy_prune_live_rules_quick_remove"
+                    prune_add_key = "strategy_prune_live_rules_quick_add"
+
+                    _sync_multiselect_state(
+                        key=prune_selection_key,
+                        options=selectable_prune_symbols,
+                        default=prune_default_symbols,
+                    )
+                    current_prune_selection = list(
+                        st.session_state.get(prune_selection_key, prune_default_symbols)
+                    )
+                    _sync_multiselect_state(
+                        key=prune_remove_key,
+                        options=current_prune_selection,
+                        default=[],
+                    )
+                    _sync_multiselect_state(
+                        key=prune_add_key,
+                        options=[
+                            symbol
+                            for symbol in selectable_prune_symbols
+                            if symbol not in current_prune_selection
+                        ],
+                        default=[],
+                    )
+
+                    if blocked_prune_symbols:
+                        st.caption(
+                            "Locked by open execution order and excluded from the default prune selection: "
+                            + ", ".join(blocked_prune_symbols)
+                        )
+
                     with st.form("strategy_prune_live_rules_form"):
                         prune_selection = st.multiselect(
                             "Prune From Live Rules",
-                            prune_option_symbols,
-                            default=prune_default_symbols,
-                            help="Default selection includes symbols currently marked PRUNE. You can also remove REVIEW/MONITOR symbols if you intentionally want a tighter shortlist.",
+                            selectable_prune_symbols,
+                            key=prune_selection_key,
+                            help="Default selection includes symbols currently marked PRUNE, excluding any symbol that still has an open execution order.",
+                        )
+                        prune_remove_symbols = st.multiselect(
+                            "Quick Remove From Current Selection",
+                            prune_selection,
+                            key=prune_remove_key,
+                            help="Use the search box here to find a coin quickly and remove it from the prune list without scrolling through a long selected set.",
+                        )
+                        prune_add_symbols = st.multiselect(
+                            "Quick Add Back To Selection",
+                            [
+                                symbol
+                                for symbol in selectable_prune_symbols
+                                if symbol not in prune_selection
+                            ],
+                            key=prune_add_key,
+                            help="Use this if you removed too much and want to add a few symbols back without rebuilding the whole selection.",
                         )
                         remove_from_watchlist = st.checkbox(
                             "Also remove from watchlist",
@@ -734,13 +857,21 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                             width='stretch',
                         )
                     if prune_submitted:
-                        if not prune_selection:
+                        effective_prune_selection = ordered_unique_symbols(
+                            [
+                                symbol
+                                for symbol in prune_selection
+                                if symbol not in set(prune_remove_symbols)
+                            ],
+                            prune_add_symbols,
+                        )
+                        if not effective_prune_selection:
                             st.warning("Select at least one symbol before pruning live rules.")
                         elif blocked_symbols := sorted(
                             {
                                 str(order.get("symbol", ""))
                                 for order in fetch_open_execution_orders()
-                                if str(order.get("symbol", "")) in set(prune_selection)
+                                if str(order.get("symbol", "")) in set(effective_prune_selection)
                             }
                         ):
                             st.error(
@@ -751,26 +882,28 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                         else:
                             updated = _build_pruned_live_rules_config(
                                 config=config,
-                                symbols_to_prune=list(prune_selection),
+                                symbols_to_prune=list(effective_prune_selection),
                                 remove_from_watchlist=bool(remove_from_watchlist),
                             )
                             if save_config_with_feedback(
                                 config,
                                 updated,
-                                f"Pruned {len(prune_selection)} symbol(s) from live rules",
+                                f"Pruned {len(effective_prune_selection)} symbol(s) from live rules",
                             ):
                                 insert_runtime_event(
                                     created_at=now_text(),
                                     event_type="strategy_tuning",
                                     severity="info",
-                                    message=f"Pruned {len(prune_selection)} symbol(s) from live rules",
+                                    message=f"Pruned {len(effective_prune_selection)} symbol(s) from live rules",
                                     details={
                                         "action": "prune_live_rules",
-                                        "symbols": list(prune_selection),
+                                        "symbols": list(effective_prune_selection),
                                         "remove_from_watchlist": bool(remove_from_watchlist),
                                     },
                                 )
                                 _cached_strategy_tuning_history.clear()
+                                st.session_state[prune_remove_key] = []
+                                st.session_state[prune_add_key] = []
                                 st.rerun()
             with tuning_tabs[1]:
                 if tuning_rows:
@@ -952,16 +1085,20 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     )
                 with compare_right:
                     focus_variant_options = [row["variant"] for row in compare_rows]
-                    compare_scope = "|".join(
-                        [
-                            str(compare_payload.get("symbol", "")),
-                            str(compare_payload.get("source", "")),
-                            str(compare_payload.get("resolution", "")),
-                            str(compare_payload.get("days", "")),
-                        ]
+                    compare_scope = _strategy_compare_scope_key(
+                        symbol=str(compare_payload.get("symbol", "")),
+                        source=str(compare_payload.get("source", "")),
+                        resolution=str(compare_payload.get("resolution", "")),
+                        days=int(compare_payload.get("days", 0) or 0),
                     )
+                    persisted_selection = _latest_strategy_compare_selection_map().get(compare_scope, {})
+                    latest_applied_variant = _latest_strategy_compare_applied_map().get(compare_scope, {})
                     preferred_variant = (
-                        str(best_variant.get("variant"))
+                        str(persisted_selection.get("focus_variant"))
+                        if str(persisted_selection.get("focus_variant") or "") in focus_variant_options
+                        else str(latest_applied_variant.get("variant"))
+                        if str(latest_applied_variant.get("variant") or "") in focus_variant_options
+                        else str(best_variant.get("variant"))
                         if best_variant and str(best_variant.get("variant")) in focus_variant_options
                         else focus_variant_options[0]
                     )
@@ -977,6 +1114,25 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                         focus_variant_options,
                         key=focus_variant_key,
                     )
+                    focus_variant_persist_key = f"{focus_variant_key}__persisted_value"
+                    if focus_variant_persist_key not in st.session_state:
+                        st.session_state[focus_variant_persist_key] = selected_variant
+                    elif str(st.session_state.get(focus_variant_persist_key) or "") != str(selected_variant):
+                        insert_runtime_event(
+                            created_at=now_text(),
+                            event_type="strategy_compare_selection",
+                            severity="info",
+                            message=f"Selected compare variant {selected_variant} for {compare_payload['symbol']}",
+                            details={
+                                "symbol": str(compare_payload.get("symbol", "")),
+                                "source": str(compare_payload.get("source", "")),
+                                "resolution": str(compare_payload.get("resolution", "")),
+                                "days": int(compare_payload.get("days", 0) or 0),
+                                "focus_variant": str(selected_variant),
+                            },
+                        )
+                        st.session_state[focus_variant_persist_key] = selected_variant
+                        _cached_strategy_compare_selection_history.clear()
                     focus_variant_row = next(row for row in compare_rows if row["variant"] == selected_variant)
                     decision_tone = "good" if str(focus_variant_row.get("decision")) in {"Clearly better", "Marginally better"} else "warn" if str(focus_variant_row.get("decision")) in {"Tied with baseline", "Needs more samples", "Current baseline"} else "bad"
                     st.markdown(
@@ -998,6 +1154,16 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     st.caption(f"Fee note: {focus_variant_row.get('fee_guardrail_note', 'n/a')}")
                     st.caption(f"Decision: {focus_variant_row['decision_reason']}")
                     st.caption(f"Variant note: {focus_variant_row['note']}")
+                    current_variant_rule = dict(compare_payload.get("variant_rules", {}).get("CURRENT") or {})
+                    if latest_applied_variant:
+                        if dict(latest_applied_variant.get("rule") or {}) == current_variant_rule:
+                            st.caption(
+                                f"Current live rule matches last applied variant {latest_applied_variant.get('variant', 'n/a')} ({latest_applied_variant.get('created_at', 'n/a')})."
+                            )
+                        else:
+                            st.caption(
+                                f"Last applied variant was {latest_applied_variant.get('variant', 'n/a')} ({latest_applied_variant.get('created_at', 'n/a')}), but the current live rule has changed since then."
+                            )
 
                     _sync_select_state(
                         key=apply_variant_key,
@@ -1046,10 +1212,8 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                 _cached_strategy_tuning_history.clear()
                                 st.session_state["strategy_compare_symbol"] = str(compare_payload["symbol"])
                                 st.session_state["strategy_tuning_focus_autorun"] = str(compare_payload["symbol"])
-                                st.session_state[focus_variant_key] = "CURRENT"
-                                st.session_state[f"{focus_variant_key}__signature"] = tuple(focus_variant_options)
-                                st.session_state[apply_variant_key] = "CURRENT"
-                                st.session_state[f"{apply_variant_key}__signature"] = tuple(focus_variant_options)
+                                st.session_state[focus_variant_persist_key] = str(apply_variant)
+                                _cached_strategy_compare_selection_history.clear()
                                 st.session_state.pop("strategy_compare_payload", None)
                                 st.session_state["strategy_compare_autorun"] = {
                                     "symbol": str(compare_payload["symbol"]),
