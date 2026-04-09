@@ -5,10 +5,11 @@ from typing import Any
 
 import streamlit as st
 
-from config import CONFIG_PATH
+from config import CONFIG_PATH, ordered_unique_symbols
 
 from services.db_service import (
     DB_PATH,
+    fetch_open_execution_orders,
     fetch_reports_page_dataset,
     fetch_runtime_event_log,
     insert_runtime_event,
@@ -71,6 +72,31 @@ def _sync_multiselect_state(*, key: str, options: list[str], default: list[str])
             st.session_state[key] = filtered_value
 
 
+def _sync_select_state(*, key: str, options: list[str], default: str) -> None:
+    normalized_options = [str(option) for option in options]
+    if not normalized_options:
+        st.session_state.pop(key, None)
+        st.session_state.pop(f"{key}__signature", None)
+        return
+
+    normalized_default = (
+        str(default)
+        if str(default) in normalized_options
+        else normalized_options[0]
+    )
+    signature = tuple(normalized_options)
+    signature_key = f"{key}__signature"
+    current_value = st.session_state.get(key)
+
+    if st.session_state.get(signature_key) != signature:
+        st.session_state[key] = normalized_default
+        st.session_state[signature_key] = signature
+        return
+
+    if str(current_value) not in normalized_options:
+        st.session_state[key] = normalized_default
+
+
 @st.cache_data(ttl=30, show_spinner=False)
 def _cached_trade_analytics(symbol_key: str = "") -> dict[str, Any]:
     return fetch_trade_analytics(symbol=symbol_key or None)
@@ -81,7 +107,7 @@ def _cached_market_snapshot_coverage(days: int) -> list[dict[str, Any]]:
     return fetch_market_snapshot_coverage(days=days)
 
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def _cached_reports_page_payload(
     *,
     today: str,
@@ -205,7 +231,10 @@ def _build_pruned_live_rules_config(
             symbol for symbol in watchlist_symbols if symbol not in prune_set
         ]
     else:
-        updated["watchlist_symbols"] = sorted(set(watchlist_symbols) | set(updated_rules))
+        updated["watchlist_symbols"] = ordered_unique_symbols(
+            watchlist_symbols,
+            updated_rules.keys(),
+        )
     return updated
 
 
@@ -544,9 +573,9 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                         market_price=ranking_last_close_by_symbol.get(promoted_symbol),
                                     )
                             updated["rules"] = updated_rules
-                            updated["watchlist_symbols"] = sorted(
-                                set(config.get("watchlist_symbols", configured_symbols))
-                                | set(selected_promotions)
+                            updated["watchlist_symbols"] = ordered_unique_symbols(
+                                config.get("watchlist_symbols", configured_symbols),
+                                selected_promotions,
                             )
                             if save_config_with_feedback(
                                 config,
@@ -707,6 +736,18 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     if prune_submitted:
                         if not prune_selection:
                             st.warning("Select at least one symbol before pruning live rules.")
+                        elif blocked_symbols := sorted(
+                            {
+                                str(order.get("symbol", ""))
+                                for order in fetch_open_execution_orders()
+                                if str(order.get("symbol", "")) in set(prune_selection)
+                            }
+                        ):
+                            st.error(
+                                "Cannot prune live rules while open execution orders still exist for: "
+                                + ", ".join(blocked_symbols)
+                                + ". Cancel or refresh them from Live Ops first."
+                            )
                         else:
                             updated = _build_pruned_live_rules_config(
                                 config=config,
@@ -924,11 +965,17 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                         if best_variant and str(best_variant.get("variant")) in focus_variant_options
                         else focus_variant_options[0]
                     )
+                    focus_variant_key = f"strategy_compare_focus_variant::{compare_scope}"
+                    apply_variant_key = f"strategy_compare_apply_variant::{compare_scope}"
+                    _sync_select_state(
+                        key=focus_variant_key,
+                        options=focus_variant_options,
+                        default=preferred_variant,
+                    )
                     selected_variant = st.selectbox(
                         "Variant Focus",
                         focus_variant_options,
-                        index=focus_variant_options.index(preferred_variant),
-                        key=f"strategy_compare_focus_variant::{compare_scope}",
+                        key=focus_variant_key,
                     )
                     focus_variant_row = next(row for row in compare_rows if row["variant"] == selected_variant)
                     decision_tone = "good" if str(focus_variant_row.get("decision")) in {"Clearly better", "Marginally better"} else "warn" if str(focus_variant_row.get("decision")) in {"Tied with baseline", "Needs more samples", "Current baseline"} else "bad"
@@ -952,12 +999,16 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     st.caption(f"Decision: {focus_variant_row['decision_reason']}")
                     st.caption(f"Variant note: {focus_variant_row['note']}")
 
+                    _sync_select_state(
+                        key=apply_variant_key,
+                        options=focus_variant_options,
+                        default=selected_variant,
+                    )
                     with st.form("strategy_apply_compared_variant_form"):
                         apply_variant = st.selectbox(
                             "Apply Variant To Live Rule",
                             focus_variant_options,
-                            index=focus_variant_options.index(selected_variant),
-                            key=f"strategy_compare_apply_variant::{compare_scope}::{selected_variant}",
+                            key=apply_variant_key,
                         )
                         apply_submitted = st.form_submit_button(
                             "Apply Compared Variant",
@@ -995,6 +1046,10 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                                 _cached_strategy_tuning_history.clear()
                                 st.session_state["strategy_compare_symbol"] = str(compare_payload["symbol"])
                                 st.session_state["strategy_tuning_focus_autorun"] = str(compare_payload["symbol"])
+                                st.session_state[focus_variant_key] = "CURRENT"
+                                st.session_state[f"{focus_variant_key}__signature"] = tuple(focus_variant_options)
+                                st.session_state[apply_variant_key] = "CURRENT"
+                                st.session_state[f"{apply_variant_key}__signature"] = tuple(focus_variant_options)
                                 st.session_state.pop("strategy_compare_payload", None)
                                 st.session_state["strategy_compare_autorun"] = {
                                     "symbol": str(compare_payload["symbol"]),

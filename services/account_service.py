@@ -33,6 +33,33 @@ def _unwrap_result(payload: Any) -> Any:
     return payload
 
 
+def _capture_open_orders_by_symbol(
+    client: BitkubPrivateClient,
+    *,
+    tracked_symbols: list[str],
+) -> dict[str, Any]:
+    return {
+        symbol: _capture_result(lambda symbol=symbol: client.get_open_orders(symbol))
+        for symbol in tracked_symbols
+    }
+
+
+def fetch_open_orders_by_symbol_snapshot(
+    client: BitkubPrivateClient,
+    *,
+    symbols: list[str],
+) -> dict[str, Any]:
+    tracked_symbols = [
+        str(symbol).strip()
+        for symbol in symbols
+        if str(symbol).strip()
+    ]
+    return _capture_open_orders_by_symbol(
+        client,
+        tracked_symbols=tracked_symbols,
+    )
+
+
 def _normalize_exchange_symbol(
     raw_symbol: Any,
     *,

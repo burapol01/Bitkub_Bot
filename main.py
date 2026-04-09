@@ -15,7 +15,13 @@ from clients.bitkub_private_client import (
     BitkubPrivateClientError,
     is_unsupported_symbol_error_message,
 )
-from config import CONFIG_PATH, reload_config, save_config, summarize_config_changes
+from config import (
+    CONFIG_PATH,
+    ordered_unique_symbols,
+    reload_config,
+    save_config,
+    summarize_config_changes,
+)
 from core.strategy import get_zone, zone_changed
 from core.trade_engine import handle_symbol, import_wallet_position
 from services.account_service import (
@@ -1096,8 +1102,10 @@ def main():
             if symbol not in updated_rules:
                 updated_rules[symbol] = telegram_rule_seed(symbol)
             updated["rules"] = updated_rules
-            updated["watchlist_symbols"] = sorted(
-                set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()) | {symbol}
+            updated["watchlist_symbols"] = ordered_unique_symbols(
+                config.get("watchlist_symbols", []),
+                updated_rules.keys(),
+                [symbol],
             )
             success, result_title, result_lines = apply_saved_config_update(
                 updated_config=updated,
@@ -1121,8 +1129,10 @@ def main():
                 "max_trades_per_day": int(rule["max_trades_per_day"]),
             }
             updated["rules"] = updated_rules
-            updated["watchlist_symbols"] = sorted(
-                set(config.get("watchlist_symbols", [])) | set(updated_rules.keys()) | {symbol}
+            updated["watchlist_symbols"] = ordered_unique_symbols(
+                config.get("watchlist_symbols", []),
+                updated_rules.keys(),
+                [symbol],
             )
             success, result_title, result_lines = apply_saved_config_update(
                 updated_config=updated,
