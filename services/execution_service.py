@@ -1,6 +1,6 @@
 from typing import Any
 
-from clients.bitkub_private_client import BitkubPrivateClient
+from clients.bitkub_private_client import BitkubPrivateClient, BitkubPrivateClientError
 from services.order_service import build_place_ask_payload, build_place_bid_payload
 from services.strategy_lab_service import build_coin_ranking
 
@@ -692,20 +692,122 @@ def transition_live_order_state(
     return updated_record, event
 
 
-def map_order_info_to_state(order_info: dict[str, Any]) -> str:
-    result = order_info.get("result", {}) if isinstance(order_info, dict) else {}
-    status = str(result.get("status", "")).lower()
-    partially_filled = bool(result.get("partial_filled", False))
+def _unwrap_exchange_result(payload: Any) -> Any:
+    if isinstance(payload, dict) and "data" in payload:
+        payload = payload["data"]
+    if isinstance(payload, dict) and "result" in payload:
+        return payload["result"]
+    return payload
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "y"}
+
+
+def map_exchange_order_to_state(
+    payload: dict[str, Any] | Any,
+    *,
+    default_open: bool = False,
+) -> str:
+    result = _unwrap_exchange_result(payload)
+    if not isinstance(result, dict):
+        return ORDER_STATE_OPEN if default_open else ORDER_STATE_OPEN
+
+    status = str(result.get("status", "")).strip().lower()
+    partially_filled = _to_bool(result.get("partial_filled", False))
+    filled_amount = _to_float(result.get("filled"))
+    total_amount = _to_float(result.get("total"))
+    remaining_amount = _to_float(result.get("remaining"))
 
     if status == "filled":
         return ORDER_STATE_FILLED
-    if status == "cancelled":
+    if status in {"cancelled", "canceled"}:
         return ORDER_STATE_CANCELED
     if status == "unfilled" and partially_filled:
         return ORDER_STATE_PARTIALLY_FILLED
     if status == "unfilled":
         return ORDER_STATE_OPEN
+    if (
+        filled_amount is not None
+        and total_amount is not None
+        and total_amount > 0
+        and filled_amount >= total_amount
+    ):
+        return ORDER_STATE_FILLED
+    if (
+        partially_filled
+        or (
+            filled_amount is not None
+            and total_amount is not None
+            and total_amount > 0
+            and 0 < filled_amount < total_amount
+        )
+        or (
+            remaining_amount is not None
+            and total_amount is not None
+            and total_amount > 0
+            and 0 < remaining_amount < total_amount
+        )
+    ):
+        return ORDER_STATE_PARTIALLY_FILLED
     return ORDER_STATE_OPEN
+
+
+def map_order_info_to_state(order_info: dict[str, Any]) -> str:
+    return map_exchange_order_to_state(order_info)
+
+
+def _extract_exchange_order_rows(payload: Any) -> list[dict[str, Any]]:
+    result = _unwrap_exchange_result(payload)
+    if isinstance(result, list):
+        return [row for row in result if isinstance(row, dict)]
+    if isinstance(result, dict):
+        return [result]
+    return []
+
+
+def _find_matching_exchange_order_row(
+    payload: Any,
+    *,
+    exchange_order_id: str,
+) -> dict[str, Any] | None:
+    target = str(exchange_order_id or "").strip()
+    if not target:
+        return None
+
+    for row in _extract_exchange_order_rows(payload):
+        for key in ("id", "order_id", "first", "parent", "last"):
+            if str(row.get(key) or "").strip() == target:
+                return row
+    return None
+
+
+def _is_missing_order_error_message(error: str | None) -> bool:
+    normalized = str(error or "").strip().lower()
+    if not normalized:
+        return False
+    if "endpoint not found" in normalized or "requires sym" in normalized:
+        return False
+
+    markers = (
+        "not found",
+        "order not found",
+        "unknown order",
+        "invalid order",
+        "does not exist",
+        "no order",
+    )
+    return any(marker in normalized for marker in markers)
 
 
 def submit_manual_live_order(
@@ -792,19 +894,112 @@ def refresh_live_order_from_exchange(
             "execution order has no exchange_order_id and cannot be refreshed"
         )
 
-    order_info = client.get_order_info(
-        order_id=exchange_order_id,
-        symbol=str(order_record["symbol"]),
-        side=str(order_record["side"]),
-    )
-    mapped_state = map_order_info_to_state(order_info)
+    symbol = str(order_record["symbol"])
+    side = str(order_record["side"])
+    refresh_payload: dict[str, Any] | Any
+    refresh_event_type = "order_info_refresh"
+    refresh_message = "live order refreshed from Bitkub order_info"
+
+    try:
+        order_info = client.get_order_info(
+            order_id=exchange_order_id,
+            symbol=symbol,
+            side=side,
+        )
+        mapped_state = map_order_info_to_state(order_info)
+        refresh_payload = order_info
+    except BitkubPrivateClientError as order_info_error:
+        open_orders_payload: Any = None
+        open_orders_error: str | None = None
+        order_history_payload: Any = None
+        order_history_error: str | None = None
+
+        try:
+            open_orders_payload = client.get_open_orders(symbol=symbol)
+            matching_open_order = _find_matching_exchange_order_row(
+                open_orders_payload,
+                exchange_order_id=str(exchange_order_id),
+            )
+            if matching_open_order is not None:
+                mapped_state = map_exchange_order_to_state(
+                    matching_open_order,
+                    default_open=True,
+                )
+                refresh_payload = {
+                    "probe": "open_orders",
+                    "order_info_error": str(order_info_error),
+                    "open_orders": open_orders_payload,
+                    "matched_order": matching_open_order,
+                }
+                refresh_event_type = "open_orders_refresh"
+                refresh_message = "live order refreshed from Bitkub open_orders fallback"
+            else:
+                mapped_state = None
+        except BitkubPrivateClientError as open_orders_probe_error:
+            mapped_state = None
+            open_orders_error = str(open_orders_probe_error)
+
+        if mapped_state is None:
+            try:
+                order_history_payload = client.get_order_history(symbol=symbol, limit=50)
+                matching_history_order = _find_matching_exchange_order_row(
+                    order_history_payload,
+                    exchange_order_id=str(exchange_order_id),
+                )
+                if matching_history_order is not None:
+                    mapped_state = map_exchange_order_to_state(matching_history_order)
+                    refresh_payload = {
+                        "probe": "order_history",
+                        "order_info_error": str(order_info_error),
+                        "open_orders_error": open_orders_error,
+                        "order_history": order_history_payload,
+                        "matched_order": matching_history_order,
+                    }
+                    refresh_event_type = "order_history_refresh"
+                    refresh_message = "live order refreshed from Bitkub order_history fallback"
+            except BitkubPrivateClientError as order_history_probe_error:
+                order_history_error = str(order_history_probe_error)
+
+        if mapped_state is None:
+            no_open_order_match = open_orders_payload is not None and (
+                _find_matching_exchange_order_row(
+                    open_orders_payload,
+                    exchange_order_id=str(exchange_order_id),
+                )
+                is None
+            )
+            no_history_match = order_history_payload is not None and (
+                _find_matching_exchange_order_row(
+                    order_history_payload,
+                    exchange_order_id=str(exchange_order_id),
+                )
+                is None
+            )
+            if _is_missing_order_error_message(str(order_info_error)) and no_open_order_match and no_history_match:
+                mapped_state = ORDER_STATE_CANCELED
+                refresh_payload = {
+                    "probe": "exchange_absence_inference",
+                    "order_info_error": str(order_info_error),
+                    "open_orders": open_orders_payload,
+                    "open_orders_error": open_orders_error,
+                    "order_history": order_history_payload,
+                    "order_history_error": order_history_error,
+                }
+                refresh_event_type = "exchange_absence_refresh"
+                refresh_message = (
+                    "live order no longer appears in Bitkub order_info/open_orders/order_history; marked canceled"
+                )
+
+        if mapped_state is None:
+            raise order_info_error
+
     updated_record, refresh_event = transition_live_order_state(
         order_record=order_record,
         new_state=mapped_state,
         occurred_at=occurred_at,
-        event_type="order_info_refresh",
-        message="live order refreshed from Bitkub order_info",
-        response_payload=order_info,
+        event_type=refresh_event_type,
+        message=refresh_message,
+        response_payload=refresh_payload,
         exchange_order_id=str(exchange_order_id),
         exchange_client_id=order_record.get("exchange_client_id"),
     )
