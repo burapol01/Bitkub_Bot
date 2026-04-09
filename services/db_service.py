@@ -1632,6 +1632,211 @@ def fetch_dashboard_summary(
     }
 
 
+def fetch_diagnostics_page_dataset(
+    *,
+    recent_order_limit: int = 10,
+    recent_event_limit: int = 20,
+) -> dict[str, Any]:
+    table_names = (
+        "runtime_events",
+        "signal_logs",
+        "market_snapshots",
+        "account_snapshots",
+        "execution_orders",
+        "execution_order_events",
+    )
+    terminal_states = ("filled", "canceled", "rejected", "failed")
+    placeholders = ",".join("?" for _ in terminal_states)
+
+    with _connect() as conn:
+        table_counts = {
+            table_name: int(
+                conn.execute(f"SELECT COUNT(*) AS count FROM {table_name}").fetchone()["count"]
+            )
+            for table_name in table_names
+        }
+        latest_cleanup = conn.execute(
+            """
+            SELECT created_at, message, details_json
+            FROM runtime_events
+            WHERE event_type = 'sqlite_retention_cleanup'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        latest_account_snapshot = conn.execute(
+            """
+            SELECT created_at, source, private_api_status, capabilities_json
+            FROM account_snapshots
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        latest_reconciliation = conn.execute(
+            """
+            SELECT created_at, phase, status, warnings_json, positions_count
+            FROM reconciliation_results
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        latest_execution_order = conn.execute(
+            """
+            SELECT id, created_at, updated_at, symbol, side, order_type, state,
+                   exchange_order_id, exchange_client_id, message, guardrails_json
+            FROM execution_orders
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        open_execution_order_rows = conn.execute(
+            f"""
+            SELECT id, created_at, updated_at, symbol, side, order_type, state,
+                   exchange_order_id, exchange_client_id, message
+            FROM execution_orders
+            WHERE state NOT IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            terminal_states,
+        ).fetchall()
+        recent_order_rows = conn.execute(
+            """
+            SELECT id
+            FROM execution_orders
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (recent_order_limit,),
+        ).fetchall()
+        recent_event_rows = conn.execute(
+            """
+            SELECT id
+            FROM execution_order_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (recent_event_limit,),
+        ).fetchall()
+        latest_filled_rows = conn.execute(
+            """
+            SELECT e.id, e.created_at, e.updated_at, e.symbol, e.side, e.order_type, e.state,
+                   e.exchange_order_id, e.exchange_client_id, e.response_json, e.message
+            FROM execution_orders e
+            INNER JOIN (
+                SELECT symbol, MAX(id) AS latest_id
+                FROM execution_orders
+                WHERE state = 'filled'
+                GROUP BY symbol
+            ) latest
+            ON latest.symbol = e.symbol AND latest.latest_id = e.id
+            ORDER BY e.id DESC
+            """
+        ).fetchall()
+
+    db_exists = DB_PATH.exists()
+    db_size_bytes = DB_PATH.stat().st_size if db_exists else 0
+    latest_filled_execution_orders: dict[str, dict[str, Any]] = {}
+    for row in latest_filled_rows:
+        symbol = row["symbol"]
+        if symbol in latest_filled_execution_orders:
+            continue
+        latest_filled_execution_orders[symbol] = {
+            "id": int(row["id"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "symbol": symbol,
+            "side": row["side"],
+            "order_type": row["order_type"],
+            "state": row["state"],
+            "exchange_order_id": row["exchange_order_id"],
+            "exchange_client_id": row["exchange_client_id"],
+            "response_payload": _load_json(row["response_json"], {}),
+            "message": row["message"],
+        }
+
+    return {
+        "db_summary": {
+            "db_exists": db_exists,
+            "db_size_bytes": int(db_size_bytes),
+            "table_counts": table_counts,
+            "latest_cleanup": (
+                {
+                    "created_at": latest_cleanup["created_at"],
+                    "message": latest_cleanup["message"],
+                    "details": _load_json(latest_cleanup["details_json"], {}),
+                }
+                if latest_cleanup
+                else None
+            ),
+        },
+        "summary": {
+            "latest_account_snapshot": (
+                {
+                    "created_at": latest_account_snapshot["created_at"],
+                    "source": latest_account_snapshot["source"],
+                    "private_api_status": latest_account_snapshot["private_api_status"],
+                    "capabilities": _load_json(
+                        latest_account_snapshot["capabilities_json"], []
+                    ),
+                }
+                if latest_account_snapshot
+                else None
+            ),
+            "latest_reconciliation": (
+                {
+                    "created_at": latest_reconciliation["created_at"],
+                    "phase": latest_reconciliation["phase"],
+                    "status": latest_reconciliation["status"],
+                    "warnings": _load_json(
+                        latest_reconciliation["warnings_json"], []
+                    ),
+                    "positions_count": int(latest_reconciliation["positions_count"]),
+                }
+                if latest_reconciliation
+                else None
+            ),
+            "latest_execution_order": (
+                {
+                    "id": int(latest_execution_order["id"]),
+                    "created_at": latest_execution_order["created_at"],
+                    "updated_at": latest_execution_order["updated_at"],
+                    "symbol": latest_execution_order["symbol"],
+                    "side": latest_execution_order["side"],
+                    "order_type": latest_execution_order["order_type"],
+                    "state": latest_execution_order["state"],
+                    "exchange_order_id": latest_execution_order["exchange_order_id"],
+                    "exchange_client_id": latest_execution_order["exchange_client_id"],
+                    "message": latest_execution_order["message"],
+                    "guardrails": _load_json(latest_execution_order["guardrails_json"], {}),
+                }
+                if latest_execution_order
+                else None
+            ),
+        },
+        "execution_console_counts": {
+            "open_orders": len(open_execution_order_rows),
+            "recent_orders": len(recent_order_rows),
+            "recent_events": len(recent_event_rows),
+        },
+        "open_execution_orders": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "symbol": row["symbol"],
+                "side": row["side"],
+                "order_type": row["order_type"],
+                "state": row["state"],
+                "exchange_order_id": row["exchange_order_id"],
+                "exchange_client_id": row["exchange_client_id"],
+                "message": row["message"],
+            }
+            for row in open_execution_order_rows
+        ],
+        "latest_filled_execution_orders_by_symbol": latest_filled_execution_orders,
+    }
+
+
 def fetch_overview_summary(
     *,
     today: str,
@@ -2163,15 +2368,20 @@ def fetch_runtime_event_log(
     ]
 
 
-def fetch_open_execution_orders() -> list[dict[str, Any]]:
+def fetch_open_execution_orders(*, include_payloads: bool = True) -> list[dict[str, Any]]:
     terminal_states = ("filled", "canceled", "rejected", "failed")
     placeholders = ",".join("?" for _ in terminal_states)
+    payload_columns = """
+                   request_json, response_json,
+                   guardrails_json,
+    """ if include_payloads else ""
     with _connect() as conn:
         rows = conn.execute(
             f"""
             SELECT id, created_at, updated_at, symbol, side, order_type, state,
-                   exchange_order_id, exchange_client_id, request_json, response_json,
-                   guardrails_json, message
+                   exchange_order_id, exchange_client_id,
+                   {payload_columns}
+                   message
             FROM execution_orders
             WHERE state NOT IN ({placeholders})
             ORDER BY id DESC
@@ -2190,10 +2400,16 @@ def fetch_open_execution_orders() -> list[dict[str, Any]]:
             "state": row["state"],
             "exchange_order_id": row["exchange_order_id"],
             "exchange_client_id": row["exchange_client_id"],
-            "request_payload": _load_json(row["request_json"], {}),
-            "response_payload": _load_json(row["response_json"], {}),
-            "guardrails": _load_json(row["guardrails_json"], {}),
             "message": row["message"],
+            **(
+                {
+                    "request_payload": _load_json(row["request_json"], {}),
+                    "response_payload": _load_json(row["response_json"], {}),
+                    "guardrails": _load_json(row["guardrails_json"], {}),
+                }
+                if include_payloads
+                else {}
+            ),
         }
         for row in rows
     ]
@@ -2203,20 +2419,24 @@ def fetch_latest_filled_execution_orders_by_symbol() -> dict[str, dict[str, Any]
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, created_at, updated_at, symbol, side, order_type, state,
-                   exchange_order_id, exchange_client_id, request_json, response_json,
-                   guardrails_json, message
-            FROM execution_orders
-            WHERE state = 'filled'
-            ORDER BY id DESC
+            SELECT e.id, e.created_at, e.updated_at, e.symbol, e.side, e.order_type, e.state,
+                   e.exchange_order_id, e.exchange_client_id, e.request_json, e.response_json,
+                   e.guardrails_json, e.message
+            FROM execution_orders e
+            INNER JOIN (
+                SELECT symbol, MAX(id) AS latest_id
+                FROM execution_orders
+                WHERE state = 'filled'
+                GROUP BY symbol
+            ) latest
+            ON latest.symbol = e.symbol AND latest.latest_id = e.id
+            ORDER BY e.id DESC
             """
         ).fetchall()
 
     latest_by_symbol: dict[str, dict[str, Any]] = {}
     for row in rows:
         symbol = row["symbol"]
-        if symbol in latest_by_symbol:
-            continue
         latest_by_symbol[symbol] = {
             "id": int(row["id"]),
             "created_at": row["created_at"],
@@ -2240,8 +2460,9 @@ def fetch_execution_console_summary(
     *,
     recent_order_limit: int = 10,
     recent_event_limit: int = 20,
+    include_open_order_payloads: bool = True,
 ) -> dict[str, Any]:
-    open_orders = fetch_open_execution_orders()
+    open_orders = fetch_open_execution_orders(include_payloads=include_open_order_payloads)
 
     with _connect() as conn:
         recent_orders = conn.execute(

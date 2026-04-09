@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - main
+      - fixbug/**
   workflow_dispatch:
 
 permissions:
@@ -79,6 +80,12 @@ jobs:
 
           print(f"Compile smoke check ok for {len(files)} Python files")
           PY
+
+      - name: Run Streamlit strategy smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Check version metadata resolution
         shell: bash
