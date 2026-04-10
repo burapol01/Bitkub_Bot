@@ -2,6 +2,7 @@ import secrets
 import time
 from datetime import timedelta
 from collections.abc import Callable
+from typing import Any
 
 try:
     import msvcrt
@@ -146,6 +147,28 @@ def daily_totals() -> tuple[int, int, int, float]:
         total_pnl += stats["realized_pnl_thb"]
 
     return total_trades, total_wins, total_losses, total_pnl
+
+
+def build_telegram_position_line(
+    *,
+    symbol: str,
+    latest_prices: dict[str, float],
+    rules: dict[str, dict[str, Any]],
+    fee_rate: float,
+    positions: dict[str, dict[str, Any]],
+) -> str:
+    position = positions.get(symbol, {})
+    fallback_last_price = float(position.get("buy_price", 0.0) or 0.0)
+    last_price = float(latest_prices.get(symbol, fallback_last_price) or fallback_last_price)
+    rule = dict(rules.get(symbol, {}))
+    if "sell_above" not in rule:
+        rule["sell_above"] = float(position.get("sell_above", last_price) or last_price)
+    if "stop_loss_percent" not in rule:
+        rule["stop_loss_percent"] = float(position.get("stop_loss_percent", 0.0) or 0.0)
+    if "take_profit_percent" not in rule:
+        rule["take_profit_percent"] = float(position.get("take_profit_percent", 0.0) or 0.0)
+
+    return f"{symbol}: {position_detail_text(symbol, last_price, rule, fee_rate, positions)}"
 
 
 def should_queue_config_reload_telegram_notification(*, source: str) -> bool:
@@ -558,7 +581,15 @@ def main():
 
         lines: list[str] = []
         for symbol in sorted(positions)[:8]:
-            lines.append(f"{symbol}: {position_detail_text(symbol, positions[symbol], latest_prices)}")
+            lines.append(
+                build_telegram_position_line(
+                    symbol=symbol,
+                    latest_prices=latest_prices,
+                    rules=rules,
+                    fee_rate=fee_rate,
+                    positions=positions,
+                )
+            )
         if len(positions) > 8:
             lines.append(f"... and {len(positions) - 8} more position(s)")
         return lines
