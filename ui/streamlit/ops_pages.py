@@ -7,7 +7,9 @@ import streamlit as st
 from config import load_config, ordered_unique_symbols
 from services.account_service import (
     build_live_holdings_snapshot,
+    extract_open_order_rows,
     fetch_open_orders_by_symbol_snapshot,
+    probe_open_orders_support_snapshot,
 )
 from services.db_service import (
     fetch_execution_console_summary,
@@ -29,7 +31,7 @@ from ui.streamlit.actions import (
 from ui.streamlit.data import calc_daily_totals, capability_badge_tone
 from ui.streamlit.refresh import render_refreshable_fragment
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
-from ui.streamlit.strategy_support import evaluate_fee_guardrail
+from ui.streamlit.strategy_support import evaluate_fee_guardrail, fetch_market_symbol_universe
 from utils.time_utils import now_text
 
 
@@ -308,6 +310,12 @@ def render_account_page(
         latest_prices=latest_prices,
         latest_filled_execution_orders=fetch_latest_filled_execution_orders_by_symbol(),
     )
+    market_universe = fetch_market_symbol_universe()
+    market_source_by_symbol = {
+        str(symbol): str(source)
+        for symbol, source in dict(market_universe.get("source_by_symbol") or {}).items()
+        if str(symbol)
+    }
     total_holdings_value = sum(float(row.get("market_value_thb", 0.0)) for row in holdings)
     reserved_rows = sum(
         1 for row in holdings if float(row.get("reserved_qty", 0.0)) > 0
@@ -323,11 +331,11 @@ def render_account_page(
                 continue
             if entry.get("ok", False):
                 payload = entry.get("data", {})
-                payload_rows = payload.get("result", payload) if isinstance(payload, dict) else payload
-                count = len(payload_rows) if isinstance(payload_rows, list) else 0
+                count = len(extract_open_order_rows(payload))
                 rows.append(
                     {
                         "symbol": symbol,
+                        "source": market_source_by_symbol.get(symbol, "unknown"),
                         "status": "OK",
                         "open_orders": str(count),
                         "detail": "",
@@ -339,6 +347,7 @@ def render_account_page(
                     rows.append(
                         {
                             "symbol": symbol,
+                            "source": market_source_by_symbol.get(symbol, "unknown"),
                             "status": "UNSUPPORTED",
                             "open_orders": "n/a",
                             "detail": "my-open-orders is unsupported for this symbol",
@@ -348,6 +357,7 @@ def render_account_page(
                     rows.append(
                         {
                             "symbol": symbol,
+                            "source": market_source_by_symbol.get(symbol, "unknown"),
                             "status": "ERROR",
                             "open_orders": "n/a",
                             "detail": error_message,
@@ -398,6 +408,129 @@ def render_account_page(
                         private_ctx["client"],
                         symbols=list(probe_symbols),
                     )
+
+    market_probe_state_key = "account_market_open_order_support_probe"
+    market_probe_status_filter_key = "account_market_open_order_support_status_filter"
+    market_probe_detail_key = "account_market_open_order_support_detail_symbol"
+    market_symbols = list(market_universe.get("symbols", []))
+
+    with st.expander(
+        "Full Market Open-Order Compatibility Probe",
+        expanded=bool(st.session_state.get(market_probe_state_key)),
+    ):
+        st.caption(
+            "Probe every currently listed Bitkub symbol against the known my-open-orders request variants so you can see which coins still return endpoint-not-found and which request recipe actually works."
+        )
+        st.caption(
+            "Known attempts: quote_base_lower -> sym like btc_thb, base_quote_upper -> sym like BTC_THB, and without_symbol -> global open-orders."
+        )
+
+        probe_action_left, probe_action_right = st.columns(2)
+        with probe_action_left:
+            run_market_probe = st.button(
+                "Probe All Market Symbols",
+                key="account_market_open_order_support_probe_run",
+                width='stretch',
+            )
+        with probe_action_right:
+            clear_market_probe = st.button(
+                "Clear Probe Results",
+                key="account_market_open_order_support_probe_clear",
+                width='stretch',
+                disabled=not bool(st.session_state.get(market_probe_state_key)),
+            )
+
+        if clear_market_probe:
+            st.session_state.pop(market_probe_state_key, None)
+
+        if market_universe.get("error"):
+            st.warning(f"Bitkub market symbols unavailable right now: {market_universe['error']}")
+        elif market_symbols:
+            st.caption(f"Loaded {len(market_symbols)} market symbols from Bitkub.")
+        else:
+            st.info("No Bitkub market symbols were returned right now.")
+
+        if run_market_probe:
+            if private_ctx.get("client") is None:
+                st.error("Private API client is unavailable for the full market probe.")
+            elif market_universe.get("error") or not market_symbols:
+                st.warning("Bitkub market symbols are unavailable right now, so the full market probe cannot start.")
+            else:
+                with st.spinner(f"Probing open-order compatibility across {len(market_symbols)} symbols..."):
+                    st.session_state[market_probe_state_key] = probe_open_orders_support_snapshot(
+                        private_ctx["client"],
+                        symbols=market_symbols,
+                        source_by_symbol=market_source_by_symbol,
+                    )
+
+        market_probe = st.session_state.get(market_probe_state_key)
+        if isinstance(market_probe, dict) and market_probe:
+            summary = dict(market_probe.get("summary") or {})
+            summary_cols = st.columns(5)
+            with summary_cols[0]:
+                render_metric_card("Market Symbols", str(int(summary.get("symbols", 0) or 0)), "probe scope")
+            with summary_cols[1]:
+                render_metric_card("Supported", str(int(summary.get("supported", 0) or 0)), "symbol-specific query works")
+            with summary_cols[2]:
+                render_metric_card("Global Only", str(int(summary.get("global_only", 0) or 0)), "filter global open orders")
+            with summary_cols[3]:
+                render_metric_card("Unsupported", str(int(summary.get("unsupported", 0) or 0)), "endpoint-not-found after known variants")
+            with summary_cols[4]:
+                render_metric_card("Other Errors", str(int(summary.get("error", 0) or 0)), "non-standard failures")
+
+            unsupported_symbols = [str(symbol) for symbol in market_probe.get("unsupported_symbols", []) if str(symbol)]
+            if unsupported_symbols:
+                render_callout(
+                    "Unsupported Symbols",
+                    f"{len(unsupported_symbols)} symbol(s) still return endpoint-not-found after all known request variants. Keep these out of live open-order tracking for now.",
+                    "warn",
+                )
+                st.code("\n".join(unsupported_symbols), language="text")
+
+            status_options = ["ALL", "UNSUPPORTED", "ERROR", "GLOBAL_ONLY", "SUPPORTED"]
+            selected_market_probe_status = st.selectbox(
+                "Full Probe Status Filter",
+                status_options,
+                index=0,
+                key=market_probe_status_filter_key,
+            )
+            market_probe_rows = list(market_probe.get("rows") or [])
+            if selected_market_probe_status != "ALL":
+                market_probe_rows = [
+                    row
+                    for row in market_probe_rows
+                    if str(row.get("status") or "") == selected_market_probe_status
+                ]
+
+            if market_probe_rows:
+                st.dataframe(market_probe_rows, width='stretch', hide_index=True)
+            else:
+                st.caption("No full-probe rows match the selected status filter.")
+
+            detail_symbols = [
+                str(row.get("symbol") or "")
+                for row in list(market_probe.get("rows") or [])
+                if str(row.get("symbol") or "")
+            ]
+            if detail_symbols:
+                selected_detail_symbol = st.selectbox(
+                    "Inspect Full Probe Details",
+                    detail_symbols,
+                    index=0,
+                    key=market_probe_detail_key,
+                )
+                detail_payload = dict(market_probe.get("details_by_symbol", {}) or {}).get(
+                    selected_detail_symbol,
+                    {},
+                )
+                if detail_payload:
+                    st.json(detail_payload, expanded=False)
+
+            render_callout(
+                "Next-Step Guide",
+                "SUPPORTED means the row already tells you which request recipe works. GLOBAL_ONLY means use the global open-orders call and filter locally. UNSUPPORTED means both symbol-specific formats failed with endpoint-not-found, so there is no known sym-format fix right now and the coin should stay out of live open-order tracking.",
+                "info",
+            )
 
     open_rows = _build_open_order_rows(open_orders)
     probe_results = st.session_state.get("account_open_order_probe_results", {})

@@ -3,6 +3,7 @@ from typing import Any
 from clients.bitkub_private_client import (
     BitkubPrivateClient,
     BitkubPrivateClientError,
+    describe_open_orders_symbol_variants,
     is_symbol_required_error_message,
     is_unsupported_symbol_error_message,
 )
@@ -33,6 +34,121 @@ def _unwrap_result(payload: Any) -> Any:
     return payload
 
 
+def extract_open_order_rows(payload: Any) -> list[Any]:
+    rows = _unwrap_result(payload)
+    if isinstance(rows, list):
+        return rows
+    if rows is None:
+        return []
+    return [rows]
+
+
+def _classify_open_orders_probe_attempt(entry: dict[str, Any]) -> str:
+    if bool(entry.get("ok")):
+        return "OK"
+
+    error = str(entry.get("error") or "")
+    if _is_unsupported_open_orders_error(error):
+        return "UNSUPPORTED"
+    if _is_symbol_required_open_orders_error(error):
+        return "SYM_REQUIRED"
+    return "ERROR"
+
+
+def _open_orders_request_recipe(*, variant: str, sym_value: str | None) -> str:
+    if variant == "without_symbol":
+        return "GET my-open-orders"
+    if sym_value:
+        return f"GET my-open-orders?sym={sym_value}"
+    return "GET my-open-orders?sym=?"
+
+
+def _compact_probe_detail(attempts: list[dict[str, Any]]) -> str:
+    labels = {
+        "quote_base_lower": "quote_base_lower",
+        "base_quote_upper": "base_quote_upper",
+        "without_symbol": "without_symbol",
+    }
+    parts: list[str] = []
+    for attempt in attempts:
+        variant = str(attempt.get("variant") or "")
+        status = str(attempt.get("status") or "")
+        parts.append(f"{labels.get(variant, variant)}={status}")
+    return " | ".join(parts)
+
+
+def _summarize_open_orders_probe_attempts(
+    *,
+    symbol: str,
+    attempts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    symbol_attempts = [
+        attempt for attempt in attempts if str(attempt.get("variant")) != "without_symbol"
+    ]
+    working_symbol_attempt = next(
+        (attempt for attempt in symbol_attempts if str(attempt.get("status")) == "OK"),
+        None,
+    )
+    global_attempt = next(
+        (attempt for attempt in attempts if str(attempt.get("variant")) == "without_symbol"),
+        None,
+    )
+    global_ok = (
+        global_attempt
+        if isinstance(global_attempt, dict) and str(global_attempt.get("status")) == "OK"
+        else None
+    )
+
+    if isinstance(working_symbol_attempt, dict):
+        request_recipe = str(working_symbol_attempt.get("request_recipe") or "")
+        sym_value = str(working_symbol_attempt.get("sym") or "")
+        return {
+            "symbol": symbol,
+            "status": "SUPPORTED",
+            "open_orders": int(working_symbol_attempt.get("open_orders", 0) or 0),
+            "working_variant": str(working_symbol_attempt.get("variant") or ""),
+            "working_sym": sym_value,
+            "request_recipe": request_recipe,
+            "next_step": f"Use {request_recipe} for this symbol.",
+            "detail": _compact_probe_detail(attempts),
+        }
+
+    if isinstance(global_ok, dict):
+        return {
+            "symbol": symbol,
+            "status": "GLOBAL_ONLY",
+            "open_orders": int(global_ok.get("open_orders", 0) or 0),
+            "working_variant": "without_symbol",
+            "working_sym": "",
+            "request_recipe": str(global_ok.get("request_recipe") or "GET my-open-orders"),
+            "next_step": "Global my-open-orders works. Fetch without sym and filter rows locally for this symbol.",
+            "detail": _compact_probe_detail(attempts),
+        }
+
+    if symbol_attempts and all(str(attempt.get("status")) == "UNSUPPORTED" for attempt in symbol_attempts):
+        return {
+            "symbol": symbol,
+            "status": "UNSUPPORTED",
+            "open_orders": 0,
+            "working_variant": "",
+            "working_sym": "",
+            "request_recipe": "",
+            "next_step": "No known sym format passes. Treat this symbol as exchange-side unsupported for my-open-orders.",
+            "detail": _compact_probe_detail(attempts),
+        }
+
+    return {
+        "symbol": symbol,
+        "status": "ERROR",
+        "open_orders": 0,
+        "working_variant": "",
+        "working_sym": "",
+        "request_recipe": "",
+        "next_step": "Inspect the variant details below. This is not the standard endpoint-not-found signature.",
+        "detail": _compact_probe_detail(attempts),
+    }
+
+
 def _capture_open_orders_by_symbol(
     client: BitkubPrivateClient,
     *,
@@ -58,6 +174,103 @@ def fetch_open_orders_by_symbol_snapshot(
         client,
         tracked_symbols=tracked_symbols,
     )
+
+
+def probe_open_orders_support_snapshot(
+    client: BitkubPrivateClient,
+    *,
+    symbols: list[str],
+    source_by_symbol: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    tracked_symbols: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        tracked_symbols.append(symbol)
+        seen.add(symbol)
+
+    rows: list[dict[str, Any]] = []
+    details_by_symbol: dict[str, Any] = {}
+
+    for symbol in tracked_symbols:
+        market_source = str((source_by_symbol or {}).get(symbol) or "unknown").strip().lower() or "unknown"
+        variant_values = describe_open_orders_symbol_variants(symbol)
+        raw_attempts = client.probe_open_orders_variants(symbol)
+        attempts: list[dict[str, Any]] = []
+
+        for variant in ("quote_base_lower", "base_quote_upper", "without_symbol"):
+            entry = raw_attempts.get(
+                variant,
+                {"ok": False, "data": None, "error": "variant result missing"},
+            )
+            payload = entry.get("data")
+            open_order_rows = extract_open_order_rows(payload) if bool(entry.get("ok")) else []
+            attempt = {
+                "variant": variant,
+                "sym": variant_values.get(variant),
+                "market_source": market_source,
+                "status": _classify_open_orders_probe_attempt(entry),
+                "ok": bool(entry.get("ok")),
+                "open_orders": len(open_order_rows),
+                "request_recipe": _open_orders_request_recipe(
+                    variant=variant,
+                    sym_value=variant_values.get(variant),
+                ),
+                "error": str(entry.get("error") or ""),
+            }
+            attempts.append(attempt)
+
+        summary_row = _summarize_open_orders_probe_attempts(
+            symbol=symbol,
+            attempts=attempts,
+        )
+        summary_row["market_source"] = market_source
+        rows.append(summary_row)
+        details_by_symbol[symbol] = {
+            "symbol": symbol,
+            "market_source": market_source,
+            "status": summary_row["status"],
+            "request_recipe": summary_row["request_recipe"],
+            "next_step": summary_row["next_step"],
+            "attempts": attempts,
+        }
+
+    rows.sort(
+        key=lambda row: (
+            {"UNSUPPORTED": 0, "ERROR": 1, "GLOBAL_ONLY": 2, "SUPPORTED": 3}.get(
+                str(row.get("status")),
+                9,
+            ),
+            str(row.get("symbol") or ""),
+        )
+    )
+
+    summary = {
+        "symbols": len(rows),
+        "supported": sum(1 for row in rows if str(row.get("status")) == "SUPPORTED"),
+        "global_only": sum(1 for row in rows if str(row.get("status")) == "GLOBAL_ONLY"),
+        "unsupported": sum(1 for row in rows if str(row.get("status")) == "UNSUPPORTED"),
+        "error": sum(1 for row in rows if str(row.get("status")) == "ERROR"),
+        "open_order_symbols": sum(int(row.get("open_orders", 0) or 0) > 0 for row in rows),
+    }
+
+    return {
+        "summary": summary,
+        "rows": rows,
+        "details_by_symbol": details_by_symbol,
+        "unsupported_symbols": [
+            str(row.get("symbol") or "")
+            for row in rows
+            if str(row.get("status")) == "UNSUPPORTED"
+        ],
+        "error_symbols": [
+            str(row.get("symbol") or "")
+            for row in rows
+            if str(row.get("status")) == "ERROR"
+        ],
+    }
 
 
 def _normalize_exchange_symbol(

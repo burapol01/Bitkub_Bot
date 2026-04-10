@@ -333,7 +333,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     with right:
         st.markdown("#### Watchlist")
         st.caption(
-            "Watchlist symbols drive research, candle sync, and ranking. They are independent from live rules, so removing a symbol here stops research coverage after the console reload even if the live rule still exists."
+            "Watchlist symbols drive research, candle sync, ranking defaults, and symbol pickers. They are independent from live rules, and auto live entry still evaluates config rules only, so removing a symbol here stops research coverage after the console reload even if the live rule still exists."
         )
         watchlist_options = market_symbols or sorted(set(watchlist_symbols) | set(configured_symbols))
         with st.form("config_watchlist_form"):

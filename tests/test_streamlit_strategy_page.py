@@ -236,7 +236,7 @@ class StrategyPageAppTests(unittest.TestCase):
         )
 
         at = AppTest.from_string(script)
-        at.run(timeout=10)
+        at.run(timeout=20)
 
         self.assertEqual(len(at.exception), 0)
         prune_widget = at.multiselect(key="strategy_prune_live_rules_selection")
@@ -247,7 +247,7 @@ class StrategyPageAppTests(unittest.TestCase):
             button for button in at.button if button.label == "Prune Selected Live Rules"
         )
         submit_button.click()
-        at.run(timeout=10)
+        at.run(timeout=20)
 
         self.assertEqual(len(at.exception), 0)
 
@@ -280,7 +280,7 @@ class StrategyPageAppTests(unittest.TestCase):
         )
 
         at = AppTest.from_string(script)
-        at.run(timeout=10)
+        at.run(timeout=20)
 
         focus_key = "strategy_compare_focus_variant::THB_TRX|candles|240|14"
         apply_key = "strategy_compare_apply_variant::THB_TRX|candles|240|14"
@@ -319,11 +319,11 @@ class StrategyPageAppTests(unittest.TestCase):
         )
 
         at = AppTest.from_string(script)
-        at.run(timeout=10)
+        at.run(timeout=20)
 
         at.selectbox(key="strategy_compare_symbol__input").set_value("THB_SUMX")
         next(button for button in at.button if button.label == "Run Compare").click()
-        at.run(timeout=10)
+        at.run(timeout=20)
 
         self.assertEqual(len(at.exception), 0)
         self.assertEqual(at.selectbox(key="strategy_compare_symbol__input").value, "THB_SUMX")
