@@ -72,20 +72,6 @@ def main() -> None:
         st.session_state["ui_page"] = default_page
     current_page = str(st.session_state.get("ui_page", default_page))
     today = today_key()
-    dashboard_ctx: dict | None = None
-    overview_ctx: dict | None = None
-
-    def get_dashboard_ctx() -> dict[str, object]:
-        nonlocal dashboard_ctx
-        if dashboard_ctx is None:
-            dashboard_ctx = build_dashboard_context(config)
-        return dashboard_ctx
-
-    def get_overview_ctx() -> dict[str, object]:
-        nonlocal overview_ctx
-        if overview_ctx is None:
-            overview_ctx = build_overview_context(config)
-        return overview_ctx
 
     selected_page = render_sidebar(
         config=config,
@@ -103,7 +89,7 @@ def main() -> None:
 
     def render_selected_page() -> None:
         if selected_page == "Overview":
-            ctx = get_overview_ctx()
+            ctx = build_overview_context(config)
             render_overview_page(
                 config=config,
                 runtime=ctx["runtime"],
@@ -112,13 +98,13 @@ def main() -> None:
                 today=today,
             )
         elif selected_page == "Account":
-            ctx = get_dashboard_ctx()
+            ctx = build_dashboard_context(config)
             render_account_page(
                 private_ctx=ctx["private_ctx"],
                 latest_prices=ctx["latest_prices"],
             )
         elif selected_page == "Live Ops":
-            ctx = get_dashboard_ctx()
+            ctx = build_dashboard_context(config)
             render_live_ops_page(
                 config=config,
                 runtime=ctx["runtime"],
@@ -136,7 +122,7 @@ def main() -> None:
                 today=today,
             )
         elif selected_page == "Diagnostics":
-            ctx = get_dashboard_ctx()
+            ctx = build_dashboard_context(config)
             render_diagnostics_page(
                 today=today,
                 private_ctx=ctx["private_ctx"],

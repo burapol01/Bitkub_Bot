@@ -5,6 +5,7 @@ from typing import Any
 
 import streamlit as st
 
+from clients.bitkub_private_client import BitkubMissingCredentialsError, BitkubPrivateClient
 from config import CONFIG_PATH, ordered_unique_symbols
 
 from services.db_service import (
@@ -14,6 +15,7 @@ from services.db_service import (
     fetch_runtime_event_log,
     insert_runtime_event,
 )
+from services.execution_service import refresh_live_order_from_exchange
 from services.strategy_lab_service import (
     build_coin_ranking,
     fetch_market_snapshot_coverage,
@@ -22,6 +24,7 @@ from services.strategy_lab_service import (
     run_market_snapshot_replay,
     sync_candles_for_symbols,
 )
+from ui.streamlit.actions import persist_execution_order_update
 from ui.streamlit.config_support import render_config_page, save_config_with_feedback
 from ui.streamlit.ops_pages import render_account_page, render_live_ops_page, render_overview_page
 from ui.streamlit.diagnostics_support import render_diagnostics_page, render_logs_page
@@ -95,6 +98,78 @@ def _sync_select_state(*, key: str, options: list[str], default: str) -> None:
 
     if str(current_value) not in normalized_options:
         st.session_state[key] = normalized_default
+
+
+def _blocked_execution_order_symbols(
+    *,
+    symbols: list[str],
+    open_orders: list[dict[str, Any]],
+) -> list[str]:
+    target_symbols = {
+        str(symbol).strip()
+        for symbol in symbols
+        if str(symbol).strip()
+    }
+    return sorted(
+        {
+            str(order.get("symbol", "")).strip()
+            for order in open_orders
+            if str(order.get("symbol", "")).strip() in target_symbols
+        }
+    )
+
+
+def _refresh_open_execution_orders_for_ui() -> tuple[list[dict[str, Any]], list[str]]:
+    credential_warning = (
+        "Private API credentials are not configured, so prune revalidation used local execution-order state only."
+    )
+    try:
+        client = BitkubPrivateClient.from_env()
+    except BitkubMissingCredentialsError:
+        return fetch_open_execution_orders(), [credential_warning]
+
+    if not client.is_configured():
+        return fetch_open_execution_orders(), [credential_warning]
+
+    refresh_errors: list[str] = []
+    open_orders = fetch_open_execution_orders()
+    for order in open_orders:
+        try:
+            refreshed_record, refresh_events = refresh_live_order_from_exchange(
+                client=client,
+                order_record=order,
+                occurred_at=now_text(),
+            )
+            persist_execution_order_update(
+                int(order["id"]),
+                refreshed_record,
+                refresh_events,
+            )
+        except Exception as e:
+            refresh_errors.append(
+                f"{order['symbol']}: unable to refresh exchange state ({e})"
+            )
+
+    return fetch_open_execution_orders(), refresh_errors
+
+
+def _revalidate_prune_blocked_symbols(
+    *,
+    symbols_to_prune: list[str],
+) -> tuple[list[str], list[str]]:
+    initial_blocked = _blocked_execution_order_symbols(
+        symbols=symbols_to_prune,
+        open_orders=fetch_open_execution_orders(),
+    )
+    if not initial_blocked:
+        return [], []
+
+    refreshed_open_orders, refresh_errors = _refresh_open_execution_orders_for_ui()
+    blocked_symbols = _blocked_execution_order_symbols(
+        symbols=symbols_to_prune,
+        open_orders=refreshed_open_orders,
+    )
+    return blocked_symbols, refresh_errors
 
 
 def _strategy_compare_scope_key(
@@ -780,19 +855,15 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
 
                 if prune_rows:
                     prune_option_symbols = [row["symbol"] for row in actionable_rows]
-                    open_execution_symbols = {
-                        str(order.get("symbol", ""))
-                        for order in fetch_open_execution_orders()
-                        if str(order.get("symbol", "")).strip()
-                    }
-                    blocked_prune_symbols = [
-                        symbol for symbol in prune_option_symbols if symbol in open_execution_symbols
-                    ]
+                    blocked_prune_symbols = _blocked_execution_order_symbols(
+                        symbols=prune_option_symbols,
+                        open_orders=fetch_open_execution_orders(),
+                    )
                     selectable_prune_symbols = [
-                        symbol for symbol in prune_option_symbols if symbol not in open_execution_symbols
+                        symbol for symbol in prune_option_symbols if symbol not in blocked_prune_symbols
                     ]
                     prune_default_symbols = [
-                        row["symbol"] for row in prune_rows if row["symbol"] not in open_execution_symbols
+                        row["symbol"] for row in prune_rows if row["symbol"] not in blocked_prune_symbols
                     ]
                     prune_selection_key = "strategy_prune_live_rules_selection"
                     prune_remove_key = "strategy_prune_live_rules_quick_remove"
@@ -825,6 +896,9 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                         st.caption(
                             "Locked by open execution order and excluded from the default prune selection: "
                             + ", ".join(blocked_prune_symbols)
+                        )
+                        st.caption(
+                            "Submit prune once and the page will revalidate those open orders against Bitkub automatically before it blocks the action."
                         )
 
                     with st.form("strategy_prune_live_rules_form"):
@@ -869,21 +943,31 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                             ],
                             prune_add_symbols,
                         )
+                        blocked_symbols: list[str] = []
+                        refresh_errors: list[str] = []
                         if not effective_prune_selection:
                             st.warning("Select at least one symbol before pruning live rules.")
-                        elif blocked_symbols := sorted(
-                            {
-                                str(order.get("symbol", ""))
-                                for order in fetch_open_execution_orders()
-                                if str(order.get("symbol", "")) in set(effective_prune_selection)
-                            }
-                        ):
+                        else:
+                            blocked_symbols, refresh_errors = _revalidate_prune_blocked_symbols(
+                                symbols_to_prune=list(effective_prune_selection)
+                            )
+                        if blocked_symbols:
+                            if refresh_errors:
+                                st.warning(
+                                    "Prune revalidation hit exchange refresh issues: "
+                                    + "; ".join(refresh_errors[:3])
+                                )
                             st.error(
                                 "Cannot prune live rules while open execution orders still exist for: "
                                 + ", ".join(blocked_symbols)
-                                + ". Cancel or refresh them from Live Ops first."
+                                + ". Clear them from Bitkub first; the page already revalidated with the exchange before blocking this prune."
                             )
-                        else:
+                        elif effective_prune_selection:
+                            if refresh_errors:
+                                st.info(
+                                    "Prune revalidation cleared stale open-order blocks, but some exchange refresh warnings remained: "
+                                    + "; ".join(refresh_errors[:3])
+                                )
                             updated = _build_pruned_live_rules_config(
                                 config=config,
                                 symbols_to_prune=list(effective_prune_selection),

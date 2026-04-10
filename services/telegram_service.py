@@ -83,6 +83,27 @@ def _recent_duplicate_notification_exists(
     return False
 
 
+def _recent_duplicate_direct_command_response_exists(
+    *,
+    body: str,
+    cooldown_seconds: int,
+) -> bool:
+    now = now_dt()
+    normalized_body = str(body or "")
+
+    for row in fetch_recent_telegram_command_log(limit=50):
+        response_text = str(row.get("response_text") or "")
+        if response_text != normalized_body:
+            continue
+
+        created_at = _parse_created_at(str(row.get("created_at") or ""))
+        if created_at is None:
+            continue
+        if (now - created_at).total_seconds() <= cooldown_seconds:
+            return True
+    return False
+
+
 def telegram_settings_snapshot(config: dict[str, Any]) -> dict[str, Any]:
     token = str(os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
     notify_chat_ids = _parse_chat_ids(
@@ -182,6 +203,14 @@ def queue_telegram_notification(
         body=body,
         payload=payload or {},
         cooldown_seconds=cooldown_seconds,
+    ):
+        return False
+    if (
+        str(event_type or "").strip().lower() == "config_reload"
+        and _recent_duplicate_direct_command_response_exists(
+            body=body,
+            cooldown_seconds=cooldown_seconds,
+        )
     ):
         return False
 
