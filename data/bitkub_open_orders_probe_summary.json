@@ -1,0 +1,714 @@
+{
+  "env_path": "D:\\Projects\\Bitkub_Bot\\env_dev",
+  "symbol_count": 421,
+  "counts": {
+    "ok_empty": 329,
+    "ok_nonempty": 3,
+    "unsupported": 89,
+    "error": 0
+  },
+  "unsupported": [
+    {
+      "symbol": "THB_ACH",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_AIXBT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ALCH",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ANIME",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ASTER",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_AVL",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_BEAM",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_BOME",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_BONK",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_BRETT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_BREV",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_BTT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CAKE",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CC",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CFG",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CGPT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CHILLGUY",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CORN",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_CPOOL",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_DEGEN",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_DOOD",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_DRIFT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ELIZAOS",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ELSA",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_F",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_FHE",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_FIDA",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_FLOCK",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_FLOKI",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_FLUID",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_GMT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_GOAT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_GPS",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_HOLO",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ICNT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_IMU",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_JASMY",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_JST",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_JUP",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_LIT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MAGIC",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MASK",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MEME",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MET",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MEW",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MOCA",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MPLX",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_MYRO",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_NEIRO",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_NEXO",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PARTI",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PENGU",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PEOPLE",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PIEVERSE",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PNUT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PONKE",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_POPCAT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PORTAL",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PRIME",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PUMP",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_PYUSD",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_RLUSD",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ROBO",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SD",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SHIB",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SIGN",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SKR",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SPX",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_STRK",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SUN",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_SYND",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_TA",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_TOKEN",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_TOSHI",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_TRUMP",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_USAT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_USD1",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_VVV",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_WEMIX",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_WET",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_WIF",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_WLFI",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_XAI",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_YB",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ZAMA",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ZBT",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ZEREBRO",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ZKP",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    },
+    {
+      "symbol": "THB_ZORA",
+      "error": "Endpoint not found for path /api/market/my-open-orders"
+    }
+  ],
+  "error": [],
+  "ok_nonempty": [
+    {
+      "symbol": "THB_STO",
+      "count": 1
+    },
+    {
+      "symbol": "THB_SUMX",
+      "count": 1
+    },
+    {
+      "symbol": "THB_TRX",
+      "count": 1
+    }
+  ],
+  "ok_empty": [
+    "THB_0G",
+    "THB_1INCH",
+    "THB_2Z",
+    "THB_AAVE",
+    "THB_ABT",
+    "THB_ACX",
+    "THB_ADA",
+    "THB_AERO",
+    "THB_AEVO",
+    "THB_ALGO",
+    "THB_ALPACA",
+    "THB_ALPHA",
+    "THB_ALT",
+    "THB_ANKR",
+    "THB_ANT",
+    "THB_APE",
+    "THB_API3",
+    "THB_APT",
+    "THB_ARB",
+    "THB_ARKM",
+    "THB_ASI",
+    "THB_ASP",
+    "THB_AST",
+    "THB_ASTR",
+    "THB_ATH",
+    "THB_ATOM",
+    "THB_AUSD",
+    "THB_AVAX",
+    "THB_AVNT",
+    "THB_AXL",
+    "THB_AXS",
+    "THB_B3",
+    "THB_BABY",
+    "THB_BAL",
+    "THB_BAND",
+    "THB_BARD",
+    "THB_BAT",
+    "THB_BCH",
+    "THB_BEAR",
+    "THB_BICO",
+    "THB_BLAST",
+    "THB_BLUE",
+    "THB_BLUR",
+    "THB_BMT",
+    "THB_BNB",
+    "THB_BNT",
+    "THB_BOBA",
+    "THB_BSV",
+    "THB_BTC",
+    "THB_BTG",
+    "THB_BULL",
+    "THB_BUSD",
+    "THB_C",
+    "THB_C98",
+    "THB_CAMP",
+    "THB_CARV",
+    "THB_CATI",
+    "THB_CELO",
+    "THB_CELR",
+    "THB_CETUS",
+    "THB_CFX",
+    "THB_CHZ",
+    "THB_CLEAR",
+    "THB_COMP",
+    "THB_COOKIE",
+    "THB_CORE",
+    "THB_CRO",
+    "THB_CRV",
+    "THB_CTXC",
+    "THB_CVC",
+    "THB_CVX",
+    "THB_CYBER",
+    "THB_DAI",
+    "THB_DASH",
+    "THB_DBR",
+    "THB_DENT",
+    "THB_DGD",
+    "THB_DGX",
+    "THB_DMC",
+    "THB_DOGE",
+    "THB_DOLO",
+    "THB_DON",
+    "THB_DOT",
+    "THB_DYDX",
+    "THB_EDEN",
+    "THB_EIGEN",
+    "THB_EL",
+    "THB_ENA",
+    "THB_ENG",
+    "THB_ENJ",
+    "THB_ENS",
+    "THB_ENSO",
+    "THB_EOS",
+    "THB_EPIC",
+    "THB_ERA",
+    "THB_ES",
+    "THB_ETC",
+    "THB_ETH",
+    "THB_ETHFI",
+    "THB_EVX",
+    "THB_EXFI",
+    "THB_FET",
+    "THB_FF",
+    "THB_FIL",
+    "THB_FLOW",
+    "THB_FLR",
+    "THB_FLUX",
+    "THB_FRAX",
+    "THB_FTM",
+    "THB_FTT",
+    "THB_FXS",
+    "THB_G",
+    "THB_GAL",
+    "THB_GALA",
+    "THB_GALA1",
+    "THB_GF",
+    "THB_GHST",
+    "THB_GLM",
+    "THB_GLMR",
+    "THB_GMX",
+    "THB_GNO",
+    "THB_GNT",
+    "THB_GODS",
+    "THB_GRASS",
+    "THB_GRT",
+    "THB_GT",
+    "THB_GUSD",
+    "THB_H",
+    "THB_HAEDAL",
+    "THB_HBAR",
+    "THB_HEMI",
+    "THB_HFT",
+    "THB_HNT",
+    "THB_HOME",
+    "THB_HUMA",
+    "THB_HYPE",
+    "THB_HYPER",
+    "THB_ICP",
+    "THB_ID",
+    "THB_ILV",
+    "THB_IMX",
+    "THB_INF",
+    "THB_INJ",
+    "THB_IO",
+    "THB_IOST",
+    "THB_IOTX",
+    "THB_IP",
+    "THB_IQ",
+    "THB_JFIN",
+    "THB_JOE",
+    "THB_JTO",
+    "THB_KAIA",
+    "THB_KAITO",
+    "THB_KAT",
+    "THB_KAVA",
+    "THB_KERNEL",
+    "THB_KEY",
+    "THB_KITE",
+    "THB_KLAY",
+    "THB_KMNO",
+    "THB_KNC",
+    "THB_KSM",
+    "THB_KUB",
+    "THB_L3",
+    "THB_LA",
+    "THB_LAYER",
+    "THB_LDO",
+    "THB_LINA",
+    "THB_LINEA",
+    "THB_LINK",
+    "THB_LM",
+    "THB_LPT",
+    "THB_LQTY",
+    "THB_LRC",
+    "THB_LTC",
+    "THB_LUMI",
+    "THB_LUNA",
+    "THB_LUNA2",
+    "THB_LYX",
+    "THB_LYXE",
+    "THB_MANA",
+    "THB_MANTA",
+    "THB_MATIC",
+    "THB_MAVIA",
+    "THB_MBX",
+    "THB_ME",
+    "THB_MIR",
+    "THB_MIRA",
+    "THB_MITO",
+    "THB_MKR",
+    "THB_MNT",
+    "THB_MODE",
+    "THB_MON",
+    "THB_MORPHO",
+    "THB_MOVR",
+    "THB_NEAR",
+    "THB_NEWT",
+    "THB_NEXT",
+    "THB_NOM",
+    "THB_NXPC",
+    "THB_OCEAN",
+    "THB_OM",
+    "THB_OMG",
+    "THB_OMNI",
+    "THB_ONDO",
+    "THB_OP",
+    "THB_OPEN",
+    "THB_ORCA",
+    "THB_ORDER",
+    "THB_OSMO",
+    "THB_PAX",
+    "THB_PAXG",
+    "THB_PEAQ",
+    "THB_PENDLE",
+    "THB_PERP",
+    "THB_PLN",
+    "THB_PLUME",
+    "THB_POL",
+    "THB_POLY",
+    "THB_POP",
+    "THB_POW",
+    "THB_PRCL",
+    "THB_PROMPT",
+    "THB_PROVE",
+    "THB_PUFFR",
+    "THB_PYTH",
+    "THB_QI",
+    "THB_QNT",
+    "THB_RAY",
+    "THB_RDN",
+    "THB_RDNT",
+    "THB_REALX",
+    "THB_RECALL",
+    "THB_RED",
+    "THB_REP",
+    "THB_RESOLV",
+    "THB_REZ",
+    "THB_RNDR",
+    "THB_RON",
+    "THB_RSR",
+    "THB_S",
+    "THB_SAFE",
+    "THB_SAHARA",
+    "THB_SAND",
+    "THB_SAPIEN",
+    "THB_SCA",
+    "THB_SCR",
+    "THB_SCRT",
+    "THB_SEI",
+    "THB_SENT",
+    "THB_SFP",
+    "THB_SGB",
+    "THB_SHELL",
+    "THB_SIX",
+    "THB_SKL",
+    "THB_SKY",
+    "THB_SLP",
+    "THB_SNT",
+    "THB_SNX",
+    "THB_SOL",
+    "THB_SOLO",
+    "THB_SOLV",
+    "THB_SOMI",
+    "THB_SONIC",
+    "THB_SOON",
+    "THB_SOPH",
+    "THB_SPEC",
+    "THB_SPK",
+    "THB_SQD",
+    "THB_SSV",
+    "THB_STAKE",
+    "THB_STG",
+    "THB_STORJ",
+    "THB_SUI",
+    "THB_SUSHI",
+    "THB_SWELL",
+    "THB_SXT",
+    "THB_SYRUP",
+    "THB_SZO",
+    "THB_TAIKO",
+    "THB_TAO",
+    "THB_TIA",
+    "THB_TNSR",
+    "THB_TNT",
+    "THB_TON",
+    "THB_TOWNS",
+    "THB_TRAC",
+    "THB_TRB",
+    "THB_TREE",
+    "THB_TURTLE",
+    "THB_TUSD",
+    "THB_TWT",
+    "THB_UMA",
+    "THB_UNI",
+    "THB_USDC",
+    "THB_USDS",
+    "THB_USDT",
+    "THB_VELO",
+    "THB_VIC",
+    "THB_VIRTUAL",
+    "THB_W",
+    "THB_WABI",
+    "THB_WAL",
+    "THB_WAN",
+    "THB_WCT",
+    "THB_WIN",
+    "THB_WLD",
+    "THB_WNXM",
+    "THB_WOO",
+    "THB_XAN",
+    "THB_XAUT",
+    "THB_XDC",
+    "THB_XLM",
+    "THB_XMN",
+    "THB_XMR",
+    "THB_XPL",
+    "THB_XRP",
+    "THB_XTZ",
+    "THB_YFI",
+    "THB_YGG",
+    "THB_ZEC",
+    "THB_ZENT",
+    "THB_ZETA",
+    "THB_ZIL",
+    "THB_ZK",
+    "THB_ZKC",
+    "THB_ZRC",
+    "THB_ZRO",
+    "THB_ZRX"
+  ]
+}

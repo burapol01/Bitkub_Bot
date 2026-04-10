@@ -4,45 +4,27 @@ from typing import Any
 
 import streamlit as st
 
-from clients.bitkub_client import get_market_symbols_v3
+from services.market_symbol_service import fetch_market_symbol_directory
 from services.strategy_lab_service import (
     run_market_candle_replay,
     run_market_snapshot_replay,
 )
 
 
-def normalize_market_symbol(raw_symbol: Any) -> str | None:
-    value = str(raw_symbol or "").strip().upper().replace("-", "_")
-    if not value:
-        return None
-    parts = value.split("_")
-    if len(parts) != 2:
-        return value
-    left, right = parts
-    if left == "THB":
-        return f"THB_{right}"
-    if right == "THB":
-        return f"THB_{left}"
-    return value
-
-
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_market_symbol_universe() -> dict[str, Any]:
     try:
-        payload = get_market_symbols_v3()
-        symbols: list[str] = []
-        for row in payload:
-            if isinstance(row, dict):
-                raw_symbol = row.get("symbol") or row.get("id") or row.get("name")
-            else:
-                raw_symbol = row
-            normalized = normalize_market_symbol(raw_symbol)
-            if normalized and normalized not in symbols:
-                symbols.append(normalized)
-        symbols.sort()
-        return {"symbols": symbols, "error": None}
+        return fetch_market_symbol_directory()
     except Exception as e:
-        return {"symbols": [], "error": str(e)}
+        return {
+            "symbols": [],
+            "rows": [],
+            "source_by_symbol": {},
+            "exchange_symbols": [],
+            "non_exchange_symbols": [],
+            "non_exchange_rows": [],
+            "error": str(e),
+        }
 
 
 def build_rule_seed(

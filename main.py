@@ -72,6 +72,10 @@ from services.log_service import (
     ensure_trade_log_file,
     write_signal_log,
 )
+from services.market_symbol_service import (
+    build_non_exchange_symbol_source_map,
+    fetch_market_symbol_directory,
+)
 from services.order_service import get_order_foundation_status, probe_order_foundation
 from services.reconciliation_service import (
     extract_available_balances,
@@ -174,6 +178,37 @@ def build_telegram_position_line(
 def should_queue_config_reload_telegram_notification(*, source: str) -> bool:
     normalized_source = str(source or "").strip().lower()
     return normalized_source not in {"telegram", "telegram_confirmation"}
+
+
+def should_queue_safety_pause_telegram_notification(*, source: str) -> bool:
+    normalized_source = str(source or "").strip().lower()
+    return normalized_source not in {"telegram", "telegram_confirmation"}
+
+
+def _unsupported_live_entry_reason(*, source: str, error_message: str | None = None) -> str:
+    normalized_source = str(source or "").strip().lower()
+    normalized_error = str(error_message or "").strip()
+    if normalized_source == "market_source":
+        market_source = normalized_error or "unknown"
+        return (
+            "symbol is blocked because Bitkub market metadata marks it as "
+            f"source={market_source}, not source=exchange, so the bot will not use it for live auto entry"
+        )
+    if normalized_source == "open_orders_probe":
+        return (
+            "symbol is blocked because Bitkub rejected open_orders for it, "
+            "so the bot cannot safely track live order state for this symbol"
+        )
+    if normalized_error:
+        return (
+            "symbol is blocked because Bitkub rejected a live order request for it: "
+            + normalized_error
+        )
+    return "symbol is blocked because Bitkub rejected a live order request for it"
+
+
+def _is_market_source_block_reason(reason: str | None) -> bool:
+    return "market metadata marks it as source=" in str(reason or "").lower()
 
 
 def missing_position_symbols(rules: dict, active_positions: dict) -> list[str]:
@@ -364,12 +399,76 @@ def main():
     unsupported_live_entry_symbols: dict[str, str] = {}
     last_telegram_poll_error_signature: tuple[str, ...] | None = None
     last_telegram_poll_error_logged_at = 0.0
+    market_symbol_directory: dict[str, Any] = {
+        "symbols": [],
+        "rows": [],
+        "source_by_symbol": {},
+        "exchange_symbols": [],
+        "non_exchange_symbols": [],
+        "non_exchange_rows": [],
+        "error": None,
+    }
 
     def prune_unsupported_live_entry_symbols():
         active_symbols = {str(symbol) for symbol in config.get("rules", {})}
         for symbol in list(unsupported_live_entry_symbols):
             if symbol not in active_symbols:
                 unsupported_live_entry_symbols.pop(symbol, None)
+                continue
+
+            reason = unsupported_live_entry_symbols.get(symbol)
+            source_by_symbol = dict(market_symbol_directory.get("source_by_symbol") or {})
+            market_source = str(source_by_symbol.get(symbol) or "").strip().lower()
+            if (
+                _is_market_source_block_reason(reason)
+                and market_source == "exchange"
+            ):
+                unsupported_live_entry_symbols.pop(symbol, None)
+
+    def refresh_market_symbol_directory(*, source: str) -> None:
+        nonlocal market_symbol_directory
+        try:
+            market_symbol_directory = fetch_market_symbol_directory()
+        except Exception as e:
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="market_symbol_directory",
+                severity="warning",
+                message="Market symbol directory refresh failed",
+                details={"source": source, "error": str(e)},
+            )
+            return
+
+        non_exchange_rows = list(market_symbol_directory.get("non_exchange_rows") or [])
+        if non_exchange_rows:
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="market_symbol_directory",
+                severity="info",
+                message="Market symbol directory refreshed",
+                details={
+                    "source": source,
+                    "symbols": len(market_symbol_directory.get("symbols", [])),
+                    "non_exchange_symbols": [
+                        str(row.get("symbol") or "")
+                        for row in non_exchange_rows[:50]
+                        if str(row.get("symbol") or "")
+                    ],
+                },
+            )
+
+    def track_non_exchange_live_entry_symbols_from_market_directory():
+        prune_unsupported_live_entry_symbols()
+        source_by_symbol = dict(market_symbol_directory.get("source_by_symbol") or {})
+        blocked_sources = build_non_exchange_symbol_source_map(
+            config.get("rules", {}).keys(),
+            source_by_symbol=source_by_symbol,
+        )
+        for symbol, market_source in blocked_sources.items():
+            unsupported_live_entry_symbols[symbol] = _unsupported_live_entry_reason(
+                source="market_source",
+                error_message=market_source,
+            )
 
     def track_unsupported_live_entry_symbols_from_snapshot(snapshot: dict | None):
         prune_unsupported_live_entry_symbols()
@@ -379,7 +478,7 @@ def main():
                 continue
             unsupported_live_entry_symbols.setdefault(
                 normalized_symbol,
-                "symbol is blocked because Bitkub rejected the order endpoint for it",
+                _unsupported_live_entry_reason(source="open_orders_probe"),
             )
 
     def remember_unsupported_live_entry_symbol(*, symbol: str, error_message: str) -> bool:
@@ -389,10 +488,14 @@ def main():
 
         prune_unsupported_live_entry_symbols()
         was_new = normalized_symbol not in unsupported_live_entry_symbols
-        unsupported_live_entry_symbols[normalized_symbol] = (
-            "symbol is blocked because Bitkub rejected the order endpoint for it"
+        unsupported_live_entry_symbols[normalized_symbol] = _unsupported_live_entry_reason(
+            source="order_submit",
+            error_message=error_message,
         )
         return was_new
+
+    refresh_market_symbol_directory(source="startup")
+    track_non_exchange_live_entry_symbols_from_market_directory()
 
     private_client: BitkubPrivateClient | None = None
     try:
@@ -1784,7 +1887,13 @@ def main():
             interval_seconds = int(config["interval_seconds"])
             fee_rate = float(config["fee_rate"])
 
-            def activate_safety_pause(reason: str, lines: list[str], *, immediate: bool):
+            def activate_safety_pause(
+                reason: str,
+                lines: list[str],
+                *,
+                immediate: bool,
+                source: str = "runtime",
+            ):
                 nonlocal safety_pause, safety_pause_lines, notice, notice_lines
                 safety_pause = True
                 safety_pause_lines = list(lines)
@@ -1795,14 +1904,15 @@ def main():
                     event_type="safety_pause",
                     severity="warning",
                     message=reason,
-                    details={"lines": safety_pause_lines, "immediate": immediate},
+                    details={"lines": safety_pause_lines, "immediate": immediate, "source": source},
                 )
-                notify_telegram(
-                    "safety_pause",
-                    reason,
-                    safety_pause_lines,
-                    payload={"immediate": immediate},
-                )
+                if should_queue_safety_pause_telegram_notification(source=source):
+                    notify_telegram(
+                        "safety_pause",
+                        reason,
+                        safety_pause_lines,
+                        payload={"immediate": immediate, "source": source},
+                    )
                 persist_state()
 
                 if immediate:
@@ -1828,6 +1938,7 @@ def main():
                         "Safety pause: invalid config.json reload was rejected",
                         errors,
                         immediate=True,
+                        source=source,
                     )
                     return True
 
@@ -1843,11 +1954,14 @@ def main():
                             "Reload was rejected. Restore these symbols in config.json or close the positions first."
                         ],
                         immediate=True,
+                        source=source,
                     )
                     return True
 
                 config = new_config
                 prune_unsupported_live_entry_symbols()
+                refresh_market_symbol_directory(source="config_reload")
+                track_non_exchange_live_entry_symbols_from_market_directory()
                 filter_was_reset = False
                 if report_filter_symbol and report_filter_symbol not in new_config["rules"]:
                     report_filter_symbol = None

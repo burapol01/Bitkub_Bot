@@ -1,0 +1,1881 @@
+{
+  "version": 1,
+  "manual_pause": false,
+  "last_zones": {
+    "THB_BTC": "BUY",
+    "THB_ETH": "BUY",
+    "THB_KUB": "BUY",
+    "THB_BCH": "WAIT",
+    "THB_LUNA": "BUY",
+    "THB_FET": "SELL",
+    "THB_LINK": "WAIT",
+    "THB_TAO": "BUY",
+    "THB_L3": "BUY",
+    "THB_ABT": "SELL",
+    "THB_EPIC": "BUY",
+    "THB_STO": "SELL",
+    "THB_RLUSD": "BUY",
+    "THB_USAT": "BUY",
+    "THB_USDC": "BUY",
+    "THB_CATI": "BUY",
+    "THB_USDT": "BUY",
+    "THB_STG": "SELL",
+    "THB_CHZ": "BUY",
+    "THB_KAITO": "WAIT",
+    "THB_JST": "BUY",
+    "THB_ACX": "WAIT",
+    "THB_DYDX": "SELL",
+    "THB_TRX": "BUY",
+    "THB_LDO": "SELL",
+    "THB_AUSD": "BUY",
+    "THB_FLUX": "SELL",
+    "THB_FF": "WAIT",
+    "THB_WLFI": "WAIT",
+    "THB_SUN": "BUY",
+    "THB_PAXG": "WAIT",
+    "THB_AERO": "SELL",
+    "THB_XAUT": "SELL",
+    "THB_BONK": "SELL",
+    "THB_SKL": "BUY",
+    "THB_SHIB": "BUY",
+    "THB_ALGO": "SELL",
+    "THB_SUMX": "WAIT",
+    "THB_SKY": "WAIT",
+    "THB_WEMIX": "WAIT",
+    "THB_CELO": "SELL",
+    "THB_POW": "SELL",
+    "THB_XLM": "SELL",
+    "THB_LYX": "SELL",
+    "THB_ES": "WAIT",
+    "THB_TON": "BUY",
+    "THB_LM": "BUY",
+    "THB_MOVR": "SELL",
+    "THB_MBX": "WAIT",
+    "THB_APT": "BUY",
+    "THB_UNI": "SELL",
+    "THB_G": "BUY",
+    "THB_AXS": "WAIT",
+    "THB_ONDO": "SELL",
+    "THB_RSR": "BUY",
+    "THB_ZRC": "BUY",
+    "THB_MON": "SELL",
+    "THB_KAVA": "BUY",
+    "THB_IO": "WAIT",
+    "THB_YFI": "BUY",
+    "THB_RNDR": "SELL",
+    "THB_RON": "WAIT",
+    "THB_QNT": "WAIT",
+    "THB_TREE": "BUY",
+    "THB_ASTER": "WAIT",
+    "THB_API3": "SELL",
+    "THB_WIF": "SELL",
+    "THB_SPEC": "BUY",
+    "THB_SUSHI": "WAIT",
+    "THB_ARB": "WAIT",
+    "THB_DOGE": "SELL",
+    "THB_USDS": "SELL",
+    "THB_SPK": "BUY",
+    "THB_WIN": "SELL",
+    "THB_ATH": "SELL",
+    "THB_BAT": "WAIT",
+    "THB_C": "WAIT",
+    "THB_ZENT": "WAIT",
+    "THB_AVAX": "SELL",
+    "THB_SCRT": "SELL",
+    "THB_BLUR": "SELL",
+    "THB_DOLO": "WAIT",
+    "THB_1INCH": "BUY",
+    "THB_KNC": "BUY",
+    "THB_HFT": "WAIT",
+    "THB_SIX": "SELL",
+    "THB_TAIKO": "SELL",
+    "THB_OPEN": "SELL",
+    "THB_BNB": "WAIT",
+    "THB_LIT": "SELL",
+    "THB_JFIN": "BUY",
+    "THB_NOM": "SELL",
+    "THB_CETUS": "BUY",
+    "THB_MEME": "WAIT",
+    "THB_XDC": "BUY",
+    "THB_REZ": "BUY",
+    "THB_UMA": "WAIT",
+    "THB_OP": "SELL",
+    "THB_SFP": "WAIT",
+    "THB_SUI": "SELL",
+    "THB_GALA": "SELL",
+    "THB_POL": "SELL",
+    "THB_ADA": "WAIT",
+    "THB_IOST": "SELL",
+    "THB_SAPIEN": "BUY",
+    "THB_XTZ": "WAIT",
+    "THB_NEWT": "BUY",
+    "THB_0G": "SELL",
+    "THB_ZRX": "WAIT",
+    "THB_MANA": "SELL",
+    "THB_KERNEL": "SELL",
+    "THB_ANKR": "BUY",
+    "THB_SOL": "SELL",
+    "THB_EDEN": "WAIT",
+    "THB_CRV": "SELL",
+    "THB_KSM": "WAIT",
+    "THB_BAND": "WAIT",
+    "THB_XRP": "SELL",
+    "THB_SHELL": "WAIT",
+    "THB_DMC": "BUY",
+    "THB_TRUMP": "WAIT",
+    "THB_ZK": "SELL",
+    "THB_SAND": "SELL",
+    "THB_SQD": "SELL",
+    "THB_REALX": "SELL",
+    "THB_WOO": "WAIT",
+    "THB_C98": "BUY",
+    "THB_POPCAT": "SELL",
+    "THB_SWELL": "BUY",
+    "THB_ORCA": "SELL",
+    "THB_GRT": "SELL",
+    "THB_QI": "BUY",
+    "THB_TOWNS": "WAIT",
+    "THB_LQTY": "WAIT",
+    "THB_GMX": "WAIT",
+    "THB_LINEA": "SELL",
+    "THB_AIXBT": "WAIT",
+    "THB_NEAR": "WAIT",
+    "THB_S": "SELL",
+    "THB_CFX": "SELL",
+    "THB_PNUT": "SELL",
+    "THB_ZIL": "SELL",
+    "THB_VELO": "WAIT",
+    "THB_GLMR": "SELL",
+    "THB_LPT": "BUY",
+    "THB_AAVE": "BUY",
+    "THB_GT": "BUY",
+    "THB_HBAR": "SELL",
+    "THB_IOTX": "BUY",
+    "THB_LA": "BUY",
+    "THB_NEIRO": "SELL",
+    "THB_ARKM": "WAIT",
+    "THB_AEVO": "WAIT",
+    "THB_HYPE": "SELL",
+    "THB_HOME": "WAIT",
+    "THB_MIRA": "WAIT",
+    "THB_ENA": "WAIT",
+    "THB_TOSHI": "WAIT",
+    "THB_ENSO": "BUY",
+    "THB_ENS": "WAIT",
+    "THB_SNX": "SELL",
+    "THB_MITO": "WAIT",
+    "THB_MPLX": "BUY",
+    "THB_CYBER": "SELL",
+    "THB_JOE": "BUY",
+    "THB_PLUME": "WAIT",
+    "THB_SNT": "WAIT",
+    "THB_BABY": "WAIT",
+    "THB_MAVIA": "WAIT",
+    "THB_GLM": "WAIT",
+    "THB_XPL": "SELL",
+    "THB_SPX": "SELL",
+    "THB_TURTLE": "WAIT",
+    "THB_ZKC": "WAIT",
+    "THB_ORDER": "SELL",
+    "THB_PLN": "BUY",
+    "THB_CLEAR": "BUY",
+    "THB_SXT": "SELL",
+    "THB_KAIA": "SELL",
+    "THB_BMT": "SELL",
+    "THB_WLD": "SELL",
+    "THB_COMP": "BUY",
+    "THB_ASP": "WAIT",
+    "THB_ETHFI": "SELL",
+    "THB_CVC": "BUY",
+    "THB_BLAST": "SELL",
+    "THB_INJ": "SELL",
+    "THB_SAHARA": "BUY",
+    "THB_ID": "WAIT",
+    "THB_ATOM": "WAIT",
+    "THB_ZORA": "BUY",
+    "THB_APE": "SELL",
+    "THB_TNSR": "SELL",
+    "THB_HYPER": "WAIT",
+    "THB_VIC": "SELL",
+    "THB_HUMA": "SELL",
+    "THB_DOT": "SELL",
+    "THB_ENJ": "WAIT",
+    "THB_SAFE": "WAIT",
+    "THB_HAEDAL": "WAIT",
+    "THB_MEW": "SELL",
+    "THB_MORPHO": "SELL",
+    "THB_ME": "WAIT",
+    "THB_VIRTUAL": "SELL",
+    "THB_PRCL": "SELL",
+    "THB_PENGU": "SELL",
+    "THB_SOON": "SELL",
+    "THB_IMX": "WAIT",
+    "THB_PUFFR": "WAIT",
+    "THB_RAY": "SELL",
+    "THB_DBR": "WAIT",
+    "THB_FLOW": "SELL",
+    "THB_CARV": "SELL",
+    "THB_TIA": "WAIT",
+    "THB_CELR": "BUY",
+    "THB_ICP": "SELL",
+    "THB_AXL": "WAIT",
+    "THB_2Z": "SELL",
+    "THB_SYRUP": "BUY",
+    "THB_ZETA": "WAIT",
+    "THB_SCR": "WAIT",
+    "THB_EIGEN": "SELL",
+    "THB_ALT": "WAIT",
+    "THB_MNT": "WAIT",
+    "THB_RESOLV": "BUY",
+    "THB_PERP": "SELL",
+    "THB_IQ": "BUY",
+    "THB_BICO": "SELL",
+    "THB_WCT": "BUY",
+    "THB_HEMI": "SELL",
+    "THB_PYTH": "WAIT",
+    "THB_KMNO": "BUY",
+    "THB_KITE": "BUY",
+    "THB_LAYER": "SELL",
+    "THB_W": "BUY",
+    "THB_TRAC": "BUY",
+    "THB_BAL": "SELL",
+    "THB_PEAQ": "BUY",
+    "THB_ERA": "SELL",
+    "THB_SOPH": "WAIT",
+    "THB_ELIZAOS": "SELL",
+    "THB_EL": "BUY",
+    "THB_RED": "SELL",
+    "THB_SONIC": "WAIT",
+    "THB_ILV": "SELL",
+    "THB_RECALL": "WAIT",
+    "THB_PROMPT": "SELL",
+    "THB_OSMO": "SELL",
+    "THB_GNO": "WAIT",
+    "THB_COOKIE": "SELL",
+    "THB_MANTA": "SELL",
+    "THB_LRC": "BUY",
+    "THB_AVNT": "WAIT",
+    "THB_FXS": "BUY",
+    "THB_XMN": "BUY",
+    "THB_HNT": "WAIT",
+    "THB_ZRO": "SELL",
+    "THB_TWT": "SELL",
+    "THB_SSV": "WAIT",
+    "THB_NXPC": "WAIT",
+    "THB_PENDLE": "BUY",
+    "THB_XAN": "SELL",
+    "THB_GRASS": "SELL",
+    "THB_SEI": "BUY",
+    "THB_B3": "BUY",
+    "THB_JTO": "SELL",
+    "THB_RDNT": "BUY",
+    "THB_SCA": "SELL",
+    "THB_SOMI": "SELL",
+    "THB_FIL": "WAIT",
+    "THB_TRB": "WAIT",
+    "THB_PROVE": "SELL",
+    "THB_ALPHA": "BUY",
+    "THB_BARD": "SELL",
+    "THB_CORE": "BUY"
+  },
+  "positions": {
+    "THB_BTC": {
+      "buy_time": "2026-03-31 15:19:04",
+      "buy_price": 2216288.18,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 4.500768487607058e-05,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.5,
+      "take_profit_percent": 2.0,
+      "sell_above": 2330000.0,
+      "entry_source": "strategy_buy"
+    },
+    "THB_LUNA": {
+      "buy_time": "2026-03-31 15:19:04",
+      "buy_price": 0.001205,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 82780.08298755187,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.5,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.00129,
+      "entry_source": "strategy_buy"
+    },
+    "THB_L3": {
+      "buy_time": "2026-03-31 15:19:04",
+      "buy_price": 0.3106,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 321.15260785576305,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.39585,
+      "entry_source": "strategy_buy"
+    },
+    "THB_EPIC": {
+      "buy_time": "2026-03-31 15:19:04",
+      "buy_price": 7.69,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 12.971391417425227,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 9.14515,
+      "entry_source": "strategy_buy"
+    },
+    "THB_RLUSD": {
+      "buy_time": "2026-03-31 18:22:22",
+      "buy_price": 32.73,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.0476626947754357,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 33.677699999999994,
+      "entry_source": "strategy_buy"
+    },
+    "THB_USAT": {
+      "buy_time": "2026-03-31 18:22:22",
+      "buy_price": 32.75,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.045801526717557,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 33.71829999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_TRX": {
+      "buy_time": "2026-03-31 18:22:22",
+      "buy_price": 10.4,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 9.591346153846153,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 10.627049999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_APT": {
+      "buy_time": "2026-03-31 18:22:22",
+      "buy_price": 29.42,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.3905506458191703,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 30.094749999999994,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SPK": {
+      "buy_time": "2026-03-31 18:22:22",
+      "buy_price": 0.6743,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 147.93118789856146,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.6903015,
+      "entry_source": "strategy_buy"
+    },
+    "THB_ZETA": {
+      "buy_time": "2026-03-31 18:22:22",
+      "buy_price": 1.52,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 65.625,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.5529499999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_WLFI": {
+      "buy_time": "2026-03-31 18:22:56",
+      "buy_price": 3.1944,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 31.226521412471826,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 3.2841339999999994,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SHIB": {
+      "buy_time": "2026-03-31 18:22:56",
+      "buy_price": 0.00019266,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 517751.47928994085,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.0001972551,
+      "entry_source": "strategy_buy"
+    },
+    "THB_JST": {
+      "buy_time": "2026-03-31 18:23:13",
+      "buy_price": 2.00668,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 49.70897203340842,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 2.0510916999999997,
+      "entry_source": "strategy_buy"
+    },
+    "THB_USDC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 32.73,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.0476626947754357,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 33.434099999999994,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CATI": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.68,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 59.375,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.7660999999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_USDT": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 32.71,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.0495261387954753,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 33.40364999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CHZ": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.36,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 73.34558823529412,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.4209999999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_AUSD": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 32.55,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.0645161290322585,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 33.3326,
+      "entry_source": "strategy_buy"
+    },
+    "THB_TON": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 39.96,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 2.4962462462462462,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 41.1684,
+      "entry_source": "strategy_buy"
+    },
+    "THB_MBX": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.23,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 81.09756097560975,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.2586,
+      "entry_source": "strategy_buy"
+    },
+    "THB_ZRC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.051,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 1955.8823529411766,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.05227249999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_KAVA": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.59,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 62.73584905660377,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.8168499999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_YFI": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 81718.04,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 0.0012206607011132427,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 84135.73525,
+      "entry_source": "strategy_buy"
+    },
+    "THB_1INCH": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 2.95,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 33.813559322033896,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 3.01455,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CETUS": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.66,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 151.13636363636363,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.6800499999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_XDC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.985,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 101.26903553299492,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.0175374999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_REZ": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.1064,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 937.5,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.1113455,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SAPIEN": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 2.13,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 46.83098591549296,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 2.2228499999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_NEWT": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 2.25,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 44.333333333333336,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 2.3141999999999996,
+      "entry_source": "strategy_buy"
+    },
+    "THB_ANKR": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.1609,
+      "budget_thb": 99.99999999999999,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.74999999999999,
+      "coin_qty": 619.9502796768179,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.1649375,
+      "entry_source": "strategy_buy"
+    },
+    "THB_DMC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0244,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 4088.11475409836,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.025882499999999996,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SWELL": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0357,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 2794.1176470588234,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.03755499999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_QI": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0447,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 2231.543624161074,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.046182499999999994,
+      "entry_source": "strategy_buy"
+    },
+    "THB_LPT": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 64.21,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 1.5534963401339357,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 68.19784999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_AAVE": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 3200.0,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 0.031171875,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 3268.2999999999997,
+      "entry_source": "strategy_buy"
+    },
+    "THB_GT": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 200.03,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 0.49867519872019195,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 213.65749999999997,
+      "entry_source": "strategy_buy"
+    },
+    "THB_ENSO": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 32.72,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.04859413202934,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 33.495,
+      "entry_source": "strategy_buy"
+    },
+    "THB_MPLX": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.981,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 101.68195718654434,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.0081995,
+      "entry_source": "strategy_buy"
+    },
+    "THB_JOE": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.2,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 83.125,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.2383,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CLEAR": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0395,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 2525.3164556962024,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.0411075,
+      "entry_source": "strategy_buy"
+    },
+    "THB_COMP": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 537.75,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 0.18549511854951187,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 581.3311,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CVC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.94,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 106.11702127659575,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.9642499999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SAHARA": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.7248,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 137.62417218543047,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.7627724999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CELR": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0793,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 1257.8814627994957,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.0823165,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SYRUP": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 6.53,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 15.275650842266462,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 6.8004999999999995,
+      "entry_source": "strategy_buy"
+    },
+    "THB_RESOLV": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.31,
+      "budget_thb": 100.00000000000001,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75000000000001,
+      "coin_qty": 76.14503816793894,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.4006999999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_IQ": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0327,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3050.4587155963304,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.034103999999999995,
+      "entry_source": "strategy_buy"
+    },
+    "THB_WCT": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.74,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 57.327586206896555,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.7863999999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_KMNO": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.5223,
+      "budget_thb": 100.00000000000001,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75000000000001,
+      "coin_qty": 190.98219414129812,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.5851474999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_W": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.4699,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 212.27920834220046,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.4871999999999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_TRAC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 9.15,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 10.901639344262295,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 9.3989,
+      "entry_source": "strategy_buy"
+    },
+    "THB_PEAQ": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.43,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 231.97674418604652,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.46101299999999995,
+      "entry_source": "strategy_buy"
+    },
+    "THB_EL": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.0511,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 1952.054794520548,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.053591999999999994,
+      "entry_source": "strategy_buy"
+    },
+    "THB_LRC": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.63,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 158.33333333333334,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.6496,
+      "entry_source": "strategy_buy"
+    },
+    "THB_FXS": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 13.66,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 7.302342606149341,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 14.36225,
+      "entry_source": "strategy_buy"
+    },
+    "THB_XMN": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.23,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 433.695652173913,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.273644,
+      "entry_source": "strategy_buy"
+    },
+    "THB_PENDLE": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 32.52,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 3.067343173431734,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 37.555,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SEI": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 1.69,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 59.023668639053255,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 1.7254999999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_B3": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.01,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 9975.0,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.010555999999999998,
+      "entry_source": "strategy_buy"
+    },
+    "THB_CORE": {
+      "buy_time": "2026-04-01 11:22:12",
+      "buy_price": 0.88,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 113.35227272727273,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.92365,
+      "entry_source": "strategy_buy"
+    },
+    "THB_WEMIX": {
+      "buy_time": "2026-04-01 11:27:07",
+      "buy_price": 8.2341,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 12.114256567202245,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 8.447134499999999,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SKL": {
+      "buy_time": "2026-04-01 11:29:04",
+      "buy_price": 0.21,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 475.0,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.21802199999999997,
+      "entry_source": "strategy_buy"
+    },
+    "THB_SUN": {
+      "buy_time": "2026-04-01 11:33:42",
+      "buy_price": 0.58497,
+      "budget_thb": 100.0,
+      "buy_fee_thb": 0.25,
+      "net_budget_thb": 99.75,
+      "coin_qty": 170.52156520847223,
+      "fee_rate": 0.0025,
+      "stop_loss_percent": 1.2,
+      "take_profit_percent": 2.0,
+      "sell_above": 0.5985048999999999,
+      "entry_source": "strategy_buy"
+    }
+  },
+  "daily_stats": {
+    "2026-03-31": {
+      "THB_BTC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ETH": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KUB": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LUNA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LINK": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -1.7309561625874181
+      },
+      "THB_TAO": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.6135480974778744
+      },
+      "THB_L3": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_EPIC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_RLUSD": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_USAT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_STG": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_TRX": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LM": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_APT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_G": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_RSR": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_TREE": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ASTER": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SPEC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SPK": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_BAT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_C": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KNC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LIT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_MEME": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_POL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_AEVO": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_TOSHI": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_CYBER": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_PLUME": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ZORA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ZETA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KITE": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ELIZAOS": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_NXPC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_RDNT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_WLFI": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SHIB": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SPX": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_JST": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_PLN": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      }
+    },
+    "2026-04-01": {
+      "THB_KUB": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -1.5262889329155769
+      },
+      "THB_USDC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_CATI": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_USDT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_STG": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 4.183007352941175
+      },
+      "THB_CHZ": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_AUSD": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_TON": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LM": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -5.091711538461539
+      },
+      "THB_MBX": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_G": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -3.7431406368460927
+      },
+      "THB_RSR": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -7.645828729281774
+      },
+      "THB_ZRC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KAVA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_YFI": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_TREE": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -2.529999999999987
+      },
+      "THB_SPEC": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -2.450367647058826
+      },
+      "THB_BAT": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 3.065793973941382
+      },
+      "THB_C": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 3.9625364349775793
+      },
+      "THB_1INCH": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KNC": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -3.0726670258620743
+      },
+      "THB_LIT": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 6.193767038234952
+      },
+      "THB_CETUS": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_XDC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_REZ": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_POL": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 2.8735275423728694
+      },
+      "THB_SAPIEN": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_NEWT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ANKR": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_DMC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_C98": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.9881406249999856
+      },
+      "THB_SWELL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_QI": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LPT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_AAVE": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_GT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_IOTX": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -5.525432211538444
+      },
+      "THB_LA": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 10.786140122873334
+      },
+      "THB_AEVO": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 2.3034595070422625
+      },
+      "THB_TOSHI": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 2.674375191482852
+      },
+      "THB_ENSO": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_MPLX": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_CYBER": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 9.948190624999995
+      },
+      "THB_JOE": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_PLUME": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.9706068035550146
+      },
+      "THB_PLN": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -2.611184908687065
+      },
+      "THB_CLEAR": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_COMP": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_CVC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SAHARA": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ZORA": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -4.352070989061062
+      },
+      "THB_CELR": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SYRUP": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_RESOLV": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_IQ": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_WCT": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KMNO": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_KITE": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -4.012248733108123
+      },
+      "THB_W": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_TRAC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_PEAQ": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_EL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_LRC": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_FXS": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_XMN": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_NXPC": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.7568749999999795
+      },
+      "THB_PENDLE": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SEI": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_B3": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_RDNT": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -14.659079326923077
+      },
+      "THB_ALPHA": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -1.83053201013513
+      },
+      "THB_CORE": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ETH": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.571747391647392
+      },
+      "THB_SPX": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 2.163712262422621
+      },
+      "THB_ASTER": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.7996228049907614
+      },
+      "THB_JFIN": {
+        "trades": 1,
+        "wins": 0,
+        "losses": 1,
+        "realized_pnl_thb": -2.0787499999999994
+      },
+      "THB_WEMIX": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_SKL": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      },
+      "THB_ELIZAOS": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.5988343178353688
+      },
+      "THB_MEME": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "realized_pnl_thb": 1.987400513240118
+      },
+      "THB_SUN": {
+        "trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0
+      }
+    }
+  },
+  "cooldowns": {
+    "THB_TAO": "2026-03-31T15:38:14.242230+07:00",
+    "THB_LINK": "2026-03-31T18:23:23.821531+07:00",
+    "THB_KUB": "2026-04-01T11:23:14.054991+07:00",
+    "THB_STG": "2026-04-01T11:23:16.658682+07:00",
+    "THB_LM": "2026-04-01T11:23:19.427589+07:00",
+    "THB_G": "2026-04-01T11:23:20.922863+07:00",
+    "THB_RSR": "2026-04-01T11:23:21.886834+07:00",
+    "THB_TREE": "2026-04-01T11:23:24.446742+07:00",
+    "THB_SPEC": "2026-04-01T11:23:25.428902+07:00",
+    "THB_BAT": "2026-04-01T11:23:26.431564+07:00",
+    "THB_C": "2026-04-01T11:23:27.376573+07:00",
+    "THB_KNC": "2026-04-01T11:23:28.903533+07:00",
+    "THB_LIT": "2026-04-01T11:23:29.949644+07:00",
+    "THB_POL": "2026-04-01T11:23:32.572913+07:00",
+    "THB_LA": "2026-04-01T11:23:39.765760+07:00",
+    "THB_AEVO": "2026-04-01T11:23:40.721819+07:00",
+    "THB_TOSHI": "2026-04-01T11:23:41.684562+07:00",
+    "THB_CYBER": "2026-04-01T11:23:43.675078+07:00",
+    "THB_PLUME": "2026-04-01T11:23:45.137607+07:00",
+    "THB_PLN": "2026-04-01T11:23:46.149102+07:00",
+    "THB_ZORA": "2026-04-01T11:23:49.291785+07:00",
+    "THB_KITE": "2026-04-01T11:23:53.749383+07:00",
+    "THB_NXPC": "2026-04-01T11:23:59.121942+07:00",
+    "THB_RDNT": "2026-04-01T11:24:01.697968+07:00",
+    "THB_ETH": "2026-04-01T11:24:15.640825+07:00",
+    "THB_SPX": "2026-04-01T11:24:18.023693+07:00",
+    "THB_ALPHA": "2026-04-01T11:24:19.518906+07:00",
+    "THB_ASTER": "2026-04-01T11:25:23.209545+07:00",
+    "THB_C98": "2026-04-01T11:29:39.175800+07:00",
+    "THB_JFIN": "2026-04-01T11:29:52.529499+07:00",
+    "THB_ELIZAOS": "2026-04-01T11:33:02.946543+07:00",
+    "THB_MEME": "2026-04-01T11:33:52.691124+07:00",
+    "THB_IOTX": "2026-04-01T11:34:44.645011+07:00"
+  }
+}

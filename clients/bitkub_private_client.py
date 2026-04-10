@@ -87,6 +87,14 @@ def _cancel_symbol_variants(symbol: str) -> tuple[str, ...]:
     )
 
 
+def describe_open_orders_symbol_variants(symbol: str) -> dict[str, str | None]:
+    return {
+        "quote_base_lower": _quote_base_lower_symbol(symbol),
+        "base_quote_upper": _base_quote_upper_symbol(symbol),
+        "without_symbol": None,
+    }
+
+
 class BitkubPrivateClient:
     SERVER_TIME_PATHS = ("/api/v3/servertime", "/api/servertime")
     WALLET_PATHS = ("/api/v3/market/wallet", "/api/market/wallet")
