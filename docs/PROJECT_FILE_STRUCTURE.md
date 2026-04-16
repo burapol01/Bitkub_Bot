@@ -153,11 +153,11 @@ Generated: April 16, 2026
 | Root Configuration/State Files | 8 |
 | Root Source Files | 3 |
 | Root Support Files | 2 |
-| Directories | 10 |
+| Directories | 12 |
 | Service Modules | 16 |
 | UI Components | 11 |
 | Test Files | 8 |
-| Documentation Files | 4 |
+| Documentation Files | 6 |
 
 ## Key Components
 
