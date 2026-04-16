@@ -50,6 +50,7 @@ from services.db_service import (
     insert_execution_order_event,
     insert_market_snapshot,
     insert_reconciliation_result,
+    insert_trade_journal,
     insert_telegram_command_log,
     insert_runtime_event,
     prune_sqlite_retention,
@@ -59,6 +60,9 @@ from services.db_service import (
 from services.execution_service import (
     LiveExecutionGuardrailError,
     build_live_execution_guardrails,
+    build_live_buy_request,
+    build_live_sell_request,
+    build_manual_live_order_request,
     cancel_live_order,
     evaluate_live_entry_candidates,
     evaluate_live_exit_candidates,
@@ -66,6 +70,9 @@ from services.execution_service import (
     submit_auto_live_entry_order,
     submit_auto_live_exit_order,
     submit_manual_live_order,
+    validate_live_buy_request_guardrails,
+    validate_live_sell_request_guardrails,
+    validate_manual_live_order_guardrails,
 )
 from services.log_service import (
     ensure_signal_log_file,
@@ -264,6 +271,22 @@ def mode_notice(
             )
         return title, lines
 
+    if mode == "shadow-live":
+        lines = [
+            "Shadow-live mode runs the live candidate pipeline and guardrails without sending exchange orders.",
+            "Every shadow action should be reviewable in the trade journal before any live expansion.",
+            "Only symbols in config rules are evaluated for shadow auto entry; watchlist symbols remain research-only.",
+        ]
+        if live_auto_exit_enabled:
+            lines.append(
+                "Shadow auto exit is evaluated from live holdings context, but the bot records intent instead of submitting exchange orders."
+            )
+        if active_positions:
+            lines.append(
+                "Existing paper positions remain visible, but they are not managed as shadow-live orders."
+            )
+        return "Shadow-live mode is recording guarded trade intents", lines
+
     lines = [
         "Live execution is intentionally disabled in this build.",
         "Market scan and account snapshots can still run, but no orders or paper trades will execute.",
@@ -289,6 +312,12 @@ def execution_guardrail_message(
         if live_auto_exit_enabled:
             return "Live mode selected; auto live exit is wired while strategy-driven live entry remains disconnected"
         return "Live mode selected; execution guardrails are active and strategy-driven live orders remain disconnected"
+    if mode == "shadow-live":
+        if strategy_execution_wired:
+            return "Shadow-live mode selected; guarded strategy-driven live intents are recorded without sending exchange orders"
+        if live_auto_exit_enabled:
+            return "Shadow-live mode selected; auto live exit intents are recorded while exchange submission stays disabled"
+        return "Shadow-live mode selected; execution guardrails are active and trade intents are recorded only"
     if mode == "live-disabled":
         return "Trading engine is locked because live mode is disabled in this build"
     return None
@@ -1880,12 +1909,43 @@ def main():
         try:
             rules = config["rules"]
             trading_mode = str(config.get("mode", "paper"))
+            shadow_live_mode = trading_mode == "shadow-live"
             trading_enabled = trading_mode == "paper"
             live_auto_entry_enabled = bool(config.get("live_auto_entry_enabled", False))
             live_auto_exit_enabled = bool(config.get("live_auto_exit_enabled", False))
-            strategy_execution_wired = trading_mode == "live" and live_auto_entry_enabled
+            strategy_execution_wired = trading_mode in {"live", "shadow-live"} and live_auto_entry_enabled
             interval_seconds = int(config["interval_seconds"])
             fee_rate = float(config["fee_rate"])
+
+            def record_trade_journal(
+                *,
+                channel: str,
+                status: str,
+                symbol: str,
+                side: str | None = None,
+                signal_reason: str | None = None,
+                exit_reason: str | None = None,
+                request_rate: float | None = None,
+                latest_price: float | None = None,
+                amount_thb: float | None = None,
+                amount_coin: float | None = None,
+                details: dict[str, Any] | None = None,
+            ) -> int:
+                return insert_trade_journal(
+                    created_at=now_text(),
+                    trading_mode=trading_mode,
+                    channel=channel,
+                    status=status,
+                    symbol=symbol,
+                    side=side,
+                    signal_reason=signal_reason,
+                    exit_reason=exit_reason,
+                    request_rate=request_rate,
+                    latest_price=latest_price,
+                    amount_thb=amount_thb,
+                    amount_coin=amount_coin,
+                    details=details,
+                )
 
             def activate_safety_pause(
                 reason: str,
@@ -2502,6 +2562,92 @@ def main():
                     notice_lines = ["No real order was submitted."]
                     return True
 
+                if shadow_live_mode:
+                    try:
+                        manual_request = build_manual_live_order_request(
+                            config=config,
+                            rules=rules,
+                        )
+                        manual_errors = validate_manual_live_order_guardrails(
+                            request=manual_request,
+                            guardrails=live_guardrails,
+                            available_balances=extract_available_balances(account_snapshot),
+                        )
+                        if manual_errors:
+                            raise LiveExecutionGuardrailError("; ".join(manual_errors))
+                    except LiveExecutionGuardrailError as e:
+                        notice = "Manual shadow-live order blocked by guardrails"
+                        notice_lines = str(e).split("; ")
+                        record_trade_journal(
+                            channel="manual_live_order",
+                            status="blocked",
+                            symbol=str(manual_order.get("symbol") or ""),
+                            side=str(manual_order.get("side") or ""),
+                            request_rate=float(manual_order.get("rate", 0.0) or 0.0),
+                            amount_thb=float(manual_order.get("amount_thb", 0.0) or 0.0),
+                            amount_coin=float(manual_order.get("amount_coin", 0.0) or 0.0),
+                            latest_price=float(manual_order.get("rate", 0.0) or 0.0),
+                            details={
+                                "errors": notice_lines,
+                                "guardrails": live_guardrails,
+                                "shadow_live": True,
+                            },
+                        )
+                        insert_runtime_event(
+                            created_at=now_text(),
+                            event_type="manual_live_order",
+                            severity="warning",
+                            message=notice,
+                            details={"errors": notice_lines, "guardrails": live_guardrails, "shadow_live": True},
+                        )
+                        return True
+
+                    journal_id = record_trade_journal(
+                        channel="manual_live_order",
+                        status="shadow_recorded",
+                        symbol=str(manual_request["symbol"]),
+                        side=str(manual_request["side"]),
+                        request_rate=float(manual_request["rate"]),
+                        amount_thb=float(manual_order.get("amount_thb", 0.0) or 0.0),
+                        amount_coin=float(manual_order.get("amount_coin", 0.0) or 0.0),
+                        latest_price=float(manual_request["rate"]),
+                        details={
+                            "guardrails": live_guardrails,
+                            "request_payload": manual_request["request_payload"],
+                            "requested_notional_thb": manual_request["requested_notional_thb"],
+                            "shadow_live": True,
+                        },
+                    )
+                    notice = "Manual shadow-live order recorded"
+                    notice_lines = [
+                        f"journal_id={journal_id} symbol={manual_request['symbol']} side={manual_request['side']}",
+                        "No exchange order was sent.",
+                    ]
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="manual_live_order",
+                        severity="info",
+                        message=notice,
+                        details={
+                            "journal_id": journal_id,
+                            "symbol": manual_request["symbol"],
+                            "side": manual_request["side"],
+                            "shadow_live": True,
+                        },
+                    )
+                    notify_telegram(
+                        "manual_live_order",
+                        notice,
+                        notice_lines,
+                        payload={
+                            "journal_id": journal_id,
+                            "symbol": manual_request["symbol"],
+                            "side": manual_request["side"],
+                            "shadow_live": True,
+                        },
+                    )
+                    return True
+
                 try:
                     order_record, order_events = submit_manual_live_order(
                         client=private_client,
@@ -2514,6 +2660,17 @@ def main():
                 except LiveExecutionGuardrailError as e:
                     notice = "Manual live order blocked by guardrails"
                     notice_lines = str(e).split("; ")
+                    record_trade_journal(
+                        channel="manual_live_order",
+                        status="blocked",
+                        symbol=str(manual_order.get("symbol") or ""),
+                        side=str(manual_order.get("side") or ""),
+                        request_rate=float(manual_order.get("rate", 0.0) or 0.0),
+                        amount_thb=float(manual_order.get("amount_thb", 0.0) or 0.0),
+                        amount_coin=float(manual_order.get("amount_coin", 0.0) or 0.0),
+                        latest_price=float(manual_order.get("rate", 0.0) or 0.0),
+                        details={"errors": notice_lines, "guardrails": live_guardrails},
+                    )
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="manual_live_order",
@@ -2531,6 +2688,17 @@ def main():
                 except Exception as e:
                     notice = "Manual live order submission failed"
                     notice_lines = [str(e)]
+                    record_trade_journal(
+                        channel="manual_live_order",
+                        status="failed",
+                        symbol=str(manual_order.get("symbol") or ""),
+                        side=str(manual_order.get("side") or ""),
+                        request_rate=float(manual_order.get("rate", 0.0) or 0.0),
+                        amount_thb=float(manual_order.get("amount_thb", 0.0) or 0.0),
+                        amount_coin=float(manual_order.get("amount_coin", 0.0) or 0.0),
+                        latest_price=float(manual_order.get("rate", 0.0) or 0.0),
+                        details={"errors": notice_lines},
+                    )
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="manual_live_order",
@@ -2574,6 +2742,25 @@ def main():
                         message=event["message"],
                         details=event.get("details"),
                     )
+                record_trade_journal(
+                    channel="manual_live_order",
+                    status="live_submitted",
+                    symbol=order_record["symbol"],
+                    side=order_record["side"],
+                    request_rate=float(order_record["request_payload"].get("rat", 0.0) or 0.0),
+                    amount_thb=float(order_record["request_payload"].get("amt", 0.0) or 0.0)
+                    if str(order_record["side"]) == "buy"
+                    else None,
+                    amount_coin=float(order_record["request_payload"].get("amt", 0.0) or 0.0)
+                    if str(order_record["side"]) == "sell"
+                    else None,
+                    latest_price=float(order_record["request_payload"].get("rat", 0.0) or 0.0),
+                    details={
+                        "execution_order_id": execution_order_id,
+                        "state": order_record["state"],
+                        "guardrails": order_record.get("guardrails"),
+                    },
+                )
 
                 notice = "Manual live order submitted"
                 notice_lines = [
@@ -2652,6 +2839,107 @@ def main():
                     strategy_execution_wired=strategy_execution_wired,
                 )
 
+                if shadow_live_mode:
+                    try:
+                        shadow_request = build_live_sell_request(
+                            symbol=str(candidate["symbol"]),
+                            amount_coin=float(candidate["amount_coin"]),
+                            rate=float(candidate["rate"]),
+                        )
+                        shadow_errors = validate_live_sell_request_guardrails(
+                            request=shadow_request,
+                            guardrails=live_guardrails,
+                            available_balances=available_balances,
+                            latest_price=float(candidate["latest_price"]),
+                        )
+                        if shadow_errors:
+                            raise LiveExecutionGuardrailError("; ".join(shadow_errors))
+                    except LiveExecutionGuardrailError as e:
+                        notice = "Auto shadow-live exit blocked by guardrails"
+                        notice_lines = str(e).split("; ")
+                        record_trade_journal(
+                            channel="auto_live_exit",
+                            status="blocked",
+                            symbol=str(candidate["symbol"]),
+                            side="sell",
+                            exit_reason=str(candidate["exit_reason"]),
+                            request_rate=float(candidate["rate"]),
+                            latest_price=float(candidate["latest_price"]),
+                            amount_coin=float(candidate["amount_coin"]),
+                            details={
+                                "errors": notice_lines,
+                                "guardrails": live_guardrails,
+                                "candidate": candidate,
+                                "shadow_live": True,
+                            },
+                        )
+                        insert_runtime_event(
+                            created_at=now_text(),
+                            event_type="auto_live_exit",
+                            severity="warning",
+                            message=notice,
+                            details={
+                                "symbol": candidate["symbol"],
+                                "exit_reason": candidate["exit_reason"],
+                                "errors": notice_lines,
+                                "shadow_live": True,
+                            },
+                        )
+                        notify_telegram(
+                            "auto_live_exit",
+                            notice,
+                            [f"symbol={candidate['symbol']}"] + notice_lines,
+                            payload={"symbol": candidate["symbol"], "exit_reason": candidate["exit_reason"], "shadow_live": True},
+                        )
+                        return False
+
+                    journal_id = record_trade_journal(
+                        channel="auto_live_exit",
+                        status="shadow_recorded",
+                        symbol=str(candidate["symbol"]),
+                        side="sell",
+                        exit_reason=str(candidate["exit_reason"]),
+                        request_rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        amount_coin=float(candidate["amount_coin"]),
+                        details={
+                            "guardrails": live_guardrails,
+                            "candidate": candidate,
+                            "request_payload": shadow_request["request_payload"],
+                            "shadow_live": True,
+                        },
+                    )
+                    notice = "Auto shadow-live exit recorded"
+                    notice_lines = [
+                        f"journal_id={journal_id} symbol={candidate['symbol']} reason={candidate['exit_reason']}",
+                        f"amount={float(candidate['amount_coin']):,.8f} rate={float(candidate['rate']):,.8f} latest={float(candidate['latest_price']):,.8f}",
+                        "No exchange order was sent.",
+                    ]
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="auto_live_exit",
+                        severity="info",
+                        message=notice,
+                        details={
+                            "journal_id": journal_id,
+                            "symbol": candidate["symbol"],
+                            "exit_reason": candidate["exit_reason"],
+                            "shadow_live": True,
+                        },
+                    )
+                    notify_telegram(
+                        "auto_live_exit",
+                        notice,
+                        notice_lines,
+                        payload={
+                            "journal_id": journal_id,
+                            "symbol": candidate["symbol"],
+                            "exit_reason": candidate["exit_reason"],
+                            "shadow_live": True,
+                        },
+                    )
+                    return True
+
                 try:
                     order_record, order_events = submit_auto_live_exit_order(
                         client=private_client,
@@ -2667,6 +2955,21 @@ def main():
                 except LiveExecutionGuardrailError as e:
                     notice = "Auto live exit blocked by guardrails"
                     notice_lines = str(e).split("; ")
+                    record_trade_journal(
+                        channel="auto_live_exit",
+                        status="blocked",
+                        symbol=str(candidate["symbol"]),
+                        side="sell",
+                        exit_reason=str(candidate["exit_reason"]),
+                        request_rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        amount_coin=float(candidate["amount_coin"]),
+                        details={
+                            "errors": notice_lines,
+                            "guardrails": live_guardrails,
+                            "candidate": candidate,
+                        },
+                    )
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="auto_live_exit",
@@ -2688,6 +2991,17 @@ def main():
                 except Exception as e:
                     notice = "Auto live exit submission failed"
                     notice_lines = [str(e)]
+                    record_trade_journal(
+                        channel="auto_live_exit",
+                        status="failed",
+                        symbol=str(candidate["symbol"]),
+                        side="sell",
+                        exit_reason=str(candidate["exit_reason"]),
+                        request_rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        amount_coin=float(candidate["amount_coin"]),
+                        details={"errors": notice_lines, "candidate": candidate},
+                    )
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="auto_live_exit",
@@ -2725,6 +3039,21 @@ def main():
                     execution_order_id=execution_order_id,
                     order_record=order_record,
                     order_events=order_events,
+                )
+                record_trade_journal(
+                    channel="auto_live_exit",
+                    status="live_submitted",
+                    symbol=order_record["symbol"],
+                    side=order_record["side"],
+                    exit_reason=str(candidate["exit_reason"]),
+                    request_rate=float(candidate["rate"]),
+                    latest_price=float(candidate["latest_price"]),
+                    amount_coin=float(candidate["amount_coin"]),
+                    details={
+                        "execution_order_id": execution_order_id,
+                        "state": order_record["state"],
+                        "guardrails": order_record.get("guardrails"),
+                    },
                 )
 
                 notice = "Auto live exit order submitted"
@@ -2779,6 +3108,111 @@ def main():
                     strategy_execution_wired=strategy_execution_wired,
                 )
 
+                if shadow_live_mode:
+                    try:
+                        shadow_request = build_live_buy_request(
+                            symbol=str(candidate["symbol"]),
+                            amount_thb=float(candidate["amount_thb"]),
+                            rate=float(candidate["rate"]),
+                        )
+                        shadow_errors = validate_live_buy_request_guardrails(
+                            request=shadow_request,
+                            guardrails=live_guardrails,
+                            available_balances=available_balances,
+                            latest_price=float(candidate["latest_price"]),
+                        )
+                        if shadow_errors:
+                            raise LiveExecutionGuardrailError("; ".join(shadow_errors))
+                    except LiveExecutionGuardrailError as e:
+                        notice = "Auto shadow-live entry blocked by guardrails"
+                        notice_lines = str(e).split("; ")
+                        record_trade_journal(
+                            channel="auto_live_entry",
+                            status="blocked",
+                            symbol=str(candidate["symbol"]),
+                            side="buy",
+                            signal_reason=str(candidate["signal_reason"]),
+                            request_rate=float(candidate["rate"]),
+                            latest_price=float(candidate["latest_price"]),
+                            amount_thb=float(candidate["amount_thb"]),
+                            details={
+                                "errors": notice_lines,
+                                "guardrails": live_guardrails,
+                                "candidate": candidate,
+                                "shadow_live": True,
+                            },
+                        )
+                        insert_runtime_event(
+                            created_at=now_text(),
+                            event_type="auto_live_entry",
+                            severity="warning",
+                            message=notice,
+                            details={
+                                "symbol": candidate["symbol"],
+                                "signal_reason": candidate["signal_reason"],
+                                "errors": notice_lines,
+                                "shadow_live": True,
+                            },
+                        )
+                        notify_telegram(
+                            "auto_live_entry",
+                            notice,
+                            [f"symbol={candidate['symbol']}"] + notice_lines,
+                            payload={
+                                "symbol": candidate["symbol"],
+                                "signal_reason": candidate["signal_reason"],
+                                "shadow_live": True,
+                            },
+                        )
+                        return False
+
+                    journal_id = record_trade_journal(
+                        channel="auto_live_entry",
+                        status="shadow_recorded",
+                        symbol=str(candidate["symbol"]),
+                        side="buy",
+                        signal_reason=str(candidate["signal_reason"]),
+                        request_rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        amount_thb=float(candidate["amount_thb"]),
+                        details={
+                            "guardrails": live_guardrails,
+                            "candidate": candidate,
+                            "request_payload": shadow_request["request_payload"],
+                            "shadow_live": True,
+                        },
+                    )
+                    notice = "Auto shadow-live entry recorded"
+                    notice_lines = [
+                        f"journal_id={journal_id} symbol={candidate['symbol']} reason={candidate['signal_reason']}",
+                        f"amount_thb={float(candidate['amount_thb']):,.2f} rate={float(candidate['rate']):,.8f} latest={float(candidate['latest_price']):,.8f}",
+                        "No exchange order was sent.",
+                    ]
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="auto_live_entry",
+                        severity="info",
+                        message=notice,
+                        details={
+                            "journal_id": journal_id,
+                            "symbol": candidate["symbol"],
+                            "signal_reason": candidate["signal_reason"],
+                            "shadow_live": True,
+                        },
+                    )
+                    notify_telegram(
+                        "auto_live_entry",
+                        notice,
+                        notice_lines,
+                        payload={
+                            "journal_id": journal_id,
+                            "symbol": candidate["symbol"],
+                            "signal_reason": candidate["signal_reason"],
+                            "shadow_live": True,
+                        },
+                    )
+                    return True
+
                 try:
                     order_record, order_events = submit_auto_live_entry_order(
                         client=private_client,
@@ -2794,6 +3228,21 @@ def main():
                 except LiveExecutionGuardrailError as e:
                     notice = "Auto live entry blocked by guardrails"
                     notice_lines = str(e).split("; ")
+                    record_trade_journal(
+                        channel="auto_live_entry",
+                        status="blocked",
+                        symbol=str(candidate["symbol"]),
+                        side="buy",
+                        signal_reason=str(candidate["signal_reason"]),
+                        request_rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        amount_thb=float(candidate["amount_thb"]),
+                        details={
+                            "errors": notice_lines,
+                            "guardrails": live_guardrails,
+                            "candidate": candidate,
+                        },
+                    )
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="auto_live_entry",
@@ -2824,6 +3273,22 @@ def main():
                             f"symbol={candidate['symbol']}",
                             error_text,
                         ]
+                        record_trade_journal(
+                            channel="auto_live_entry",
+                            status="unsupported_symbol",
+                            symbol=str(candidate["symbol"]),
+                            side="buy",
+                            signal_reason=str(candidate["signal_reason"]),
+                            request_rate=float(candidate["rate"]),
+                            latest_price=float(candidate["latest_price"]),
+                            amount_thb=float(candidate["amount_thb"]),
+                            details={
+                                "errors": notice_lines,
+                                "candidate": candidate,
+                                "newly_blocked": newly_blocked,
+                                "error_category": "unsupported_symbol",
+                            },
+                        )
                         insert_runtime_event(
                             created_at=now_text(),
                             event_type="auto_live_entry",
@@ -2850,6 +3315,17 @@ def main():
 
                     notice = "Auto live entry submission failed"
                     notice_lines = [error_text]
+                    record_trade_journal(
+                        channel="auto_live_entry",
+                        status="failed",
+                        symbol=str(candidate["symbol"]),
+                        side="buy",
+                        signal_reason=str(candidate["signal_reason"]),
+                        request_rate=float(candidate["rate"]),
+                        latest_price=float(candidate["latest_price"]),
+                        amount_thb=float(candidate["amount_thb"]),
+                        details={"errors": notice_lines, "candidate": candidate},
+                    )
                     insert_runtime_event(
                         created_at=now_text(),
                         event_type="auto_live_entry",
@@ -2887,6 +3363,22 @@ def main():
                     execution_order_id=execution_order_id,
                     order_record=order_record,
                     order_events=order_events,
+                )
+                record_trade_journal(
+                    channel="auto_live_entry",
+                    status="live_submitted",
+                    symbol=order_record["symbol"],
+                    side=order_record["side"],
+                    signal_reason=str(candidate["signal_reason"]),
+                    request_rate=float(candidate["rate"]),
+                    latest_price=float(candidate["latest_price"]),
+                    amount_thb=float(candidate["amount_thb"]),
+                    details={
+                        "execution_order_id": execution_order_id,
+                        "state": order_record["state"],
+                        "guardrails": order_record.get("guardrails"),
+                        "request_payload": order_record["request_payload"],
+                    },
                 )
 
                 notice = "Auto live entry order submitted"
@@ -3382,7 +3874,12 @@ def main():
                         cooldowns=cooldowns,
                         timestamp=timestamp,
                     )
-                elif trading_mode == "live" and live_auto_entry_enabled and changed and current_zone == "BUY":
+                elif (
+                    trading_mode in {"live", "shadow-live"}
+                    and live_auto_entry_enabled
+                    and changed
+                    and current_zone == "BUY"
+                ):
                     entry_signal_rows.append(
                         {
                             "symbol": symbol,
@@ -3444,6 +3941,25 @@ def main():
                         print(
                             "Market scan continues, but no real orders are submitted in this build."
                         )
+                elif trading_mode == "shadow-live":
+                    if live_auto_entry_enabled:
+                        print(
+                            "Shadow-live mode active: guarded strategy-driven entry intents are recorded for config rules."
+                        )
+                        print(
+                            "Market scan continues and one guarded shadow buy intent may be recorded per loop when a fresh BUY zone entry appears."
+                        )
+                    elif live_auto_exit_enabled:
+                        print(
+                            "Shadow-live foundation active: entry intents remain disconnected, but auto shadow exit is enabled."
+                        )
+                        print(
+                            "Market scan continues and exchange holdings may record guarded sell intents when exit conditions trigger."
+                        )
+                    else:
+                        print(
+                            "Shadow-live foundation active: guardrails are loaded, but no shadow trade intents are being recorded in this build."
+                        )
                 else:
                     print(
                         "Trading engine locked: "
@@ -3466,7 +3982,7 @@ def main():
                 f"losses={total_losses} realized={total_pnl:,.2f} THB"
             )
 
-            if trading_mode == "live" and private_client is not None:
+            if trading_mode in {"live", "shadow-live"} and private_client is not None:
                 open_execution_orders = fetch_open_execution_orders()
                 for open_order in open_execution_orders:
                     execution_order_id = int(open_order["id"])

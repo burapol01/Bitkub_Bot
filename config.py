@@ -46,7 +46,7 @@ ROOT_REQUIRED_FIELDS = {
     "rules",
 }
 
-SUPPORTED_MODES = {"paper", "read-only", "live-disabled", "live"}
+SUPPORTED_MODES = {"paper", "read-only", "live-disabled", "live", "shadow-live"}
 
 RULE_REQUIRED_FIELDS = {
     "buy_below",
@@ -243,7 +243,7 @@ def validate_config(config: dict[str, Any]) -> list[str]:
     mode = config.get("mode")
     if not isinstance(mode, str) or mode not in SUPPORTED_MODES:
         errors.append(
-            "mode must be one of: paper, read-only, live-disabled, live"
+            "mode must be one of: paper, read-only, live-disabled, live, shadow-live"
         )
 
     if not isinstance(config["live_execution_enabled"], bool):

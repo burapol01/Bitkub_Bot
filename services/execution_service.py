@@ -96,8 +96,8 @@ def build_live_execution_guardrails(
 
     blocked_reasons: list[str] = []
 
-    if trading_mode != "live":
-        blocked_reasons.append("trading mode is not live")
+    if trading_mode not in {"live", "shadow-live"}:
+        blocked_reasons.append("trading mode is not live or shadow-live")
     if not live_enabled:
         blocked_reasons.append("live execution kill switch is OFF")
     if not strategy_execution_wired:
@@ -121,6 +121,7 @@ def build_live_execution_guardrails(
 
     return {
         "mode": trading_mode,
+        "shadow_live_mode": trading_mode == "shadow-live",
         "live_execution_enabled": live_enabled,
         "live_auto_entry_enabled": live_auto_entry_enabled,
         "live_auto_exit_enabled": live_auto_exit_enabled,

@@ -1671,11 +1671,22 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
     )
     report = dict(reports_payload.get("report") or {})
     daily_summary_rows = list(reports_payload.get("daily_summary") or [])
+    portfolio_daily_metrics = list(reports_payload.get("portfolio_daily_metrics") or [])
+    strategy_daily_metrics = list(reports_payload.get("strategy_daily_metrics") or [])
+    recent_validation_runs = list(reports_payload.get("recent_validation_runs") or [])
+    recent_validation_slices = list(reports_payload.get("recent_validation_slices") or [])
+    recent_validation_consistency_checks = list(reports_payload.get("recent_validation_consistency_checks") or [])
     symbol_summary = report["symbol_summary"]
     recent_execution_orders = report["recent_execution_orders"]
     recent_auto_exit_events = report["recent_auto_exit_events"]
     recent_errors = report["recent_errors"]
     recent_trades = report["recent_trades"]
+    recent_trade_journal = report.get("recent_trade_journal", [])
+    latest_portfolio_metric = portfolio_daily_metrics[0] if portfolio_daily_metrics else {}
+    worst_portfolio_drawdown_thb = min(
+        (float(row.get("drawdown_thb", 0.0) or 0.0) for row in portfolio_daily_metrics),
+        default=0.0,
+    )
 
     total_signals = sum(int(row.get("signals", 0)) for row in symbol_summary)
     total_paper_trades = sum(int(row.get("trades", 0)) for row in symbol_summary)
@@ -1699,6 +1710,7 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
         badge("PnL NEGATIVE" if total_combined_pnl < 0 else "PnL POSITIVE", "bad" if total_combined_pnl < 0 else "good"),
         badge("Fee HEAVY" if total_combined_fee > max(abs(total_combined_pnl) * 0.5, 1.0) else "Fee OK", "warn" if total_combined_fee > max(abs(total_combined_pnl) * 0.5, 1.0) else "good"),
         badge(f"Errors {len(recent_errors)}", "warn" if recent_errors else "good"),
+        badge(f"Journal {len(recent_trade_journal)}", "info" if recent_trade_journal else "good"),
     ]
     st.markdown(f'<div class="status-strip">{" ".join(status_badges)}</div>', unsafe_allow_html=True)
 
@@ -1731,6 +1743,165 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
         st.dataframe(daily_summary_rows, width='stretch', hide_index=True)
     else:
         st.caption("No daily realized PnL rows were found for the selected filter and window.")
+
+    render_section_intro(
+        "Portfolio Daily Metrics",
+        "Derived metrics rebuilt from paper_trade_logs and filled execution_orders so portfolio reporting stays deterministic and auditable.",
+        "Metrics",
+    )
+    portfolio_metric_cards = st.columns(4)
+    with portfolio_metric_cards[0]:
+        render_metric_card(
+            "Latest Portfolio PnL",
+            f"{float(latest_portfolio_metric.get('combined_realized_pnl_thb', 0.0) or 0.0):,.2f} THB",
+            f"Date {latest_portfolio_metric.get('report_date', 'n/a')}",
+        )
+    with portfolio_metric_cards[1]:
+        render_metric_card(
+            "Cumulative Realized",
+            f"{float(latest_portfolio_metric.get('cumulative_realized_pnl_thb', 0.0) or 0.0):,.2f} THB",
+            "Across all stored paper and live closed trades",
+        )
+    with portfolio_metric_cards[2]:
+        render_metric_card(
+            "Worst Drawdown",
+            f"{worst_portfolio_drawdown_thb:,.2f} THB",
+            f"Window {daily_window_days}d | Realized curve only",
+        )
+    with portfolio_metric_cards[3]:
+        render_metric_card(
+            "Latest Turnover",
+            f"{float(latest_portfolio_metric.get('combined_turnover_thb', 0.0) or 0.0):,.2f} THB",
+            f"Symbols {int(latest_portfolio_metric.get('symbols_active', 0) or 0)} | Strategies {int(latest_portfolio_metric.get('strategies_active', 0) or 0)}",
+        )
+    if selected_symbol != "ALL":
+        st.caption(
+            "Portfolio Daily Metrics stay full-portfolio on purpose. Use Strategy Daily Metrics below for the selected symbol slice."
+        )
+    if portfolio_daily_metrics:
+        st.dataframe(portfolio_daily_metrics, width='stretch', hide_index=True)
+    else:
+        st.caption("No portfolio daily metric rows have been derived yet.")
+
+    render_section_intro(
+        "Strategy Daily Metrics",
+        "Per-day rows split by paper_rule_engine and live_execution so you can separate where edge is actually coming from.",
+        "Metrics",
+    )
+    if strategy_daily_metrics:
+        st.dataframe(strategy_daily_metrics, width='stretch', hide_index=True)
+    else:
+        st.caption("No strategy daily metric rows match the current report window and filter.")
+
+    render_section_intro(
+        "Validation Runs",
+        "Recent walk-forward and time-series CV runs stored in SQLite so validation becomes reviewable instead of a one-off notebook exercise.",
+        "Validation",
+    )
+    latest_validation_run = recent_validation_runs[0] if recent_validation_runs else {}
+    validation_cards = st.columns(4)
+    with validation_cards[0]:
+        render_metric_card(
+            "Recent Validation Runs",
+            str(len(recent_validation_runs)),
+            f"Latest {latest_validation_run.get('validation_type', 'n/a')}",
+        )
+    with validation_cards[1]:
+        render_metric_card(
+            "Latest Test PnL",
+            f"{float((latest_validation_run.get('summary') or {}).get('test_total_pnl_thb', 0.0) or 0.0):,.2f} THB",
+            f"Symbol {latest_validation_run.get('symbol', 'n/a')}",
+        )
+    with validation_cards[2]:
+        render_metric_card(
+            "Latest Drawdown",
+            f"{float((latest_validation_run.get('summary') or {}).get('worst_test_drawdown_thb', 0.0) or 0.0):,.2f} THB",
+            f"Slices {int((latest_validation_run.get('summary') or {}).get('completed_slices', 0) or 0)}",
+        )
+    with validation_cards[3]:
+        render_metric_card(
+            "Consistency Checks",
+            str(len(recent_validation_consistency_checks)),
+            "Replay determinism + leakage guards",
+        )
+    if recent_validation_runs:
+        validation_run_rows = [
+            {
+                "created_at": row.get("created_at"),
+                "validation_type": row.get("validation_type"),
+                "status": row.get("status"),
+                "symbol": row.get("symbol"),
+                "data_source": row.get("data_source"),
+                "mode": row.get("mode"),
+                "date_from": row.get("date_from"),
+                "date_to": row.get("date_to"),
+                "completed_slices": int((row.get("summary") or {}).get("completed_slices", 0) or 0),
+                "test_total_pnl_thb": float((row.get("summary") or {}).get("test_total_pnl_thb", 0.0) or 0.0),
+                "test_profit_factor": float((row.get("summary") or {}).get("test_profit_factor", 0.0) or 0.0),
+                "worst_test_drawdown_thb": float((row.get("summary") or {}).get("worst_test_drawdown_thb", 0.0) or 0.0),
+            }
+            for row in recent_validation_runs
+        ]
+        st.dataframe(validation_run_rows, width='stretch', hide_index=True)
+    else:
+        st.caption("No persisted validation runs found yet. Run walk-forward or time-series CV to populate this section.")
+
+    validation_bottom_left, validation_bottom_right = st.columns([1.15, 0.85])
+    with validation_bottom_left:
+        render_section_intro(
+            "Latest Validation Slices",
+            "Train/test slice details from the most recent run for the current filter.",
+            "Validation",
+        )
+        if recent_validation_slices:
+            st.dataframe(
+                [
+                    {
+                        "slice_no": row.get("slice_no"),
+                        "status": row.get("status"),
+                        "train_start_at": row.get("train_start_at"),
+                        "train_end_at": row.get("train_end_at"),
+                        "test_start_at": row.get("test_start_at"),
+                        "test_end_at": row.get("test_end_at"),
+                        "selected_variant": row.get("selected_variant"),
+                        "train_pnl_thb": float((row.get("train_metrics") or {}).get("total_pnl_thb", 0.0) or 0.0),
+                        "test_pnl_thb": float((row.get("test_metrics") or {}).get("total_pnl_thb", 0.0) or 0.0),
+                        "test_trades": int((row.get("test_metrics") or {}).get("trades", 0) or 0),
+                        "test_profit_factor": float((row.get("test_metrics") or {}).get("profit_factor", 0.0) or 0.0),
+                    }
+                    for row in recent_validation_slices
+                ],
+                width='stretch',
+                hide_index=True,
+            )
+        else:
+            st.caption("No validation slice rows to show yet.")
+    with validation_bottom_right:
+        render_section_intro(
+            "Consistency Checks",
+            "Repeated replay hashes should match for the same window and rule. This helps catch unstable or leaky backtests.",
+            "Validation",
+        )
+        if recent_validation_consistency_checks:
+            st.dataframe(
+                [
+                    {
+                        "created_at": row.get("created_at"),
+                        "status": row.get("status"),
+                        "symbol": row.get("symbol"),
+                        "data_source": row.get("data_source"),
+                        "window_start_at": row.get("window_start_at"),
+                        "window_end_at": row.get("window_end_at"),
+                        "hashes": len(list((row.get("details") or {}).get("hashes") or [])),
+                        "issues": len(list((row.get("details") or {}).get("issues") or [])),
+                    }
+                    for row in recent_validation_consistency_checks
+                ],
+                width='stretch',
+                hide_index=True,
+            )
+        else:
+            st.caption("No validation consistency checks recorded yet.")
 
     left, right = st.columns([1.15, 0.85])
     with left:
@@ -1804,6 +1975,16 @@ def render_reports_page(*, today: str, config: dict[str, Any]) -> None:
         st.caption("Live fees come from filled execution_orders response_json.result.fee.")
         st.caption("Live realized PnL is estimated from filled buy/sell execution history using FIFO cost basis.")
         st.caption("Fee guardrail flags symbols whose net edge is too thin relative to trading fees.")
+
+    render_section_intro(
+        "Recent Trade Journal",
+        "Structured intent records across live and shadow-live paths, including blocked actions before they reach the exchange.",
+        "Journal",
+    )
+    if recent_trade_journal:
+        st.dataframe(recent_trade_journal, width='stretch', hide_index=True)
+    else:
+        st.caption("No trade journal rows recorded for this filter yet.")
 
     bottom_left, bottom_right = st.columns([1.0, 1.0])
     with bottom_left:
