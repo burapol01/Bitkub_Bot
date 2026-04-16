@@ -9,7 +9,7 @@ This project now supports a simple CI-before-CD production flow:
 5. GitHub Actions waits for the `CI` run on `main` to finish successfully
 6. The deploy workflow opens an SSH session to the DigitalOcean droplet
 7. The runner calls `deploy/deploy_prod.sh`
-8. The droplet pulls the latest code, installs dependencies, runs smoke checks, and restarts `bitkub-engine` plus `bitkub-streamlit`
+8. The droplet pulls the latest code, seeds runtime config if needed, builds the Docker images, and restarts the containers
 
 ## 1. Server Prerequisites
 
@@ -17,10 +17,12 @@ This project now supports a simple CI-before-CD production flow:
 - App lives at `/opt/bitkub/Bitkub_Bot`
 - The deploy user can run:
   - `git fetch origin main`
-  - `systemctl restart bitkub-engine`
-  - `systemctl restart bitkub-streamlit`
-- `.env`, `config.base.json`, `config.prod.override.json`, `data/*.db`, and `runtime_state.json` stay on the server
-- `bitkub-engine` and `bitkub-streamlit` systemd services are already installed
+  - `docker compose version`
+  - `docker compose build`
+  - `docker compose up -d --remove-orphans`
+- The deploy user can access the Docker daemon, usually by being in the `docker` group
+- `runtime/` and `data/` stay on the server
+- `.env` stays on the server and is not baked into the image
 
 ## 2. Create A Dedicated SSH Key Pair
 
@@ -99,30 +101,21 @@ git fetch origin main
 
 If this fails, GitHub Actions will SSH in successfully but deploy will still stop at the `git fetch` step.
 
-## 5. Allow Service Restart Commands
+## 5. Allow Docker Access
 
-If the deploy user is not root, allow passwordless `systemctl` for the required commands.
-
-Example on Ubuntu/DigitalOcean:
+If the deploy user is not already in the `docker` group, add it once on the droplet:
 
 ```bash
-sudo visudo -f /etc/sudoers.d/bitkub-deploy
+sudo usermod -aG docker bitkub
 ```
 
-Add:
+Then log out and back in so the new group membership is active.
 
-```text
-bitkub ALL=NOPASSWD: /usr/bin/systemctl daemon-reload, /usr/bin/systemctl restart bitkub-engine, /usr/bin/systemctl restart bitkub-streamlit, /usr/bin/systemctl is-active --quiet bitkub-engine, /usr/bin/systemctl is-active --quiet bitkub-streamlit
-```
-
-Then test:
+Test:
 
 ```bash
-sudo -n systemctl daemon-reload
-sudo -n systemctl restart bitkub-engine
-sudo -n systemctl restart bitkub-streamlit
-sudo -n systemctl is-active --quiet bitkub-engine
-sudo -n systemctl is-active --quiet bitkub-streamlit
+docker compose version
+docker compose ps
 ```
 
 ## 6. First Manual Server Test
@@ -139,7 +132,7 @@ If that works manually, the GitHub Actions deploy workflow should work too.
 ## 7. Recommended Rollout Order
 
 - run `deploy/deploy_prod.sh` manually once on the droplet
-- confirm both services restart cleanly
+- confirm the containers come up with `docker compose ps`
 - open a PR and confirm `CI` passes
 - merge into `main`
 - watch the `CI` run on `main`, then the deploy workflow
@@ -148,5 +141,5 @@ If that works manually, the GitHub Actions deploy workflow should work too.
 ## 8. Notes
 
 - This flow is intentionally simple and good for a single DigitalOcean droplet
-- Do not let the deploy pipeline overwrite server-owned files such as `.env`, prod override config, SQLite DBs, or runtime state
+- Do not let the deploy pipeline overwrite server-owned files such as `.env`, runtime config, SQLite DBs, or runtime state
 - If you later need zero-downtime deploys, release artifacts, or rollback slots, you can evolve this flow after the simple path is stable

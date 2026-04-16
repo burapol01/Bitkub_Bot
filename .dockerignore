@@ -5,5 +5,16 @@ __pycache__
 *.pyd
 .git
 .gitignore
+.env
+.env_*
+.env copy
+.envrc
+env
+env_*
 data
 logs
+runtime
+runtime_state.json
+signal_log.csv
+paper_trade_log.csv
+config.prod.override.json

@@ -5,14 +5,22 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ARG APP_UID=1000
+ARG APP_GID=1000
 
-COPY requirements.txt .
+RUN groupadd --gid "${APP_GID}" app \
+    && useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /usr/sbin/nologin app
+
+COPY --chown=app:app requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY --chown=app:app . .
+
+RUN mkdir -p /app/runtime /app/data \
+    && chown -R app:app /app/runtime /app/data
+
+USER app
 
 EXPOSE 8501
+
+CMD ["python", "main.py"]

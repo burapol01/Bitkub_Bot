@@ -158,14 +158,14 @@ chmod 600 ~/.ssh/authorized_keys
 ```bash
 cd /opt/bitkub/Bitkub_Bot
 git log --oneline -n 3
-systemctl is-active bitkub-engine bitkub-streamlit
+docker compose ps
 ```
 
 ถ้าขึ้นแบบนี้ถือว่าโอเค:
 
 ```text
-active
-active
+bitkub-engine
+bitkub-streamlit
 ```
 
 ---
