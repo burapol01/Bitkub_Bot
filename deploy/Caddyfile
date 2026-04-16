@@ -1,0 +1,4 @@
+http://165.22.108.218 {
+    encode gzip zstd
+    reverse_proxy streamlit:8501
+}
