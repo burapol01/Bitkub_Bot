@@ -69,7 +69,13 @@ The script fails fast if the working tree has local tracked or untracked changes
 
 ## Reverse proxy
 
-If you want browser access from outside the VPS, put Nginx or Caddy in front of Streamlit and expose only port 8501 internally.
+Caddy is now integrated into the Docker Compose stack as the public entry point. The setup is as follows:
+
+- **Public access:** Caddy listens on ports 80/443 and is exposed to the host.
+- **Internal access:** Streamlit only exposes port 8501 internally within the Docker network (not directly to the host).
+- **Configuration:** The Caddyfile is at `deploy/Caddyfile` and can be edited to change the site address or enable HTTPS with a real domain.
+
+Currently configured for temporary testing at `http://165.22.108.218`. When you obtain a domain, update the site address in `deploy/Caddyfile` and Caddy will automatically provision HTTPS certificates via ACME.
 
 ## Legacy systemd
 
