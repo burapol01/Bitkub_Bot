@@ -1,0 +1,39 @@
+services:
+  streamlit:
+    build: .
+    container_name: bitkub-streamlit
+    working_dir: /app
+    command: >
+      python -m streamlit run ui/streamlit/app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    env_file:
+      - ./.env
+    environment:
+      BITKUB_APP_ROOT: /app
+      BITKUB_CONFIG_PATH: /app/config.json
+      BITKUB_DB_PATH: /app/data/bitkub.db
+      BITKUB_RUNTIME_STATE_PATH: /app/runtime_state.json
+      STREAMLIT_SERVER_PORT: "8501"
+      STREAMLIT_SERVER_ADDRESS: "0.0.0.0"
+    volumes:
+      - ./:/app
+    restart: unless-stopped
+
+  engine:
+    build: .
+    container_name: bitkub-engine
+    working_dir: /app
+    command: python main.py
+    env_file:
+      - ./.env
+    environment:
+      BITKUB_APP_ROOT: /app
+      BITKUB_CONFIG_PATH: /app/config.json
+      BITKUB_DB_PATH: /app/data/bitkub.db
+      BITKUB_RUNTIME_STATE_PATH: /app/runtime_state.json
+    volumes:
+      - ./:/app
+    restart: unless-stopped
