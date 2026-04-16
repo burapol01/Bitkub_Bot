@@ -77,6 +77,6 @@ Caddy is now integrated into the Docker Compose stack as the public entry point.
 
 Currently configured for temporary testing at `http://165.22.108.218`. When you obtain a domain, update the site address in `deploy/Caddyfile` and Caddy will automatically provision HTTPS certificates via ACME.
 
-## Legacy systemd
+## Archived Legacy Files
 
-The old `bitkub-engine.service` and `bitkub-streamlit.service` files are now legacy only. Keep them archived or disabled, but do not use them for the Docker deployment path.
+The old `bitkub-engine.service` and `bitkub-streamlit.service` files now live in `deploy/archive/systemd/` for reference only. They are not part of the active Docker deployment path.

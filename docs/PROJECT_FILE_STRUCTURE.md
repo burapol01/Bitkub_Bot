@@ -7,8 +7,10 @@ Generated: April 16, 2026
 ### Configuration Files
 - `config.base.json` - Base configuration template
 - `config.json` - Main configuration file
-- `config.prod.override.json` - Legacy production override file kept ignored for compatibility
 - `config.py` - Python configuration module
+
+### Legacy / Ignored Configuration
+- `config.prod.override.json` - Ignored production override kept for compatibility
 
 ### Main Application Files
 - `bitkub_bot.py` - Main bot implementation
@@ -63,8 +65,14 @@ Generated: April 16, 2026
 ### `/deploy/` - Deployment Configuration
 - `BRANCH_PROTECTION_CHECKLIST.md` - Branch protection guidelines
 - `DEPLOY_SECRETS_CHECKLIST.md` - Secrets management checklist
+- `Caddyfile` - Reverse proxy configuration for the Docker stack
 - `VPS_DEPLOY.md` - VPS deployment documentation
 - `deploy_prod.sh` - Docker Compose deploy script for the VPS
+
+### `/deploy/archive/systemd/` - Legacy Systemd Units
+- `README.md` - Legacy deployment archive index
+- `bitkub-engine.service` - Archived engine unit
+- `bitkub-streamlit.service` - Archived Streamlit unit
 
 ### `/runtime/` - Docker Runtime State
 - `config.json` - Mutable production config override on the VPS
@@ -74,9 +82,14 @@ Generated: April 16, 2026
 
 ### `/docs/` - Documentation
 - `CI_CD_RUNBOOK.md` - CI/CD operational guide
+- `archive/README.md` - Archive index for historical notes
 - `generate_new_ssh_key_github_actions.md` - SSH key generation guide
-- `pr-fixbug-initial-bug-investigation.md` - Bug investigation documentation
 - `PROJECT_FILE_STRUCTURE.md` - This file
+
+### `/docs/archive/` - Historical Notes
+- `README.md` - Archive index for historical notes
+- `bitkub_bot_docker_deploy_review_summary.md` - Docker deploy review summary
+- `pr-fixbug-initial-bug-investigation.md` - Historical bug investigation notes
 
 ### `/scripts/` - Automation Scripts
 - `start_engine.sh` - Engine startup script
@@ -154,4 +167,4 @@ Generated: April 16, 2026
 4. **Services Layer** - Modular service architecture for separation of concerns (15 services)
 5. **Testing** - Comprehensive test suite with 8 test modules
 6. **Deployment** - Production deployment configs and Docker Compose runtime
-7. **Documentation** - CI/CD, deployment, and bug investigation guides
+7. **Documentation** - CI/CD, deployment, and historical archive notes
