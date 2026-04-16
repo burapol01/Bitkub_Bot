@@ -21,7 +21,8 @@ The containers use these paths:
 - `BITKUB_SIGNAL_LOG_FILE=/app/runtime/signal_log.csv`
 - `BITKUB_TRADE_LOG_FILE=/app/runtime/paper_trade_log.csv`
 
-The deploy script also exports the host user UID/GID to keep the container writeable without running as root.
+The deploy script exports the host user UID/GID to keep the container writeable without running as root.
+If the SSH user is `root`, it falls back to a non-root container identity and fixes ownership on `runtime/` and `data/`.
 
 ## First-time setup
 

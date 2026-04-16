@@ -45,6 +45,28 @@ ensure_clean_worktree() {
   fi
 }
 
+choose_container_identity() {
+  local host_uid host_gid
+
+  host_uid="$(id -u)"
+  host_gid="$(id -g)"
+
+  DOCKER_UID="${BITKUB_DOCKER_UID:-$host_uid}"
+  DOCKER_GID="${BITKUB_DOCKER_GID:-$host_gid}"
+
+  if [[ "$DOCKER_UID" == "0" ]]; then
+    DOCKER_UID=1000
+    log "SSH user is root; using fallback container UID ${DOCKER_UID}"
+  fi
+
+  if [[ "$DOCKER_GID" == "0" ]]; then
+    DOCKER_GID=1000
+    log "SSH user is root; using fallback container GID ${DOCKER_GID}"
+  fi
+
+  export DOCKER_UID DOCKER_GID
+}
+
 ensure_branch_fast_forward_only() {
   local ahead_count
   ahead_count="$(git rev-list --count "$DEPLOY_REMOTE/$DEPLOY_BRANCH..HEAD")"
@@ -55,6 +77,10 @@ ensure_branch_fast_forward_only() {
 
 ensure_runtime_layout() {
   mkdir -p "$RUNTIME_DIR" "$APP_ROOT/data"
+
+  if [[ "$(id -u)" == "0" ]]; then
+    chown -R "$DOCKER_UID:$DOCKER_GID" "$RUNTIME_DIR" "$APP_ROOT/data"
+  fi
 }
 
 seed_runtime_config() {
@@ -66,6 +92,10 @@ seed_runtime_config() {
 
   log "Seeding runtime config at $RUNTIME_CONFIG_FILE"
   cp "$APP_ROOT/config.json" "$RUNTIME_CONFIG_FILE"
+
+  if [[ "$(id -u)" == "0" ]]; then
+    chown "$DOCKER_UID:$DOCKER_GID" "$RUNTIME_CONFIG_FILE"
+  fi
 }
 
 write_version_metadata() {
@@ -97,8 +127,7 @@ main() {
 
   [[ -d "$APP_ROOT" ]] || fail "APP_ROOT does not exist: $APP_ROOT"
   cd "$APP_ROOT"
-  export DOCKER_UID="$(id -u)"
-  export DOCKER_GID="$(id -g)"
+  choose_container_identity
 
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "APP_ROOT is not a git repository"
 
