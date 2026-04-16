@@ -116,18 +116,21 @@ git fetch origin main
 
 ถ้า repo เป็น private ให้เตรียม deploy key หรือ token ฝั่ง server ให้พร้อม
 
-### 5. ให้ deploy user restart systemd ได้
+### 5. ให้ deploy user เข้าถึง Docker ได้
 
-ถ้า deploy user ไม่ใช่ `root` ให้ตั้ง sudoers เช่น:
+ถ้า deploy user ยังไม่อยู่ใน `docker` group ให้เพิ่มครั้งเดียวบน server:
 
 ```bash
-sudo visudo -f /etc/sudoers.d/bitkub-deploy
+sudo usermod -aG docker bitkub
 ```
 
-แล้วใส่:
+แล้ว log out / log in ใหม่เพื่อให้ group membership มีผล
 
-```text
-bitkub ALL=NOPASSWD: /usr/bin/systemctl daemon-reload, /usr/bin/systemctl restart bitkub-engine, /usr/bin/systemctl restart bitkub-streamlit, /usr/bin/systemctl is-active --quiet bitkub-engine, /usr/bin/systemctl is-active --quiet bitkub-streamlit
+ทดสอบ:
+
+```bash
+docker compose version
+docker compose ps
 ```
 
 ### 6. ตั้ง Branch Protection
@@ -194,8 +197,9 @@ git push -u origin fixbug/some-fix
 ```bash
 cd /opt/bitkub/Bitkub_Bot
 git rev-parse --short=12 HEAD
-sudo systemctl status bitkub-engine --no-pager
-sudo systemctl status bitkub-streamlit --no-pager
+docker compose ps
+docker compose logs -f engine
+docker compose logs -f streamlit
 ```
 
 บน UI:
@@ -248,11 +252,10 @@ bash deploy/deploy_prod.sh
 
 ```bash
 sudo chown -R bitkub:bitkub /opt/bitkub/Bitkub_Bot
-sudo systemctl restart bitkub-engine
-sudo systemctl restart bitkub-streamlit
+docker compose up -d --remove-orphans
 ```
 
-ตอนนี้ `deploy_prod.sh` มี logic ช่วย normalize ownership ให้แล้วถ้ารันด้วย `root`
+ตอนนี้ `deploy_prod.sh` ใช้ Docker UID/GID จากผู้ใช้ที่ SSH เข้าไป และไม่พึ่ง systemd restart แล้ว
 
 ### 3. `Invalid workflow file`
 

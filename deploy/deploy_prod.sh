@@ -2,18 +2,12 @@
 set -Eeuo pipefail
 
 APP_ROOT="${BITKUB_APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-VENV_PATH="${BITKUB_VENV_PATH:-$APP_ROOT/.venv}"
 DEPLOY_REMOTE="${BITKUB_DEPLOY_REMOTE:-origin}"
 DEPLOY_BRANCH="${BITKUB_DEPLOY_BRANCH:-main}"
 DEPLOY_EXPECT_COMMIT="${BITKUB_DEPLOY_EXPECT_COMMIT:-}"
-DEPLOY_PYTHON_BIN="${BITKUB_DEPLOY_PYTHON_BIN:-python3}"
-DEPLOY_UPGRADE_PIP="${BITKUB_DEPLOY_UPGRADE_PIP:-0}"
-DEPLOY_RESTART_STREAMLIT="${BITKUB_DEPLOY_RESTART_STREAMLIT:-1}"
-ENGINE_SERVICE="${BITKUB_ENGINE_SERVICE:-bitkub-engine}"
-STREAMLIT_SERVICE="${BITKUB_STREAMLIT_SERVICE:-bitkub-streamlit}"
 VERSION_FILE="${BITKUB_APP_VERSION_FILE:-$APP_ROOT/.bitkub-app-version.json}"
-RUNTIME_USER="${BITKUB_RUNTIME_USER:-bitkub}"
-RUNTIME_GROUP="${BITKUB_RUNTIME_GROUP:-$RUNTIME_USER}"
+RUNTIME_DIR="${BITKUB_RUNTIME_DIR:-$APP_ROOT/runtime}"
+RUNTIME_CONFIG_FILE="${BITKUB_RUNTIME_CONFIG_FILE:-$RUNTIME_DIR/config.json}"
 
 log() {
   printf '[deploy] %s\n' "$*"
@@ -28,33 +22,8 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
-run_systemctl() {
-  if [[ "$(id -u)" -eq 0 ]]; then
-    systemctl "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo -n systemctl "$@"
-  else
-    fail "systemctl requires root or passwordless sudo"
-  fi
-}
-
-ensure_runtime_ownership() {
-  if [[ "$(id -u)" -ne 0 ]]; then
-    local current_user
-    current_user="$(id -un)"
-    if [[ "$current_user" != "$RUNTIME_USER" ]]; then
-      log "Deploy is running as $current_user while services run as $RUNTIME_USER; prefer using the runtime user for SSH deploys"
-    fi
-    return
-  fi
-
-  if ! id "$RUNTIME_USER" >/dev/null 2>&1; then
-    log "Skipping ownership normalization because runtime user $RUNTIME_USER does not exist"
-    return
-  fi
-
-  log "Normalizing ownership to $RUNTIME_USER:$RUNTIME_GROUP for $APP_ROOT"
-  chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$APP_ROOT"
+require_docker_compose() {
+  docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is required"
 }
 
 switch_branch() {
@@ -65,13 +34,38 @@ switch_branch() {
   fi
 }
 
-ensure_virtualenv() {
-  if [[ -x "$VENV_PATH/bin/python" ]]; then
+ensure_clean_worktree() {
+  local status_output
+  status_output="$(git status --porcelain=v1 --untracked-files=normal)"
+
+  if [[ -n "$status_output" ]]; then
+    log "Working tree is dirty:"
+    printf '%s\n' "$status_output"
+    fail "Refusing to deploy with local tracked or untracked changes"
+  fi
+}
+
+ensure_branch_fast_forward_only() {
+  local ahead_count
+  ahead_count="$(git rev-list --count "$DEPLOY_REMOTE/$DEPLOY_BRANCH..HEAD")"
+  if [[ "$ahead_count" != "0" ]]; then
+    fail "Local branch $DEPLOY_BRANCH has $ahead_count commit(s) not present on $DEPLOY_REMOTE/$DEPLOY_BRANCH"
+  fi
+}
+
+ensure_runtime_layout() {
+  mkdir -p "$RUNTIME_DIR" "$APP_ROOT/data"
+}
+
+seed_runtime_config() {
+  if [[ -e "$RUNTIME_CONFIG_FILE" ]]; then
     return
   fi
 
-  log "Creating virtualenv at $VENV_PATH"
-  "$DEPLOY_PYTHON_BIN" -m venv "$VENV_PATH"
+  [[ -f "$APP_ROOT/config.json" ]] || fail "Missing source config file: $APP_ROOT/config.json"
+
+  log "Seeding runtime config at $RUNTIME_CONFIG_FILE"
+  cp "$APP_ROOT/config.json" "$RUNTIME_CONFIG_FILE"
 }
 
 write_version_metadata() {
@@ -80,92 +74,42 @@ write_version_metadata() {
   local version_commit_short="$3"
 
   log "Writing deploy version metadata to $VERSION_FILE"
-  BITKUB_WRITE_VERSION_FILE="$VERSION_FILE" \
-  BITKUB_WRITE_VERSION_BRANCH="$version_branch" \
-  BITKUB_WRITE_VERSION_COMMIT="$version_commit" \
-  BITKUB_WRITE_VERSION_COMMIT_SHORT="$version_commit_short" \
-  "$VENV_PATH/bin/python" -B - <<'PY'
-import json
-import os
-from datetime import datetime, timezone
-from pathlib import Path
-
-payload = {
-    "source": "deploy",
-    "label": f"{os.environ['BITKUB_WRITE_VERSION_BRANCH']}@{os.environ['BITKUB_WRITE_VERSION_COMMIT_SHORT']}",
-    "branch": os.environ["BITKUB_WRITE_VERSION_BRANCH"],
-    "commit": os.environ["BITKUB_WRITE_VERSION_COMMIT"],
-    "commit_short": os.environ["BITKUB_WRITE_VERSION_COMMIT_SHORT"],
-    "dirty": False,
-    "deployed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+  cat > "$VERSION_FILE" <<EOF
+{
+  "source": "deploy",
+  "label": "${version_branch}@${version_commit_short}",
+  "branch": "${version_branch}",
+  "commit": "${version_commit}",
+  "commit_short": "${version_commit_short}",
+  "dirty": false,
+  "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
-
-path = Path(os.environ["BITKUB_WRITE_VERSION_FILE"])
-path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
-PY
+EOF
   chmod 644 "$VERSION_FILE"
-}
-
-run_smoke_checks() {
-  log "Running config validation"
-  "$VENV_PATH/bin/python" -B - <<'PY'
-from config import reload_config
-
-config, errors = reload_config()
-if config is None:
-    raise SystemExit("Config validation failed: " + "; ".join(errors))
-
-print("Config validation ok")
-PY
-
-  log "Running compile smoke check"
-  "$VENV_PATH/bin/python" -B - <<'PY'
-from pathlib import Path
-
-files = [
-    "main.py",
-    "ui/streamlit/app.py",
-    "services/version_service.py",
-]
-for path in files:
-    compile(Path(path).read_text(encoding="utf-8"), path, "exec")
-
-print("Compile smoke check ok")
-PY
-}
-
-restart_services() {
-  log "Reloading systemd units"
-  run_systemctl daemon-reload
-
-  log "Restarting $ENGINE_SERVICE"
-  run_systemctl restart "$ENGINE_SERVICE"
-  run_systemctl is-active --quiet "$ENGINE_SERVICE" || fail "$ENGINE_SERVICE is not active after restart"
-
-  if [[ "$DEPLOY_RESTART_STREAMLIT" == "1" ]]; then
-    log "Restarting $STREAMLIT_SERVICE"
-    run_systemctl restart "$STREAMLIT_SERVICE"
-    run_systemctl is-active --quiet "$STREAMLIT_SERVICE" || fail "$STREAMLIT_SERVICE is not active after restart"
-  else
-    log "Skipping Streamlit restart because BITKUB_DEPLOY_RESTART_STREAMLIT=$DEPLOY_RESTART_STREAMLIT"
-  fi
 }
 
 main() {
   umask 027
 
   require_command git
-  require_command "$DEPLOY_PYTHON_BIN"
+  require_command docker
+  require_docker_compose
 
   [[ -d "$APP_ROOT" ]] || fail "APP_ROOT does not exist: $APP_ROOT"
   cd "$APP_ROOT"
+  export DOCKER_UID="$(id -u)"
+  export DOCKER_GID="$(id -g)"
 
   git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "APP_ROOT is not a git repository"
 
   log "Deploying $DEPLOY_BRANCH from $DEPLOY_REMOTE inside $APP_ROOT"
+
+  ensure_clean_worktree
+
   git fetch "$DEPLOY_REMOTE" "$DEPLOY_BRANCH"
   switch_branch
   git pull --ff-only "$DEPLOY_REMOTE" "$DEPLOY_BRANCH"
+  ensure_branch_fast_forward_only
 
   local current_commit
   current_commit="$(git rev-parse HEAD)"
@@ -177,20 +121,18 @@ main() {
     fail "Expected commit $DEPLOY_EXPECT_COMMIT but deployed $current_commit"
   fi
 
-  ensure_virtualenv
-
-  if [[ "$DEPLOY_UPGRADE_PIP" == "1" ]]; then
-    log "Upgrading pip"
-    "$VENV_PATH/bin/python" -m pip install --upgrade pip
-  fi
-
-  log "Installing Python dependencies"
-  "$VENV_PATH/bin/python" -m pip install -r requirements.txt
-
+  ensure_runtime_layout
+  seed_runtime_config
   write_version_metadata "$DEPLOY_BRANCH" "$current_commit" "$current_short"
-  ensure_runtime_ownership
-  run_smoke_checks
-  restart_services
+
+  log "Building Docker images"
+  docker compose build
+
+  log "Starting Docker services"
+  docker compose up -d --remove-orphans
+
+  log "Current Docker services"
+  docker compose ps
 
   log "Deploy completed successfully at ${DEPLOY_BRANCH}@${current_short}"
 }

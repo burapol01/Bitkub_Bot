@@ -1,34 +1,27 @@
 # VPS Deploy
 
-This project can run both the engine and Streamlit UI on a single Linux VPS.
+This project now runs on a single Linux VPS with Docker Compose.
 
 ## Recommended layout
 
 - App root: `/opt/bitkub/Bitkub_Bot`
-- Python venv: `/opt/bitkub/Bitkub_Bot/.venv`
-- Config: `/opt/bitkub/Bitkub_Bot/config.json`
-- SQLite: `/opt/bitkub/Bitkub_Bot/data/bitkub.db`
-- Runtime state: `/opt/bitkub/Bitkub_Bot/runtime_state.json`
+- Mutable runtime files: `/opt/bitkub/Bitkub_Bot/runtime`
+- SQLite and other persisted data: `/opt/bitkub/Bitkub_Bot/data`
+- Server secrets: `/opt/bitkub/Bitkub_Bot/.env`
 
-## Environment variables
+## Runtime paths
 
-These paths can now be overridden:
+The containers use these paths:
 
-- `BITKUB_CONFIG_PATH`
-- `BITKUB_DB_PATH`
-- `BITKUB_RUNTIME_STATE_PATH`
-- `BITKUB_APP_ROOT`
-- `BITKUB_VENV_PATH`
-- `STREAMLIT_SERVER_PORT`
-- `STREAMLIT_SERVER_ADDRESS`
+- `BITKUB_APP_ROOT=/app`
+- `BITKUB_CONFIG_BASE_PATH=/app/config.base.json`
+- `BITKUB_CONFIG_PATH=/app/runtime/config.json`
+- `BITKUB_DB_PATH=/app/data/bitkub.db`
+- `BITKUB_RUNTIME_STATE_PATH=/app/runtime/runtime_state.json`
+- `BITKUB_SIGNAL_LOG_FILE=/app/runtime/signal_log.csv`
+- `BITKUB_TRADE_LOG_FILE=/app/runtime/paper_trade_log.csv`
 
-The existing secrets in `.env` still work:
-
-- `BITKUB_API_KEY`
-- `BITKUB_API_SECRET`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID` or `TELEGRAM_CHAT_IDS`
-- `TELEGRAM_ALLOWED_CHAT_IDS`
+The deploy script also exports the host user UID/GID to keep the container writeable without running as root.
 
 ## First-time setup
 
@@ -38,71 +31,46 @@ sudo mkdir -p /opt/bitkub
 sudo chown -R bitkub:bitkub /opt/bitkub
 ```
 
-Copy the project into `/opt/bitkub/Bitkub_Bot`, then as the `bitkub` user:
+Clone the repository into `/opt/bitkub/Bitkub_Bot`, then as the `bitkub` user:
 
 ```bash
 cd /opt/bitkub/Bitkub_Bot
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
-mkdir -p data
-chmod +x scripts/start_engine.sh scripts/start_streamlit.sh
+mkdir -p runtime data
+chmod +x deploy/deploy_prod.sh
 ```
 
-## Run manually
+Put your production secrets in `/opt/bitkub/Bitkub_Bot/.env`.
 
-Engine:
+## Run and deploy
+
+Use the deploy script to sync the branch, seed the runtime config if needed, build the images, and bring the containers up:
 
 ```bash
-BITKUB_APP_ROOT=/opt/bitkub/Bitkub_Bot BITKUB_VENV_PATH=/opt/bitkub/Bitkub_Bot/.venv ./scripts/start_engine.sh
+bash deploy/deploy_prod.sh
 ```
 
-Streamlit:
+After a successful deploy:
 
 ```bash
-BITKUB_APP_ROOT=/opt/bitkub/Bitkub_Bot BITKUB_VENV_PATH=/opt/bitkub/Bitkub_Bot/.venv ./scripts/start_streamlit.sh
+docker compose ps
+docker compose logs -f engine
+docker compose logs -f streamlit
 ```
 
-## systemd services
-
-Copy the templates from `deploy/systemd/`:
-
-```bash
-sudo cp deploy/systemd/bitkub-engine.service /etc/systemd/system/
-sudo cp deploy/systemd/bitkub-streamlit.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now bitkub-engine
-sudo systemctl enable --now bitkub-streamlit
-```
-
-Check status:
-
-```bash
-sudo systemctl status bitkub-engine
-sudo systemctl status bitkub-streamlit
-```
-
-View logs:
-
-```bash
-journalctl -u bitkub-engine -f
-journalctl -u bitkub-streamlit -f
-```
+If you want a one-off manual refresh without waiting for GitHub Actions, rerun the same deploy script on the VPS.
 
 ## Update flow
 
 ```bash
-cd /opt/bitkub/Bitkub_Bot
-git pull
-.venv/bin/python -m pip install -r requirements.txt
-sudo systemctl restart bitkub-engine
-sudo systemctl restart bitkub-streamlit
+bash deploy/deploy_prod.sh
 ```
+
+The script fails fast if the working tree has local tracked or untracked changes. That keeps production from drifting away from the repo.
 
 ## Reverse proxy
 
-If you want browser access from outside the VPS, put Nginx or Caddy in front of Streamlit and expose only the UI service.
+If you want browser access from outside the VPS, put Nginx or Caddy in front of Streamlit and expose only port 8501 internally.
 
-## Current Linux note
+## Legacy systemd
 
-`main.py` now falls back safely when Windows-only `msvcrt` is unavailable. On Linux/systemd, the engine keeps running but interactive console hotkeys are not available.
+The old `bitkub-engine.service` and `bitkub-streamlit.service` files are now legacy only. Keep them archived or disabled, but do not use them for the Docker deployment path.

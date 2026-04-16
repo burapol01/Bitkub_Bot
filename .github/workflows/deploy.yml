@@ -37,7 +37,7 @@ jobs:
     environment: production
     env:
       APP_ROOT: /opt/bitkub/Bitkub_Bot
-      VENV_PATH: /opt/bitkub/Bitkub_Bot/.venv
+
     steps:
       - name: Configure SSH
         shell: bash
@@ -69,4 +69,4 @@ jobs:
           : "${DO_SSH_USER:?Missing GitHub secret DO_SSH_USER}"
 
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "${DO_SSH_PORT:-22}" "${DO_SSH_USER}@${DO_SSH_HOST}" \
-            "if [ ! -f '${APP_ROOT}/deploy/deploy_prod.sh' ]; then cd '${APP_ROOT}' && git fetch origin '${DEPLOY_BRANCH}' && git pull --ff-only origin '${DEPLOY_BRANCH}'; fi; export BITKUB_APP_ROOT='${APP_ROOT}' BITKUB_VENV_PATH='${VENV_PATH}' BITKUB_DEPLOY_REMOTE='origin' BITKUB_DEPLOY_BRANCH='${DEPLOY_BRANCH}' BITKUB_DEPLOY_EXPECT_COMMIT='${DEPLOY_EXPECT_COMMIT}'; bash '${APP_ROOT}/deploy/deploy_prod.sh'"
+            "set -euo pipefail; if [ ! -f '${APP_ROOT}/deploy/deploy_prod.sh' ]; then cd '${APP_ROOT}' && git fetch origin '${DEPLOY_BRANCH}' && git pull --ff-only origin '${DEPLOY_BRANCH}'; fi; export BITKUB_APP_ROOT='${APP_ROOT}' BITKUB_DEPLOY_REMOTE='origin' BITKUB_DEPLOY_BRANCH='${DEPLOY_BRANCH}' BITKUB_DEPLOY_EXPECT_COMMIT='${DEPLOY_EXPECT_COMMIT}'; bash '${APP_ROOT}/deploy/deploy_prod.sh'"

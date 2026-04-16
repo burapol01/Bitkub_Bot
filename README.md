@@ -11,7 +11,7 @@ Current direction:
 
 - Console remains the engine.
 - Streamlit is a control plane, not the auto runner.
-- `config.json` is still the active source of truth.
+- `config.json` remains the base source of truth, and the VPS runtime seeds `runtime/config.json` from it.
 - SQLite is used for audit, reports, and operational history.
 
 ## Current Status
@@ -63,14 +63,15 @@ If Streamlit is not installed:
 
 Responsibilities:
 
-- edit `config.json`
+- edit the active config target
 - inspect market/account/execution state
 - run manual live actions
 - view reports and diagnostics
 
 Important:
 
-- Saving config in UI writes only to `config.json`.
+- Saving config in UI writes to the active `BITKUB_CONFIG_PATH` target.
+- On the VPS that target is `runtime/config.json`.
 - The console engine still needs its own reload/apply step.
 
 ## VPS Deploy
@@ -78,33 +79,31 @@ Important:
 Recommended target:
 
 - `Ubuntu 24.04 LTS`
-- run both `main.py` and `ui/streamlit/app.py` on the same VPS
-- keep `config.json`, `runtime_state.json`, and `data/bitkub.db` on that VPS as the single source of truth
+- run the app with Docker Compose on the VPS
+- keep `runtime/` and `data/` on that VPS as the single source of truth
 
 Quick start:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
-chmod +x scripts/start_engine.sh scripts/start_streamlit.sh
-./scripts/start_engine.sh
-./scripts/start_streamlit.sh
+bash deploy/deploy_prod.sh
 ```
 
 Cloud path overrides:
 
+- `BITKUB_CONFIG_BASE_PATH`
 - `BITKUB_CONFIG_PATH`
 - `BITKUB_DB_PATH`
 - `BITKUB_RUNTIME_STATE_PATH`
+- `BITKUB_SIGNAL_LOG_FILE`
+- `BITKUB_TRADE_LOG_FILE`
 - `BITKUB_APP_ROOT`
-- `BITKUB_VENV_PATH`
+- `DOCKER_UID`
+- `DOCKER_GID`
 
-Full steps and `systemd` templates:
+Full steps and deploy notes:
 
-- [deploy/VPS_DEPLOY.md](/d:/Project/Bitkub/deploy/VPS_DEPLOY.md)
-- [bitkub-engine.service](/d:/Project/Bitkub/deploy/systemd/bitkub-engine.service)
-- [bitkub-streamlit.service](/d:/Project/Bitkub/deploy/systemd/bitkub-streamlit.service)
+- [deploy/VPS_DEPLOY.md](/d:/Projects/Bitkub_Bot/deploy/VPS_DEPLOY.md)
+- [deploy/DEPLOY_SECRETS_CHECKLIST.md](/d:/Projects/Bitkub_Bot/deploy/DEPLOY_SECRETS_CHECKLIST.md)
 
 ## Streamlit Pages
 
@@ -160,7 +159,7 @@ Full steps and `systemd` templates:
 
 ## Modes
 
-Defined in [config.json](/d:/Project/Bitkub/config.json):
+Defined in [config.json](/d:/Projects/Bitkub_Bot/config.json):
 
 ```json
 "mode": "paper"
@@ -197,7 +196,7 @@ Supported values:
 
 ## Config
 
-Main file: [config.json](/d:/Project/Bitkub/config.json)
+Main file: [config.json](/d:/Projects/Bitkub_Bot/config.json)
 
 Important fields:
 
@@ -316,7 +315,7 @@ Current behavior:
 
 ## Private API
 
-Put credentials in [.env](/d:/Project/Bitkub/.env):
+Put credentials in [.env](/d:/Projects/Bitkub_Bot/.env):
 
 ```env
 BITKUB_API_KEY=your_key
@@ -335,7 +334,9 @@ Current private coverage:
 
 ### Runtime
 
-- [runtime_state.json](/d:/Project/Bitkub/runtime_state.json)
+- [runtime_state.json](/d:/Projects/Bitkub_Bot/runtime_state.json)
+
+On the VPS Docker deployment, the same runtime file is mounted under `runtime/runtime_state.json`.
 
 Stores:
 
@@ -347,12 +348,14 @@ Stores:
 
 ### CSV
 
-- [signal_log.csv](/d:/Project/Bitkub/signal_log.csv)
-- [paper_trade_log.csv](/d:/Project/Bitkub/paper_trade_log.csv)
+- [signal_log.csv](/d:/Projects/Bitkub_Bot/signal_log.csv)
+- [paper_trade_log.csv](/d:/Projects/Bitkub_Bot/paper_trade_log.csv)
+
+On the VPS Docker deployment, these logs are mounted under `runtime/`.
 
 ### SQLite
 
-- [bitkub.db](/d:/Project/Bitkub/data/bitkub.db)
+- [bitkub.db](/d:/Projects/Bitkub_Bot/data/bitkub.db)
 
 Main tables:
 
@@ -425,20 +428,20 @@ Check more files:
 
 ## Important Files
 
-- [main.py](/d:/Project/Bitkub/main.py)
-- [streamlit_app.py](/d:/Project/Bitkub/streamlit_app.py)
-- [app.py](/d:/Project/Bitkub/ui/streamlit/app.py)
-- [pages.py](/d:/Project/Bitkub/ui/streamlit/pages.py)
-- [data.py](/d:/Project/Bitkub/ui/streamlit/data.py)
-- [actions.py](/d:/Project/Bitkub/ui/streamlit/actions.py)
-- [styles.py](/d:/Project/Bitkub/ui/streamlit/styles.py)
-- [refresh.py](/d:/Project/Bitkub/ui/streamlit/refresh.py)
-- [config.py](/d:/Project/Bitkub/config.py)
-- [config.json](/d:/Project/Bitkub/config.json)
-- [services/db_service.py](/d:/Project/Bitkub/services/db_service.py)
-- [services/execution_service.py](/d:/Project/Bitkub/services/execution_service.py)
-- [services/reconciliation_service.py](/d:/Project/Bitkub/services/reconciliation_service.py)
-- [clients/bitkub_private_client.py](/d:/Project/Bitkub/clients/bitkub_private_client.py)
+- [main.py](/d:/Projects/Bitkub_Bot/main.py)
+- [streamlit_app.py](/d:/Projects/Bitkub_Bot/streamlit_app.py)
+- [app.py](/d:/Projects/Bitkub_Bot/ui/streamlit/app.py)
+- [pages.py](/d:/Projects/Bitkub_Bot/ui/streamlit/pages.py)
+- [data.py](/d:/Projects/Bitkub_Bot/ui/streamlit/data.py)
+- [actions.py](/d:/Projects/Bitkub_Bot/ui/streamlit/actions.py)
+- [styles.py](/d:/Projects/Bitkub_Bot/ui/streamlit/styles.py)
+- [refresh.py](/d:/Projects/Bitkub_Bot/ui/streamlit/refresh.py)
+- [config.py](/d:/Projects/Bitkub_Bot/config.py)
+- [config.json](/d:/Projects/Bitkub_Bot/config.json)
+- [services/db_service.py](/d:/Projects/Bitkub_Bot/services/db_service.py)
+- [services/execution_service.py](/d:/Projects/Bitkub_Bot/services/execution_service.py)
+- [services/reconciliation_service.py](/d:/Projects/Bitkub_Bot/services/reconciliation_service.py)
+- [clients/bitkub_private_client.py](/d:/Projects/Bitkub_Bot/clients/bitkub_private_client.py)
 
 ## Next Likely Steps
 

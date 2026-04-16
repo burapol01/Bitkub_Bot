@@ -121,6 +121,7 @@ marimo/_lsp/
 __marimo__/
 
 # Project runtime files
+runtime/
 runtime_state.json
 signal_log.csv
 paper_trade_log.csv

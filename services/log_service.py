@@ -7,8 +7,8 @@ from utils.time_utils import coerce_time_text
 
 def get_log_files():
     config = load_config()
-    signal_log_file = config["signal_log_file"]
-    trade_log_file = config["trade_log_file"]
+    signal_log_file = os.getenv("BITKUB_SIGNAL_LOG_FILE") or config["signal_log_file"]
+    trade_log_file = os.getenv("BITKUB_TRADE_LOG_FILE") or config["trade_log_file"]
     return signal_log_file, trade_log_file
 
 
