@@ -145,6 +145,144 @@ def init_db():
                 FOREIGN KEY (execution_order_id) REFERENCES execution_orders(id)
             );
 
+            CREATE TABLE IF NOT EXISTS trade_journal (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                trading_mode TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                status TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT,
+                signal_reason TEXT,
+                exit_reason TEXT,
+                request_rate REAL,
+                latest_price REAL,
+                amount_thb REAL,
+                amount_coin REAL,
+                details_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_daily_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL,
+                strategy_key TEXT NOT NULL,
+                trading_mode TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                closed_trades INTEGER NOT NULL,
+                wins INTEGER NOT NULL,
+                losses INTEGER NOT NULL,
+                realized_pnl_thb REAL NOT NULL,
+                fee_thb REAL NOT NULL,
+                turnover_thb REAL NOT NULL,
+                gross_win_thb REAL NOT NULL,
+                gross_loss_thb REAL NOT NULL,
+                gross_pnl_before_fees_thb REAL NOT NULL,
+                avg_pnl_thb REAL NOT NULL,
+                avg_fee_thb REAL NOT NULL,
+                win_rate_percent REAL NOT NULL,
+                profit_factor REAL NOT NULL,
+                UNIQUE(report_date, strategy_key, symbol)
+            );
+
+            CREATE TABLE IF NOT EXISTS portfolio_daily_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL UNIQUE,
+                strategies_active INTEGER NOT NULL,
+                symbols_active INTEGER NOT NULL,
+                paper_closed_trades INTEGER NOT NULL,
+                live_closed_trades INTEGER NOT NULL,
+                combined_closed_trades INTEGER NOT NULL,
+                paper_wins INTEGER NOT NULL,
+                paper_losses INTEGER NOT NULL,
+                live_wins INTEGER NOT NULL,
+                live_losses INTEGER NOT NULL,
+                combined_wins INTEGER NOT NULL,
+                combined_losses INTEGER NOT NULL,
+                paper_realized_pnl_thb REAL NOT NULL,
+                live_realized_pnl_thb REAL NOT NULL,
+                combined_realized_pnl_thb REAL NOT NULL,
+                paper_fee_thb REAL NOT NULL,
+                live_fee_thb REAL NOT NULL,
+                combined_fee_thb REAL NOT NULL,
+                paper_turnover_thb REAL NOT NULL,
+                live_turnover_thb REAL NOT NULL,
+                combined_turnover_thb REAL NOT NULL,
+                paper_gross_win_thb REAL NOT NULL,
+                paper_gross_loss_thb REAL NOT NULL,
+                live_gross_win_thb REAL NOT NULL,
+                live_gross_loss_thb REAL NOT NULL,
+                combined_gross_win_thb REAL NOT NULL,
+                combined_gross_loss_thb REAL NOT NULL,
+                paper_gross_pnl_before_fees_thb REAL NOT NULL,
+                live_gross_pnl_before_fees_thb REAL NOT NULL,
+                combined_gross_pnl_before_fees_thb REAL NOT NULL,
+                paper_win_rate_percent REAL NOT NULL,
+                live_win_rate_percent REAL NOT NULL,
+                combined_win_rate_percent REAL NOT NULL,
+                paper_profit_factor REAL NOT NULL,
+                live_profit_factor REAL NOT NULL,
+                combined_profit_factor REAL NOT NULL,
+                cumulative_realized_pnl_thb REAL NOT NULL,
+                peak_cumulative_realized_pnl_thb REAL NOT NULL,
+                drawdown_thb REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS validation_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                validation_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                data_source TEXT NOT NULL,
+                resolution TEXT,
+                mode TEXT NOT NULL,
+                date_from TEXT NOT NULL,
+                date_to TEXT NOT NULL,
+                train_window_days INTEGER NOT NULL,
+                test_window_days INTEGER NOT NULL,
+                step_days INTEGER NOT NULL,
+                fee_rate REAL NOT NULL,
+                cooldown_seconds INTEGER NOT NULL,
+                base_rule_json TEXT NOT NULL,
+                summary_json TEXT,
+                metadata_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS validation_run_slices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                validation_run_id INTEGER NOT NULL,
+                slice_no INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                train_start_at TEXT NOT NULL,
+                train_end_at TEXT NOT NULL,
+                test_start_at TEXT NOT NULL,
+                test_end_at TEXT NOT NULL,
+                selected_variant TEXT,
+                selected_rule_json TEXT,
+                train_metrics_json TEXT,
+                test_metrics_json TEXT,
+                train_result_hash TEXT,
+                test_result_hash TEXT,
+                notes_json TEXT,
+                FOREIGN KEY (validation_run_id) REFERENCES validation_runs(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS validation_consistency_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                validation_run_id INTEGER,
+                check_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                data_source TEXT NOT NULL,
+                resolution TEXT,
+                window_start_at TEXT NOT NULL,
+                window_end_at TEXT NOT NULL,
+                rule_json TEXT NOT NULL,
+                details_json TEXT,
+                FOREIGN KEY (validation_run_id) REFERENCES validation_runs(id)
+            );
+
             CREATE TABLE IF NOT EXISTS telegram_outbox (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
@@ -180,6 +318,24 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_runtime_events_severity_id
             ON runtime_events(severity, id);
+
+            CREATE INDEX IF NOT EXISTS idx_trade_journal_created_symbol
+            ON trade_journal(created_at, symbol, id);
+
+            CREATE INDEX IF NOT EXISTS idx_strategy_daily_metrics_report_symbol
+            ON strategy_daily_metrics(report_date, symbol, strategy_key, id);
+
+            CREATE INDEX IF NOT EXISTS idx_portfolio_daily_metrics_report_date
+            ON portfolio_daily_metrics(report_date, id);
+
+            CREATE INDEX IF NOT EXISTS idx_validation_runs_created_symbol
+            ON validation_runs(created_at, symbol, id);
+
+            CREATE INDEX IF NOT EXISTS idx_validation_run_slices_run_slice
+            ON validation_run_slices(validation_run_id, slice_no, id);
+
+            CREATE INDEX IF NOT EXISTS idx_validation_consistency_checks_created_symbol
+            ON validation_consistency_checks(created_at, symbol, id);
             """
         )
 
@@ -728,6 +884,256 @@ def insert_execution_order_event(
         )
 
 
+def insert_trade_journal(
+    *,
+    created_at: str,
+    trading_mode: str,
+    channel: str,
+    status: str,
+    symbol: str,
+    side: str | None = None,
+    signal_reason: str | None = None,
+    exit_reason: str | None = None,
+    request_rate: float | None = None,
+    latest_price: float | None = None,
+    amount_thb: float | None = None,
+    amount_coin: float | None = None,
+    details: dict[str, Any] | None = None,
+) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO trade_journal (
+                created_at,
+                trading_mode,
+                channel,
+                status,
+                symbol,
+                side,
+                signal_reason,
+                exit_reason,
+                request_rate,
+                latest_price,
+                amount_thb,
+                amount_coin,
+                details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _normalize_time_text(created_at),
+                str(trading_mode),
+                str(channel),
+                str(status),
+                str(symbol),
+                side,
+                signal_reason,
+                exit_reason,
+                request_rate,
+                latest_price,
+                amount_thb,
+                amount_coin,
+                _to_json(details),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def insert_validation_run(
+    *,
+    created_at: str,
+    validation_type: str,
+    status: str,
+    symbol: str,
+    data_source: str,
+    resolution: str | None,
+    mode: str,
+    date_from: str,
+    date_to: str,
+    train_window_days: int,
+    test_window_days: int,
+    step_days: int,
+    fee_rate: float,
+    cooldown_seconds: int,
+    base_rule: dict[str, Any],
+    summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO validation_runs (
+                created_at,
+                validation_type,
+                status,
+                symbol,
+                data_source,
+                resolution,
+                mode,
+                date_from,
+                date_to,
+                train_window_days,
+                test_window_days,
+                step_days,
+                fee_rate,
+                cooldown_seconds,
+                base_rule_json,
+                summary_json,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _normalize_time_text(created_at),
+                str(validation_type),
+                str(status),
+                str(symbol),
+                str(data_source),
+                resolution,
+                str(mode),
+                str(date_from),
+                str(date_to),
+                int(train_window_days),
+                int(test_window_days),
+                int(step_days),
+                float(fee_rate),
+                int(cooldown_seconds),
+                _to_json(base_rule),
+                _to_json(summary),
+                _to_json(metadata),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def update_validation_run(
+    *,
+    validation_run_id: int,
+    status: str,
+    summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE validation_runs
+            SET status = ?,
+                summary_json = ?,
+                metadata_json = ?
+            WHERE id = ?
+            """,
+            (
+                str(status),
+                _to_json(summary),
+                _to_json(metadata),
+                int(validation_run_id),
+            ),
+        )
+
+
+def insert_validation_run_slice(
+    *,
+    validation_run_id: int,
+    slice_no: int,
+    status: str,
+    train_start_at: str,
+    train_end_at: str,
+    test_start_at: str,
+    test_end_at: str,
+    selected_variant: str | None,
+    selected_rule: dict[str, Any] | None,
+    train_metrics: dict[str, Any] | None,
+    test_metrics: dict[str, Any] | None,
+    train_result_hash: str | None,
+    test_result_hash: str | None,
+    notes: list[str] | None = None,
+) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO validation_run_slices (
+                validation_run_id,
+                slice_no,
+                status,
+                train_start_at,
+                train_end_at,
+                test_start_at,
+                test_end_at,
+                selected_variant,
+                selected_rule_json,
+                train_metrics_json,
+                test_metrics_json,
+                train_result_hash,
+                test_result_hash,
+                notes_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(validation_run_id),
+                int(slice_no),
+                str(status),
+                _normalize_time_text(train_start_at),
+                _normalize_time_text(train_end_at),
+                _normalize_time_text(test_start_at),
+                _normalize_time_text(test_end_at),
+                selected_variant,
+                _to_json(selected_rule),
+                _to_json(train_metrics),
+                _to_json(test_metrics),
+                train_result_hash,
+                test_result_hash,
+                _to_json(notes or []),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def insert_validation_consistency_check(
+    *,
+    created_at: str,
+    validation_run_id: int | None,
+    check_type: str,
+    status: str,
+    symbol: str,
+    data_source: str,
+    resolution: str | None,
+    window_start_at: str,
+    window_end_at: str,
+    rule: dict[str, Any],
+    details: dict[str, Any] | None = None,
+) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO validation_consistency_checks (
+                created_at,
+                validation_run_id,
+                check_type,
+                status,
+                symbol,
+                data_source,
+                resolution,
+                window_start_at,
+                window_end_at,
+                rule_json,
+                details_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _normalize_time_text(created_at),
+                int(validation_run_id) if validation_run_id is not None else None,
+                str(check_type),
+                str(status),
+                str(symbol),
+                str(data_source),
+                resolution,
+                _normalize_time_text(window_start_at),
+                _normalize_time_text(window_end_at),
+                _to_json(rule),
+                _to_json(details),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
 def _prune_table_older_than(
     conn: sqlite3.Connection,
     *,
@@ -779,6 +1185,30 @@ def prune_sqlite_retention(*, retention_days: dict[str, int]) -> dict[str, int]:
                 timestamp_column="created_at",
                 retention_days=retention_days["reconciliation_results"],
             ),
+            "trade_journal": _prune_table_older_than(
+                conn,
+                table="trade_journal",
+                timestamp_column="created_at",
+                retention_days=retention_days["runtime_events"],
+            ),
+            "validation_runs": _prune_table_older_than(
+                conn,
+                table="validation_runs",
+                timestamp_column="created_at",
+                retention_days=retention_days["runtime_events"],
+            ),
+            "validation_run_slices": _prune_table_older_than(
+                conn,
+                table="validation_run_slices",
+                timestamp_column="test_end_at",
+                retention_days=retention_days["runtime_events"],
+            ),
+            "validation_consistency_checks": _prune_table_older_than(
+                conn,
+                table="validation_consistency_checks",
+                timestamp_column="created_at",
+                retention_days=retention_days["runtime_events"],
+            ),
         }
 
 
@@ -789,6 +1219,485 @@ def _load_json(value: str | None, default: Any):
         return json.loads(value)
     except json.JSONDecodeError:
         return default
+
+
+def _safe_div(numerator: float, denominator: float) -> float:
+    return float(numerator) / float(denominator) if float(denominator) else 0.0
+
+
+def _empty_strategy_metric_row(
+    *, report_date: str, strategy_key: str, trading_mode: str, symbol: str
+) -> dict[str, Any]:
+    return {
+        "report_date": report_date,
+        "strategy_key": strategy_key,
+        "trading_mode": trading_mode,
+        "symbol": symbol,
+        "closed_trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "realized_pnl_thb": 0.0,
+        "fee_thb": 0.0,
+        "turnover_thb": 0.0,
+        "gross_win_thb": 0.0,
+        "gross_loss_thb": 0.0,
+        "gross_pnl_before_fees_thb": 0.0,
+        "avg_pnl_thb": 0.0,
+        "avg_fee_thb": 0.0,
+        "win_rate_percent": 0.0,
+        "profit_factor": 0.0,
+    }
+
+
+def _finalize_strategy_metric_row(row: dict[str, Any]) -> dict[str, Any]:
+    closed_trades = int(row.get("closed_trades", 0) or 0)
+    wins = int(row.get("wins", 0) or 0)
+    gross_win_thb = float(row.get("gross_win_thb", 0.0) or 0.0)
+    gross_loss_thb = float(row.get("gross_loss_thb", 0.0) or 0.0)
+    realized_pnl_thb = float(row.get("realized_pnl_thb", 0.0) or 0.0)
+    fee_thb = float(row.get("fee_thb", 0.0) or 0.0)
+
+    row["avg_pnl_thb"] = _safe_div(realized_pnl_thb, closed_trades)
+    row["avg_fee_thb"] = _safe_div(fee_thb, closed_trades)
+    row["win_rate_percent"] = _safe_div(wins * 100.0, closed_trades)
+    row["profit_factor"] = _safe_div(gross_win_thb, gross_loss_thb)
+    return row
+
+
+def refresh_daily_performance_metrics_from_history(
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, int]:
+    if conn is None:
+        with _connect() as local_conn:
+            return refresh_daily_performance_metrics_from_history(conn=local_conn)
+
+    paper_rows = conn.execute(
+        """
+        SELECT
+            buy_time,
+            sell_time,
+            symbol,
+            budget_thb,
+            gross_proceeds_thb,
+            buy_fee_thb,
+            sell_fee_thb,
+            pnl_thb
+        FROM paper_trade_logs
+        ORDER BY sell_time ASC, id ASC
+        """
+    ).fetchall()
+    filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+
+    strategy_daily: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    def ensure_strategy_row(
+        *, report_date: str, strategy_key: str, trading_mode: str, symbol: str
+    ) -> dict[str, Any]:
+        key = (report_date, strategy_key, symbol)
+        return strategy_daily.setdefault(
+            key,
+            _empty_strategy_metric_row(
+                report_date=report_date,
+                strategy_key=strategy_key,
+                trading_mode=trading_mode,
+                symbol=symbol,
+            ),
+        )
+
+    for row in paper_rows:
+        report_date = str(row["sell_time"] or "")[:10]
+        if len(report_date) != 10:
+            continue
+        pnl_thb = float(row["pnl_thb"] or 0.0)
+        fee_thb = float(row["buy_fee_thb"] or 0.0) + float(row["sell_fee_thb"] or 0.0)
+        turnover_thb = float(row["budget_thb"] or 0.0) + float(
+            row["gross_proceeds_thb"] or 0.0
+        )
+        metric_row = ensure_strategy_row(
+            report_date=report_date,
+            strategy_key="paper_rule_engine",
+            trading_mode="paper",
+            symbol=str(row["symbol"]),
+        )
+        metric_row["closed_trades"] += 1
+        metric_row["wins"] += 1 if pnl_thb > 0 else 0
+        metric_row["losses"] += 0 if pnl_thb > 0 else 1
+        metric_row["realized_pnl_thb"] += pnl_thb
+        metric_row["fee_thb"] += fee_thb
+        metric_row["turnover_thb"] += turnover_thb
+        metric_row["gross_win_thb"] += max(pnl_thb, 0.0)
+        metric_row["gross_loss_thb"] += abs(min(pnl_thb, 0.0))
+        metric_row["gross_pnl_before_fees_thb"] += pnl_thb + fee_thb
+
+    for row in closed_trades:
+        report_date = str(row.get("updated_at") or row.get("created_at") or "")[:10]
+        if len(report_date) != 10:
+            continue
+        pnl_thb = float(row.get("pnl_thb", 0.0) or 0.0)
+        fee_thb = float(row.get("fee_thb", 0.0) or 0.0)
+        turnover_thb = float(row.get("cost_basis_thb", 0.0) or 0.0) + float(
+            row.get("gross_proceeds_thb", 0.0) or 0.0
+        )
+        metric_row = ensure_strategy_row(
+            report_date=report_date,
+            strategy_key="live_execution",
+            trading_mode="live",
+            symbol=str(row["symbol"]),
+        )
+        metric_row["closed_trades"] += 1
+        metric_row["wins"] += 1 if pnl_thb > 0 else 0
+        metric_row["losses"] += 0 if pnl_thb > 0 else 1
+        metric_row["realized_pnl_thb"] += pnl_thb
+        metric_row["fee_thb"] += fee_thb
+        metric_row["turnover_thb"] += turnover_thb
+        metric_row["gross_win_thb"] += max(pnl_thb, 0.0)
+        metric_row["gross_loss_thb"] += abs(min(pnl_thb, 0.0))
+        metric_row["gross_pnl_before_fees_thb"] += float(
+            row.get("gross_pnl_before_fees_thb", 0.0) or 0.0
+        )
+
+    strategy_rows = [
+        _finalize_strategy_metric_row(row)
+        for _, row in sorted(strategy_daily.items(), key=lambda item: item[0])
+    ]
+
+    portfolio_daily: dict[str, dict[str, Any]] = {}
+    ordered_symbols_by_day: dict[str, set[str]] = {}
+    ordered_strategies_by_day: dict[str, set[str]] = {}
+    for row in strategy_rows:
+        report_date = str(row["report_date"])
+        strategy_key = str(row["strategy_key"])
+        bucket = portfolio_daily.setdefault(
+            report_date,
+            {
+                "report_date": report_date,
+                "strategies_active": 0,
+                "symbols_active": 0,
+                "paper_closed_trades": 0,
+                "live_closed_trades": 0,
+                "combined_closed_trades": 0,
+                "paper_wins": 0,
+                "paper_losses": 0,
+                "live_wins": 0,
+                "live_losses": 0,
+                "combined_wins": 0,
+                "combined_losses": 0,
+                "paper_realized_pnl_thb": 0.0,
+                "live_realized_pnl_thb": 0.0,
+                "combined_realized_pnl_thb": 0.0,
+                "paper_fee_thb": 0.0,
+                "live_fee_thb": 0.0,
+                "combined_fee_thb": 0.0,
+                "paper_turnover_thb": 0.0,
+                "live_turnover_thb": 0.0,
+                "combined_turnover_thb": 0.0,
+                "paper_gross_win_thb": 0.0,
+                "paper_gross_loss_thb": 0.0,
+                "live_gross_win_thb": 0.0,
+                "live_gross_loss_thb": 0.0,
+                "combined_gross_win_thb": 0.0,
+                "combined_gross_loss_thb": 0.0,
+                "paper_gross_pnl_before_fees_thb": 0.0,
+                "live_gross_pnl_before_fees_thb": 0.0,
+                "combined_gross_pnl_before_fees_thb": 0.0,
+                "paper_win_rate_percent": 0.0,
+                "live_win_rate_percent": 0.0,
+                "combined_win_rate_percent": 0.0,
+                "paper_profit_factor": 0.0,
+                "live_profit_factor": 0.0,
+                "combined_profit_factor": 0.0,
+                "cumulative_realized_pnl_thb": 0.0,
+                "peak_cumulative_realized_pnl_thb": 0.0,
+                "drawdown_thb": 0.0,
+            },
+        )
+        ordered_symbols_by_day.setdefault(report_date, set()).add(str(row["symbol"]))
+        ordered_strategies_by_day.setdefault(report_date, set()).add(strategy_key)
+
+        prefix = "paper" if strategy_key == "paper_rule_engine" else "live"
+        bucket[f"{prefix}_closed_trades"] += int(row["closed_trades"])
+        bucket[f"{prefix}_wins"] += int(row["wins"])
+        bucket[f"{prefix}_losses"] += int(row["losses"])
+        bucket[f"{prefix}_realized_pnl_thb"] += float(row["realized_pnl_thb"])
+        bucket[f"{prefix}_fee_thb"] += float(row["fee_thb"])
+        bucket[f"{prefix}_turnover_thb"] += float(row["turnover_thb"])
+        bucket[f"{prefix}_gross_win_thb"] += float(row["gross_win_thb"])
+        bucket[f"{prefix}_gross_loss_thb"] += float(row["gross_loss_thb"])
+        bucket[f"{prefix}_gross_pnl_before_fees_thb"] += float(
+            row["gross_pnl_before_fees_thb"]
+        )
+
+    cumulative_realized_pnl_thb = 0.0
+    peak_cumulative_realized_pnl_thb = 0.0
+    portfolio_rows: list[dict[str, Any]] = []
+    for report_date in sorted(portfolio_daily):
+        row = portfolio_daily[report_date]
+        row["strategies_active"] = len(ordered_strategies_by_day.get(report_date, set()))
+        row["symbols_active"] = len(ordered_symbols_by_day.get(report_date, set()))
+        row["combined_closed_trades"] = int(row["paper_closed_trades"]) + int(
+            row["live_closed_trades"]
+        )
+        row["combined_wins"] = int(row["paper_wins"]) + int(row["live_wins"])
+        row["combined_losses"] = int(row["paper_losses"]) + int(row["live_losses"])
+        row["combined_realized_pnl_thb"] = float(row["paper_realized_pnl_thb"]) + float(
+            row["live_realized_pnl_thb"]
+        )
+        row["combined_fee_thb"] = float(row["paper_fee_thb"]) + float(
+            row["live_fee_thb"]
+        )
+        row["combined_turnover_thb"] = float(row["paper_turnover_thb"]) + float(
+            row["live_turnover_thb"]
+        )
+        row["combined_gross_win_thb"] = float(row["paper_gross_win_thb"]) + float(
+            row["live_gross_win_thb"]
+        )
+        row["combined_gross_loss_thb"] = float(row["paper_gross_loss_thb"]) + float(
+            row["live_gross_loss_thb"]
+        )
+        row["combined_gross_pnl_before_fees_thb"] = float(
+            row["paper_gross_pnl_before_fees_thb"]
+        ) + float(row["live_gross_pnl_before_fees_thb"])
+        row["paper_win_rate_percent"] = _safe_div(
+            float(row["paper_wins"]) * 100.0, float(row["paper_closed_trades"])
+        )
+        row["live_win_rate_percent"] = _safe_div(
+            float(row["live_wins"]) * 100.0, float(row["live_closed_trades"])
+        )
+        row["combined_win_rate_percent"] = _safe_div(
+            float(row["combined_wins"]) * 100.0, float(row["combined_closed_trades"])
+        )
+        row["paper_profit_factor"] = _safe_div(
+            float(row["paper_gross_win_thb"]), float(row["paper_gross_loss_thb"])
+        )
+        row["live_profit_factor"] = _safe_div(
+            float(row["live_gross_win_thb"]), float(row["live_gross_loss_thb"])
+        )
+        row["combined_profit_factor"] = _safe_div(
+            float(row["combined_gross_win_thb"]), float(row["combined_gross_loss_thb"])
+        )
+        cumulative_realized_pnl_thb += float(row["combined_realized_pnl_thb"])
+        peak_cumulative_realized_pnl_thb = max(
+            peak_cumulative_realized_pnl_thb, cumulative_realized_pnl_thb
+        )
+        row["cumulative_realized_pnl_thb"] = cumulative_realized_pnl_thb
+        row["peak_cumulative_realized_pnl_thb"] = peak_cumulative_realized_pnl_thb
+        row["drawdown_thb"] = cumulative_realized_pnl_thb - peak_cumulative_realized_pnl_thb
+        portfolio_rows.append(row)
+
+    conn.execute("DELETE FROM strategy_daily_metrics")
+    conn.execute("DELETE FROM portfolio_daily_metrics")
+
+    if strategy_rows:
+        conn.executemany(
+            """
+            INSERT INTO strategy_daily_metrics (
+                report_date,
+                strategy_key,
+                trading_mode,
+                symbol,
+                closed_trades,
+                wins,
+                losses,
+                realized_pnl_thb,
+                fee_thb,
+                turnover_thb,
+                gross_win_thb,
+                gross_loss_thb,
+                gross_pnl_before_fees_thb,
+                avg_pnl_thb,
+                avg_fee_thb,
+                win_rate_percent,
+                profit_factor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["report_date"],
+                    row["strategy_key"],
+                    row["trading_mode"],
+                    row["symbol"],
+                    int(row["closed_trades"]),
+                    int(row["wins"]),
+                    int(row["losses"]),
+                    float(row["realized_pnl_thb"]),
+                    float(row["fee_thb"]),
+                    float(row["turnover_thb"]),
+                    float(row["gross_win_thb"]),
+                    float(row["gross_loss_thb"]),
+                    float(row["gross_pnl_before_fees_thb"]),
+                    float(row["avg_pnl_thb"]),
+                    float(row["avg_fee_thb"]),
+                    float(row["win_rate_percent"]),
+                    float(row["profit_factor"]),
+                )
+                for row in strategy_rows
+            ],
+        )
+
+    if portfolio_rows:
+        conn.executemany(
+            """
+            INSERT INTO portfolio_daily_metrics (
+                report_date,
+                strategies_active,
+                symbols_active,
+                paper_closed_trades,
+                live_closed_trades,
+                combined_closed_trades,
+                paper_wins,
+                paper_losses,
+                live_wins,
+                live_losses,
+                combined_wins,
+                combined_losses,
+                paper_realized_pnl_thb,
+                live_realized_pnl_thb,
+                combined_realized_pnl_thb,
+                paper_fee_thb,
+                live_fee_thb,
+                combined_fee_thb,
+                paper_turnover_thb,
+                live_turnover_thb,
+                combined_turnover_thb,
+                paper_gross_win_thb,
+                paper_gross_loss_thb,
+                live_gross_win_thb,
+                live_gross_loss_thb,
+                combined_gross_win_thb,
+                combined_gross_loss_thb,
+                paper_gross_pnl_before_fees_thb,
+                live_gross_pnl_before_fees_thb,
+                combined_gross_pnl_before_fees_thb,
+                paper_win_rate_percent,
+                live_win_rate_percent,
+                combined_win_rate_percent,
+                paper_profit_factor,
+                live_profit_factor,
+                combined_profit_factor,
+                cumulative_realized_pnl_thb,
+                peak_cumulative_realized_pnl_thb,
+                drawdown_thb
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["report_date"],
+                    int(row["strategies_active"]),
+                    int(row["symbols_active"]),
+                    int(row["paper_closed_trades"]),
+                    int(row["live_closed_trades"]),
+                    int(row["combined_closed_trades"]),
+                    int(row["paper_wins"]),
+                    int(row["paper_losses"]),
+                    int(row["live_wins"]),
+                    int(row["live_losses"]),
+                    int(row["combined_wins"]),
+                    int(row["combined_losses"]),
+                    float(row["paper_realized_pnl_thb"]),
+                    float(row["live_realized_pnl_thb"]),
+                    float(row["combined_realized_pnl_thb"]),
+                    float(row["paper_fee_thb"]),
+                    float(row["live_fee_thb"]),
+                    float(row["combined_fee_thb"]),
+                    float(row["paper_turnover_thb"]),
+                    float(row["live_turnover_thb"]),
+                    float(row["combined_turnover_thb"]),
+                    float(row["paper_gross_win_thb"]),
+                    float(row["paper_gross_loss_thb"]),
+                    float(row["live_gross_win_thb"]),
+                    float(row["live_gross_loss_thb"]),
+                    float(row["combined_gross_win_thb"]),
+                    float(row["combined_gross_loss_thb"]),
+                    float(row["paper_gross_pnl_before_fees_thb"]),
+                    float(row["live_gross_pnl_before_fees_thb"]),
+                    float(row["combined_gross_pnl_before_fees_thb"]),
+                    float(row["paper_win_rate_percent"]),
+                    float(row["live_win_rate_percent"]),
+                    float(row["combined_win_rate_percent"]),
+                    float(row["paper_profit_factor"]),
+                    float(row["live_profit_factor"]),
+                    float(row["combined_profit_factor"]),
+                    float(row["cumulative_realized_pnl_thb"]),
+                    float(row["peak_cumulative_realized_pnl_thb"]),
+                    float(row["drawdown_thb"]),
+                )
+                for row in portfolio_rows
+            ],
+        )
+
+    return {
+        "strategy_daily_metrics": len(strategy_rows),
+        "portfolio_daily_metrics": len(portfolio_rows),
+    }
+
+
+def _fetch_portfolio_daily_metrics_from_conn(
+    *,
+    conn: sqlite3.Connection,
+    days: int,
+) -> list[dict[str, Any]]:
+    cutoff_day = format_date_text(now_dt() - timedelta(days=max(1, int(days)) - 1))
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM portfolio_daily_metrics
+        WHERE report_date >= ?
+        ORDER BY report_date DESC
+        """,
+        (cutoff_day,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_portfolio_daily_metrics(*, days: int = 30) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        refresh_daily_performance_metrics_from_history(conn=conn)
+        return _fetch_portfolio_daily_metrics_from_conn(conn=conn, days=days)
+
+
+def _fetch_strategy_daily_metrics_from_conn(
+    *,
+    conn: sqlite3.Connection,
+    days: int,
+    symbol: str | None = None,
+    strategy_key: str | None = None,
+) -> list[dict[str, Any]]:
+    cutoff_day = format_date_text(now_dt() - timedelta(days=max(1, int(days)) - 1))
+    clauses = ["report_date >= ?"]
+    params: list[Any] = [cutoff_day]
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(str(symbol))
+    if strategy_key:
+        clauses.append("strategy_key = ?")
+        params.append(str(strategy_key))
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM strategy_daily_metrics
+        WHERE {' AND '.join(clauses)}
+        ORDER BY report_date DESC, strategy_key ASC, symbol ASC
+        """,
+        tuple(params),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def fetch_strategy_daily_metrics(
+    *,
+    days: int = 30,
+    symbol: str | None = None,
+    strategy_key: str | None = None,
+) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        refresh_daily_performance_metrics_from_history(conn=conn)
+        return _fetch_strategy_daily_metrics_from_conn(
+            conn=conn,
+            days=days,
+            symbol=symbol,
+            strategy_key=strategy_key,
+        )
 
 
 def fetch_db_maintenance_summary() -> dict[str, Any]:
@@ -802,6 +1711,12 @@ def fetch_db_maintenance_summary() -> dict[str, Any]:
         "reconciliation_results",
         "execution_orders",
         "execution_order_events",
+        "trade_journal",
+        "strategy_daily_metrics",
+        "portfolio_daily_metrics",
+        "validation_runs",
+        "validation_run_slices",
+        "validation_consistency_checks",
         "telegram_outbox",
         "telegram_command_log",
     )
@@ -919,13 +1834,16 @@ def _build_live_execution_trade_history_from_rows(
             except (TypeError, ValueError):
                 amount_thb = 0.0
             if fill_rate > 0 and amount_thb > 0:
-                net_coin_qty = max(0.0, (amount_thb - fee_thb) / fill_rate)
+                net_budget_thb = max(0.0, amount_thb - fee_thb)
+                net_coin_qty = max(0.0, net_budget_thb / fill_rate)
                 if net_coin_qty > 0:
                     lots.append(
                         {
                             "coin_qty": net_coin_qty,
                             "cost_thb": amount_thb,
                             "buy_rate": fill_rate,
+                            "buy_fee_thb": fee_thb,
+                            "net_budget_thb": net_budget_thb,
                         }
                     )
             continue
@@ -942,18 +1860,30 @@ def _build_live_execution_trade_history_from_rows(
 
         remaining_qty = sell_coin_qty
         cost_basis_thb = 0.0
+        buy_fee_allocated_thb = 0.0
+        net_budget_allocated_thb = 0.0
         while remaining_qty > 1e-12 and lots:
             current_lot = lots[0]
             lot_qty = float(current_lot.get("coin_qty") or 0.0)
             lot_cost = float(current_lot.get("cost_thb") or 0.0)
+            lot_buy_fee = float(current_lot.get("buy_fee_thb") or 0.0)
+            lot_net_budget = float(current_lot.get("net_budget_thb") or 0.0)
             if lot_qty <= 1e-12:
                 lots.pop(0)
                 continue
             consume_qty = min(remaining_qty, lot_qty)
             consume_ratio = consume_qty / lot_qty if lot_qty > 0 else 0.0
             cost_basis_thb += lot_cost * consume_ratio
+            buy_fee_allocated_thb += lot_buy_fee * consume_ratio
+            net_budget_allocated_thb += lot_net_budget * consume_ratio
             current_lot["coin_qty"] = max(0.0, lot_qty - consume_qty)
             current_lot["cost_thb"] = max(0.0, lot_cost - (lot_cost * consume_ratio))
+            current_lot["buy_fee_thb"] = max(
+                0.0, lot_buy_fee - (lot_buy_fee * consume_ratio)
+            )
+            current_lot["net_budget_thb"] = max(
+                0.0, lot_net_budget - (lot_net_budget * consume_ratio)
+            )
             remaining_qty -= consume_qty
             if current_lot["coin_qty"] <= 1e-12:
                 lots.pop(0)
@@ -965,6 +1895,7 @@ def _build_live_execution_trade_history_from_rows(
         gross_proceeds_thb = matched_qty * fill_rate
         net_proceeds_thb = gross_proceeds_thb - fee_thb
         pnl_thb = net_proceeds_thb - cost_basis_thb
+        total_fee_thb = buy_fee_allocated_thb + fee_thb
         closed_trades.append(
             {
                 "id": int(row["id"]),
@@ -973,11 +1904,14 @@ def _build_live_execution_trade_history_from_rows(
                 "symbol": symbol,
                 "sell_coin_qty": matched_qty,
                 "sell_rate": fill_rate,
-                "fee_thb": fee_thb,
+                "buy_fee_thb": buy_fee_allocated_thb,
+                "sell_fee_thb": fee_thb,
+                "fee_thb": total_fee_thb,
                 "gross_proceeds_thb": gross_proceeds_thb,
                 "net_proceeds_thb": net_proceeds_thb,
                 "cost_basis_thb": cost_basis_thb,
-                "gross_pnl_before_fees_thb": gross_proceeds_thb - cost_basis_thb,
+                "net_budget_thb": net_budget_allocated_thb,
+                "gross_pnl_before_fees_thb": gross_proceeds_thb - net_budget_allocated_thb,
                 "pnl_thb": pnl_thb,
             }
         )
@@ -1922,9 +2856,11 @@ def fetch_reporting_summary(
     recent_execution_limit: int = 10,
     recent_auto_exit_limit: int = 10,
     recent_error_limit: int = 10,
+    recent_journal_limit: int = 20,
 ) -> dict[str, Any]:
     with _connect() as conn:
         filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+        refresh_daily_performance_metrics_from_history(conn=conn)
         return _build_reporting_summary_from_history(
             conn=conn,
             today=today,
@@ -1933,6 +2869,7 @@ def fetch_reporting_summary(
             recent_execution_limit=recent_execution_limit,
             recent_auto_exit_limit=recent_auto_exit_limit,
             recent_error_limit=recent_error_limit,
+            recent_journal_limit=recent_journal_limit,
             filled_orders=filled_orders,
             closed_trades=closed_trades,
         )
@@ -1947,6 +2884,7 @@ def _build_reporting_summary_from_history(
     recent_execution_limit: int,
     recent_auto_exit_limit: int,
     recent_error_limit: int,
+    recent_journal_limit: int,
     filled_orders: list[dict[str, Any]],
     closed_trades: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -2085,6 +3023,23 @@ def _build_reporting_summary_from_history(
         """,
         (recent_auto_exit_limit,),
     ).fetchall()
+    recent_trade_journal = conn.execute(
+        f"""
+        SELECT id, created_at, trading_mode, channel, status, symbol, side,
+               signal_reason, exit_reason, request_rate, latest_price,
+               amount_thb, amount_coin
+        FROM trade_journal
+        WHERE 1 = 1
+        {trade_symbol_clause}
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        tuple(
+            value
+            for value in (symbol, recent_journal_limit)
+            if value is not None
+        ),
+    ).fetchall()
 
     live_execution_summary = _summarize_live_execution_realized_from_history(
         today=today,
@@ -2217,6 +3172,7 @@ def _build_reporting_summary_from_history(
         "recent_execution_orders": [dict(row) for row in recent_execution_orders],
         "recent_auto_exit_events": [dict(row) for row in recent_auto_exit_events],
         "recent_errors": [dict(row) for row in recent_errors],
+        "recent_trade_journal": [dict(row) for row in recent_trade_journal],
         "live_execution_pnl": live_execution_summary,
     }
 
@@ -2230,12 +3186,14 @@ def fetch_reports_page_dataset(
     recent_execution_limit: int = 10,
     recent_auto_exit_limit: int = 10,
     recent_error_limit: int = 10,
+    recent_journal_limit: int = 20,
 ) -> dict[str, Any]:
     window_days = max(1, int(days))
     cutoff_day = format_date_text(now_dt() - timedelta(days=window_days - 1))
 
     with _connect() as conn:
         filled_orders, closed_trades = _build_live_execution_trade_history(conn=conn)
+        refresh_daily_performance_metrics_from_history(conn=conn)
         report = _build_reporting_summary_from_history(
             conn=conn,
             today=today,
@@ -2244,6 +3202,7 @@ def fetch_reports_page_dataset(
             recent_execution_limit=recent_execution_limit,
             recent_auto_exit_limit=recent_auto_exit_limit,
             recent_error_limit=recent_error_limit,
+            recent_journal_limit=recent_journal_limit,
             filled_orders=filled_orders,
             closed_trades=closed_trades,
         )
@@ -2254,10 +3213,37 @@ def fetch_reports_page_dataset(
             filled_orders=filled_orders,
             closed_trades=closed_trades,
         )
+        portfolio_daily_metrics = _fetch_portfolio_daily_metrics_from_conn(
+            conn=conn,
+            days=window_days,
+        )
+        strategy_daily_metrics = _fetch_strategy_daily_metrics_from_conn(
+            conn=conn,
+            days=window_days,
+            symbol=symbol,
+        )
+    recent_validation_runs = fetch_recent_validation_runs(limit=8, symbol=symbol)
+    recent_validation_slices = (
+        fetch_validation_run_slices(
+            validation_run_id=int(recent_validation_runs[0]["id"]),
+            limit=24,
+        )
+        if recent_validation_runs
+        else []
+    )
+    recent_validation_consistency_checks = fetch_recent_validation_consistency_checks(
+        limit=8,
+        symbol=symbol,
+    )
 
     return {
         "report": report,
         "daily_summary": daily_summary,
+        "portfolio_daily_metrics": portfolio_daily_metrics,
+        "strategy_daily_metrics": strategy_daily_metrics,
+        "recent_validation_runs": recent_validation_runs,
+        "recent_validation_slices": recent_validation_slices,
+        "recent_validation_consistency_checks": recent_validation_consistency_checks,
     }
 
 
@@ -2322,6 +3308,168 @@ def fetch_recent_telegram_command_log(*, limit: int = 50) -> list[dict[str, Any]
             (int(limit),),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def fetch_recent_trade_journal(
+    *,
+    limit: int = 50,
+    symbol: str | None = None,
+    channel: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(str(symbol))
+    if channel:
+        clauses.append("channel = ?")
+        params.append(str(channel))
+    if status:
+        clauses.append("status = ?")
+        params.append(str(status))
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, trading_mode, channel, status, symbol, side,
+                   signal_reason, exit_reason, request_rate, latest_price,
+                   amount_thb, amount_coin, details_json
+            FROM trade_journal
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+
+    return [
+        {
+            **dict(row),
+            "details": _load_json(row["details_json"], {}),
+        }
+        for row in rows
+    ]
+
+
+def fetch_recent_validation_runs(
+    *,
+    limit: int = 20,
+    symbol: str | None = None,
+    validation_type: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(str(symbol))
+    if validation_type:
+        clauses.append("validation_type = ?")
+        params.append(str(validation_type))
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, validation_type, status, symbol, data_source,
+                   resolution, mode, date_from, date_to, train_window_days,
+                   test_window_days, step_days, fee_rate, cooldown_seconds,
+                   base_rule_json, summary_json, metadata_json
+            FROM validation_runs
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+
+    return [
+        {
+            **dict(row),
+            "base_rule": _load_json(row["base_rule_json"], {}),
+            "summary": _load_json(row["summary_json"], {}),
+            "metadata": _load_json(row["metadata_json"], {}),
+        }
+        for row in rows
+    ]
+
+
+def fetch_validation_run_slices(
+    *,
+    validation_run_id: int | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if validation_run_id is not None:
+        clauses.append("validation_run_id = ?")
+        params.append(int(validation_run_id))
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, validation_run_id, slice_no, status, train_start_at,
+                   train_end_at, test_start_at, test_end_at, selected_variant,
+                   selected_rule_json, train_metrics_json, test_metrics_json,
+                   train_result_hash, test_result_hash, notes_json
+            FROM validation_run_slices
+            {where_clause}
+            ORDER BY validation_run_id DESC, slice_no ASC, id ASC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+
+    return [
+        {
+            **dict(row),
+            "selected_rule": _load_json(row["selected_rule_json"], {}),
+            "train_metrics": _load_json(row["train_metrics_json"], {}),
+            "test_metrics": _load_json(row["test_metrics_json"], {}),
+            "notes": _load_json(row["notes_json"], []),
+        }
+        for row in rows
+    ]
+
+
+def fetch_recent_validation_consistency_checks(
+    *,
+    limit: int = 20,
+    symbol: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(str(symbol))
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, created_at, validation_run_id, check_type, status, symbol,
+                   data_source, resolution, window_start_at, window_end_at,
+                   rule_json, details_json
+            FROM validation_consistency_checks
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+
+    return [
+        {
+            **dict(row),
+            "rule": _load_json(row["rule_json"], {}),
+            "details": _load_json(row["details_json"], {}),
+        }
+        for row in rows
+    ]
 
 
 def fetch_runtime_event_log(

@@ -162,7 +162,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     with left:
         st.markdown("#### System Settings")
         st.caption("These fields shape the console engine behavior after it reloads config.")
-        modes = ["paper", "read-only", "live-disabled", "live"]
+        modes = ["paper", "read-only", "live-disabled", "shadow-live", "live"]
         rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
         current_rank_resolution = str(config.get("live_auto_entry_rank_resolution", "240"))
         if current_rank_resolution not in {"1", "5", "15", "60", "240", "1D"}:
