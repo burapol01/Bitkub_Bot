@@ -6,6 +6,11 @@ from typing import Any
 import streamlit as st
 
 from services.account_service import account_snapshot_errors, build_live_holdings_snapshot
+from services.backup_service import (
+    create_runtime_backup,
+    latest_runtime_backup_summary,
+    list_runtime_backups,
+)
 from services.db_service import (
     archive_sqlite_retention,
     cleanup_sqlite_retention,
@@ -239,6 +244,34 @@ def _set_retention_feedback(*, title: str, lines: list[str], tone: str = "succes
     }
 
 
+def _show_backup_feedback() -> None:
+    payload = st.session_state.get("diagnostics_backup_feedback")
+    if not payload:
+        return
+
+    title = str(payload.get("title", "Backup result"))
+    lines = [str(line) for line in payload.get("lines", [])]
+    tone = str(payload.get("tone", "success"))
+
+    if tone == "error":
+        st.error(title)
+    elif tone == "warning":
+        st.warning(title)
+    else:
+        st.success(title)
+
+    for line in lines:
+        st.caption(line)
+
+
+def _set_backup_feedback(*, title: str, lines: list[str], tone: str = "success") -> None:
+    st.session_state["diagnostics_backup_feedback"] = {
+        "title": title,
+        "lines": lines,
+        "tone": tone,
+    }
+
+
 def _retention_hot_days_for_table(config: dict[str, Any], table_name: str) -> int:
     return int(
         {
@@ -360,6 +393,41 @@ def _run_retention_action(*, config: dict[str, Any], action: str) -> None:
     except Exception as e:
         _set_retention_feedback(
             title="Retention maintenance failed",
+            lines=[str(e)],
+            tone="error",
+        )
+        st.error(str(e))
+
+
+def _run_backup_action(*, config: dict[str, Any]) -> None:
+    try:
+        summary = create_runtime_backup(
+            backup_dir_value=config.get("backup_dir"),
+            backup_retention_days=int(config.get("backup_retention_days", 90) or 90),
+            include_env_file=bool(config.get("backup_include_env_file", False)),
+        )
+        success = bool(summary.get("success", False))
+        warnings = list(summary.get("warnings", []))
+        errors = list(summary.get("errors", []))
+        tone = "error" if not success else "warning" if warnings else "success"
+        _set_backup_feedback(
+            title="Backup completed" if success else "Backup failed",
+            lines=[
+                f"Bundle: {summary.get('bundle_path', 'n/a')}",
+                f"Size: {int(summary.get('bundle_size_bytes', 0) or 0):,} bytes",
+                (
+                    f"Assets: {int(summary.get('captured_asset_count', 0) or 0)} captured | "
+                    f"{int(summary.get('failed_asset_count', 0) or 0)} failed | "
+                    f"{int(summary.get('skipped_asset_count', 0) or 0)} skipped"
+                ),
+                f"Warnings: {', '.join(warnings) if warnings else 'none'}",
+                f"Errors: {', '.join(errors) if errors else 'none'}",
+            ],
+            tone=tone,
+        )
+    except Exception as e:
+        _set_backup_feedback(
+            title="Backup failed",
             lines=[str(e)],
             tone="error",
         )
@@ -701,6 +769,7 @@ def render_diagnostics_page(
         retention_status.get("latest_cleanup") or db_summary.get("latest_cleanup") or {}
     )
     _show_retention_feedback()
+    _show_backup_feedback()
 
     storage_card1, storage_card2, storage_card3, storage_card4 = st.columns(4)
     table_counts = dict(db_summary.get("table_counts", {}))
@@ -799,6 +868,70 @@ def render_diagnostics_page(
                 }
             )
         st.dataframe(latest_rows, width='stretch', hide_index=True)
+
+        st.markdown('<div class="panel-title">Backup & Restore</div>', unsafe_allow_html=True)
+        backup_root_summary = latest_runtime_backup_summary(
+            backup_root_value=config.get("backup_dir")
+        )
+        backup_root_display = str(
+            backup_root_summary.get("backup_root") or config.get("backup_dir", "backups")
+        )
+        st.caption(f"Backup root: {backup_root_display}")
+        st.caption(
+            "Retention "
+            f"{int(config.get('backup_retention_days', 90) or 90)} day(s) | "
+            f".env included {'ON' if bool(config.get('backup_include_env_file', False)) else 'OFF'}"
+        )
+        if backup_root_summary:
+            st.caption(
+                f"Latest backup: {backup_root_summary.get('created_at', 'n/a')} | "
+                f"{backup_root_summary.get('bundle_name', 'n/a')}"
+            )
+            st.caption(
+                f"Size: {int(backup_root_summary.get('bundle_size_bytes', 0) or 0):,} bytes | "
+                f"Assets: {int(backup_root_summary.get('captured_asset_count', 0) or 0)} captured"
+            )
+            if backup_root_summary.get("warnings"):
+                st.caption(f"Warnings: {', '.join(backup_root_summary.get('warnings', []))}")
+            if backup_root_summary.get("errors"):
+                st.caption(f"Errors: {', '.join(backup_root_summary.get('errors', []))}")
+        else:
+            st.caption("No backup bundles have been created yet.")
+
+        recent_backups = list_runtime_backups(
+            backup_root_value=config.get("backup_dir"),
+            limit=5,
+        )
+        if recent_backups:
+            st.dataframe(
+                [
+                    {
+                        "created_at": row.get("created_at"),
+                        "bundle": row.get("bundle_name"),
+                        "size_bytes": int(row.get("bundle_size_bytes", 0) or 0),
+                        "assets": int(row.get("captured_asset_count", 0) or 0),
+                        "success": "YES" if row.get("success") else "NO",
+                    }
+                    for row in recent_backups
+                ],
+                width='stretch',
+                hide_index=True,
+            )
+        else:
+            st.caption("Backup inventory is empty.")
+
+        if st.button(
+            "Run Backup Now",
+            width="stretch",
+            key="diagnostics_run_backup_now",
+        ):
+            _run_backup_action(config=config)
+            st.rerun()
+
+        st.caption(
+            "Restore offline with scripts/restore_runtime.py after stopping the bot and Streamlit, "
+            "then verify config and runtime state before resuming trades."
+        )
     with col2:
         st.markdown('<div class="panel-title">Live Reconciliation</div>', unsafe_allow_html=True)
         st.caption(
