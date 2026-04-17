@@ -7,14 +7,18 @@ import streamlit as st
 
 from services.account_service import account_snapshot_errors, build_live_holdings_snapshot
 from services.db_service import (
+    archive_sqlite_retention,
+    cleanup_sqlite_retention,
     fetch_diagnostics_page_dataset,
     fetch_execution_console_summary,
     fetch_logs_page_dataset,
+    insert_runtime_event,
 )
 from services.reconciliation_service import summarize_live_reconciliation
 from services.telegram_service import telegram_settings_snapshot
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
 from ui.streamlit.strategy_support import evaluate_fee_guardrail
+from utils.time_utils import now_text
 
 
 def classify_runtime_event(row: dict[str, Any]) -> dict[str, Any]:
@@ -205,6 +209,161 @@ def _cached_execution_console_summary() -> dict[str, Any]:
 @st.cache_data(ttl=15, show_spinner=False)
 def _cached_diagnostics_page_dataset() -> dict[str, Any]:
     return fetch_diagnostics_page_dataset()
+
+
+def _show_retention_feedback() -> None:
+    payload = st.session_state.get("diagnostics_retention_feedback")
+    if not payload:
+        return
+
+    title = str(payload.get("title", "Retention result"))
+    lines = [str(line) for line in payload.get("lines", [])]
+    tone = str(payload.get("tone", "success"))
+
+    if tone == "error":
+        st.error(title)
+    elif tone == "warning":
+        st.warning(title)
+    else:
+        st.success(title)
+
+    for line in lines:
+        st.caption(line)
+
+
+def _set_retention_feedback(*, title: str, lines: list[str], tone: str = "success") -> None:
+    st.session_state["diagnostics_retention_feedback"] = {
+        "title": title,
+        "lines": lines,
+        "tone": tone,
+    }
+
+
+def _retention_hot_days_for_table(config: dict[str, Any], table_name: str) -> int:
+    return int(
+        {
+            "market_snapshots": config.get("market_snapshot_hot_retention_days", 90),
+            "signal_logs": config.get("signal_log_hot_retention_days", 180),
+            "account_snapshots": config.get("account_snapshot_hot_retention_days", 90),
+            "reconciliation_results": config.get("reconciliation_hot_retention_days", 90),
+            "runtime_events": config.get("runtime_event_retention_days", 30),
+        }.get(table_name, 30)
+    )
+
+
+def _retention_archive_enabled_for_table(config: dict[str, Any], table_name: str) -> bool:
+    return bool(
+        {
+            "market_snapshots": config.get("market_snapshot_archive_enabled", True),
+            "signal_logs": config.get("signal_log_archive_enabled", True),
+            "account_snapshots": config.get("account_snapshot_archive_enabled", True),
+            "reconciliation_results": config.get("reconciliation_archive_enabled", True),
+            "runtime_events": False,
+        }.get(table_name, False)
+    )
+
+
+def _build_retention_rows(
+    *,
+    config: dict[str, Any],
+    retention_status: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    for row in list(retention_status.get("tables") or []):
+        table_name = str(row.get("table_name") or "")
+        latest_archive = dict(row.get("latest_archive_run") or {})
+        rows.append(
+            {
+                "table": table_name,
+                "record_count": int(row.get("record_count", 0) or 0),
+                "oldest_at": row.get("oldest_at"),
+                "newest_at": row.get("newest_at"),
+                "hot_retention_days": _retention_hot_days_for_table(config, table_name),
+                "archive_enabled": _retention_archive_enabled_for_table(config, table_name),
+                "archive_status": latest_archive.get("archive_status") or "n/a",
+                "cleanup_status": latest_archive.get("cleanup_status") or "n/a",
+                "archive_date": latest_archive.get("archive_date"),
+                "archive_time": latest_archive.get("completed_at"),
+                "cleanup_time": latest_archive.get("cleanup_completed_at"),
+                "cleanup_deleted_count": int(
+                    latest_archive.get("cleanup_deleted_count", 0) or 0
+                ),
+                "archive_path": latest_archive.get("archive_path"),
+            }
+        )
+
+    return rows
+
+
+def _run_retention_action(*, config: dict[str, Any], action: str) -> None:
+    try:
+        if action == "archive":
+            summary = archive_sqlite_retention(config=config)
+            archived_total = int(summary.get("archived_total", 0) or 0)
+            errors = list(summary.get("errors", []))
+            tone = "warning" if errors else "success"
+            _set_retention_feedback(
+                title=(
+                    f"Archived {archived_total} analytical record(s)"
+                    if not errors
+                    else f"Archive completed with {len(errors)} warning(s)"
+                ),
+                lines=[
+                    f"Archive dir: {summary.get('archive_dir')}",
+                    f"Compression: {summary.get('archive_format')} + {summary.get('archive_compression')}",
+                    f"Errors: {', '.join(errors) if errors else 'none'}",
+                ],
+                tone=tone,
+            )
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="sqlite_retention_archive",
+                severity="warning" if errors else "info",
+                message=f"SQLite retention archive completed; archived {archived_total} records",
+                details=summary,
+            )
+        elif action == "cleanup":
+            summary = cleanup_sqlite_retention(config=config)
+            archived_total = int(summary.get("archived_total", 0) or 0)
+            deleted_total = int(summary.get("deleted_total", 0) or 0)
+            archive_errors = list((summary.get("archive") or {}).get("errors", []))
+            tone = "warning" if archive_errors else "success"
+            _set_retention_feedback(
+                title=(
+                    f"Cleanup completed; archived {archived_total} and removed {deleted_total}"
+                    if not archive_errors
+                    else f"Cleanup completed with {len(archive_errors)} archive warning(s)"
+                ),
+                lines=[
+                    f"Archive dir: {(summary.get('archive') or {}).get('archive_dir')}",
+                    f"Archive errors: {', '.join(archive_errors) if archive_errors else 'none'}",
+                    f"Deleted total: {deleted_total}",
+                ],
+                tone=tone,
+            )
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="sqlite_retention_cleanup",
+                severity="warning" if archive_errors else "info",
+                message=(
+                    "SQLite retention cleanup completed; "
+                    f"archived {archived_total} records and removed {deleted_total} rows"
+                ),
+                details=summary,
+            )
+        else:
+            raise ValueError(f"unsupported retention action: {action}")
+
+        _cached_diagnostics_page_dataset.clear()
+        st.rerun()
+    except Exception as e:
+        _set_retention_feedback(
+            title="Retention maintenance failed",
+            lines=[str(e)],
+            tone="error",
+        )
+        st.error(str(e))
 
 
 def render_logs_page(*, config: dict[str, Any], today: str) -> None:
@@ -499,6 +658,7 @@ def render_logs_page(*, config: dict[str, Any], today: str) -> None:
 
 def render_diagnostics_page(
     *,
+    config: dict[str, Any],
     today: str,
     private_ctx: dict[str, Any],
     latest_prices: dict[str, float],
@@ -531,13 +691,19 @@ def render_diagnostics_page(
     latest_account_snapshot = dashboard_summary.get("latest_account_snapshot")
     latest_reconciliation = dashboard_summary.get("latest_reconciliation")
     latest_execution_order = dashboard_summary.get("latest_execution_order")
+    retention_status = dict(diagnostics_dataset.get("retention_status") or {})
+    retention_rows = _build_retention_rows(
+        config=config,
+        retention_status=retention_status,
+    )
+    latest_archive_run = dict(retention_status.get("latest_archive_run") or {})
+    latest_cleanup_run = dict(
+        retention_status.get("latest_cleanup") or db_summary.get("latest_cleanup") or {}
+    )
+    _show_retention_feedback()
 
     storage_card1, storage_card2, storage_card3, storage_card4 = st.columns(4)
     table_counts = dict(db_summary.get("table_counts", {}))
-    latest_cleanup = dict(db_summary.get("latest_cleanup", {}))
-    latest_cleanup_details = dict(latest_cleanup.get("details", {}))
-    retention_days = dict(latest_cleanup_details.get("retention_days", {}))
-    deleted_rows = dict(latest_cleanup_details.get("deleted_rows", {}))
 
     with storage_card1:
         render_metric_card(
@@ -568,18 +734,43 @@ def render_diagnostics_page(
     col1, col2 = st.columns([0.95, 1.05])
     with col1:
         st.markdown('<div class="panel-title">SQLite Health</div>', unsafe_allow_html=True)
-        st.caption(f"Latest cleanup: {latest_cleanup.get('created_at', 'n/a')}")
-        st.caption(str(latest_cleanup.get("message", "No cleanup history")))
-        retention_rows = [
-            {
-                "table": table_name,
-                "days": days,
-                "deleted_last_run": deleted_rows.get(table_name, 0),
-            }
-            for table_name, days in retention_days.items()
-        ]
+        st.caption(
+            f"Archive dir: {config.get('archive_dir', 'data/archive')}"
+        )
+        st.caption(
+            "Archive flow "
+            f"{'ON' if bool(config.get('archive_enabled', True)) else 'OFF'} | "
+            f"format {config.get('archive_format', 'csv')} | "
+            f"compression {config.get('archive_compression', 'gzip')}"
+        )
+        st.caption(
+            f"Latest archive: {latest_archive_run.get('completed_at', 'n/a')} | "
+            f"{latest_archive_run.get('archive_status', 'n/a')}"
+        )
+        st.caption(
+            f"Latest cleanup: {latest_cleanup_run.get('created_at', 'n/a')}"
+        )
+        st.caption(str(latest_cleanup_run.get("message", "No cleanup history")))
         if retention_rows:
             st.dataframe(retention_rows, width='stretch', hide_index=True)
+        else:
+            st.caption("No retention rows available yet.")
+
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            if st.button(
+                "Run Archive Now",
+                width="stretch",
+                key="diagnostics_run_archive_now",
+            ):
+                _run_retention_action(config=config, action="archive")
+        with action_cols[1]:
+            if st.button(
+                "Run Cleanup Now",
+                width="stretch",
+                key="diagnostics_run_cleanup_now",
+            ):
+                _run_retention_action(config=config, action="cleanup")
 
         st.markdown('<div class="panel-title">Latest Records</div>', unsafe_allow_html=True)
         latest_rows = []

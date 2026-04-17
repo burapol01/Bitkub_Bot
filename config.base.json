@@ -37,11 +37,19 @@
     "auto_live_exit",
     "runtime_error"
   ],
-  "market_snapshot_retention_days": 30,
-  "signal_log_retention_days": 30,
+  "archive_enabled": true,
+  "archive_dir": "data/archive",
+  "archive_format": "csv",
+  "archive_compression": "gzip",
+  "market_snapshot_archive_enabled": true,
+  "signal_log_archive_enabled": true,
+  "account_snapshot_archive_enabled": true,
+  "reconciliation_archive_enabled": true,
+  "market_snapshot_hot_retention_days": 90,
+  "signal_log_hot_retention_days": 180,
   "runtime_event_retention_days": 30,
-  "account_snapshot_retention_days": 30,
-  "reconciliation_retention_days": 30,
+  "account_snapshot_hot_retention_days": 90,
+  "reconciliation_hot_retention_days": 90,
   "signal_log_file": "signal_log.csv",
   "trade_log_file": "paper_trade_log.csv"
 }

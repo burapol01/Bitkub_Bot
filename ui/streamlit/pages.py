@@ -490,7 +490,12 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
         for symbol in config.get("watchlist_symbols", configured_symbols)
         if isinstance(symbol, str) and str(symbol).strip()
     ]
-    coverage_days = int(config.get("market_snapshot_retention_days", 30))
+    coverage_days = int(
+        config.get(
+            "market_snapshot_hot_retention_days",
+            config.get("market_snapshot_retention_days", 30),
+        )
+    )
     rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
     default_rank_resolution = str(st.session_state.get("strategy_rank_resolution", "240"))
     if default_rank_resolution not in rank_resolution_options:

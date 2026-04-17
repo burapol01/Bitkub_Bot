@@ -36,11 +36,19 @@ ROOT_REQUIRED_FIELDS = {
     "telegram_enabled",
     "telegram_control_enabled",
     "telegram_notify_events",
-    "market_snapshot_retention_days",
-    "signal_log_retention_days",
+    "archive_enabled",
+    "archive_dir",
+    "archive_format",
+    "archive_compression",
+    "market_snapshot_archive_enabled",
+    "signal_log_archive_enabled",
+    "account_snapshot_archive_enabled",
+    "reconciliation_archive_enabled",
+    "market_snapshot_hot_retention_days",
+    "signal_log_hot_retention_days",
     "runtime_event_retention_days",
-    "account_snapshot_retention_days",
-    "reconciliation_retention_days",
+    "account_snapshot_hot_retention_days",
+    "reconciliation_hot_retention_days",
     "signal_log_file",
     "trade_log_file",
     "rules",
@@ -175,16 +183,42 @@ def _read_config_file() -> dict[str, Any]:
             "auto_live_exit",
             "runtime_error",
         ]
-    if "market_snapshot_retention_days" not in data:
-        data["market_snapshot_retention_days"] = 30
-    if "signal_log_retention_days" not in data:
-        data["signal_log_retention_days"] = 30
+    retention_aliases = {
+        "market_snapshot_hot_retention_days": "market_snapshot_retention_days",
+        "signal_log_hot_retention_days": "signal_log_retention_days",
+        "account_snapshot_hot_retention_days": "account_snapshot_retention_days",
+        "reconciliation_hot_retention_days": "reconciliation_retention_days",
+    }
+    for hot_key, legacy_key in retention_aliases.items():
+        if legacy_key in data:
+            data[hot_key] = data[legacy_key]
+        data.pop(legacy_key, None)
+    if "archive_enabled" not in data:
+        data["archive_enabled"] = True
+    if "archive_dir" not in data:
+        data["archive_dir"] = "data/archive"
+    if "archive_format" not in data:
+        data["archive_format"] = "csv"
+    if "archive_compression" not in data:
+        data["archive_compression"] = "gzip"
+    if "market_snapshot_archive_enabled" not in data:
+        data["market_snapshot_archive_enabled"] = True
+    if "signal_log_archive_enabled" not in data:
+        data["signal_log_archive_enabled"] = True
+    if "account_snapshot_archive_enabled" not in data:
+        data["account_snapshot_archive_enabled"] = True
+    if "reconciliation_archive_enabled" not in data:
+        data["reconciliation_archive_enabled"] = True
+    if "market_snapshot_hot_retention_days" not in data:
+        data["market_snapshot_hot_retention_days"] = 90
+    if "signal_log_hot_retention_days" not in data:
+        data["signal_log_hot_retention_days"] = 180
     if "runtime_event_retention_days" not in data:
         data["runtime_event_retention_days"] = 30
-    if "account_snapshot_retention_days" not in data:
-        data["account_snapshot_retention_days"] = 30
-    if "reconciliation_retention_days" not in data:
-        data["reconciliation_retention_days"] = 30
+    if "account_snapshot_hot_retention_days" not in data:
+        data["account_snapshot_hot_retention_days"] = 90
+    if "reconciliation_hot_retention_days" not in data:
+        data["reconciliation_hot_retention_days"] = 90
 
     return data
 
@@ -307,18 +341,19 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         errors.append("cooldown_seconds must be an integer >= 0")
 
     if (
-        not isinstance(config["market_snapshot_retention_days"], int)
-        or config["market_snapshot_retention_days"] <= 0
+        not isinstance(config["market_snapshot_hot_retention_days"], int)
+        or config["market_snapshot_hot_retention_days"] <= 0
     ):
-        errors.append("market_snapshot_retention_days must be an integer greater than 0")
+        errors.append(
+            "market_snapshot_hot_retention_days must be an integer greater than 0"
+        )
 
-    retention_fields = (
-        "signal_log_retention_days",
+    for field in (
+        "signal_log_hot_retention_days",
         "runtime_event_retention_days",
-        "account_snapshot_retention_days",
-        "reconciliation_retention_days",
-    )
-    for field in retention_fields:
+        "account_snapshot_hot_retention_days",
+        "reconciliation_hot_retention_days",
+    ):
         if not isinstance(config[field], int) or config[field] <= 0:
             errors.append(f"{field} must be an integer greater than 0")
 
@@ -345,6 +380,22 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         errors.append("telegram_enabled must be true or false")
     if not isinstance(config["telegram_control_enabled"], bool):
         errors.append("telegram_control_enabled must be true or false")
+    if not isinstance(config["archive_enabled"], bool):
+        errors.append("archive_enabled must be true or false")
+    if not isinstance(config["archive_dir"], str) or not config["archive_dir"].strip():
+        errors.append("archive_dir must be a non-empty string")
+    if config["archive_format"] != "csv":
+        errors.append("archive_format must currently be csv")
+    if config["archive_compression"] not in {"gzip", "none"}:
+        errors.append("archive_compression must be gzip or none")
+    for field in (
+        "market_snapshot_archive_enabled",
+        "signal_log_archive_enabled",
+        "account_snapshot_archive_enabled",
+        "reconciliation_archive_enabled",
+    ):
+        if not isinstance(config[field], bool):
+            errors.append(f"{field} must be true or false")
 
     telegram_notify_events = config["telegram_notify_events"]
     if not isinstance(telegram_notify_events, list):
@@ -553,11 +604,19 @@ def summarize_config_changes(
         "live_manual_order",
         "telegram_enabled",
         "telegram_control_enabled",
-        "market_snapshot_retention_days",
-        "signal_log_retention_days",
+        "archive_enabled",
+        "archive_dir",
+        "archive_format",
+        "archive_compression",
+        "market_snapshot_archive_enabled",
+        "signal_log_archive_enabled",
+        "account_snapshot_archive_enabled",
+        "reconciliation_archive_enabled",
+        "market_snapshot_hot_retention_days",
+        "signal_log_hot_retention_days",
         "runtime_event_retention_days",
-        "account_snapshot_retention_days",
-        "reconciliation_retention_days",
+        "account_snapshot_hot_retention_days",
+        "reconciliation_hot_retention_days",
         "signal_log_file",
         "trade_log_file",
     )
