@@ -40,6 +40,9 @@ ROOT_REQUIRED_FIELDS = {
     "archive_dir",
     "archive_format",
     "archive_compression",
+    "backup_dir",
+    "backup_retention_days",
+    "backup_include_env_file",
     "market_snapshot_archive_enabled",
     "signal_log_archive_enabled",
     "account_snapshot_archive_enabled",
@@ -201,6 +204,12 @@ def _read_config_file() -> dict[str, Any]:
         data["archive_format"] = "csv"
     if "archive_compression" not in data:
         data["archive_compression"] = "gzip"
+    if "backup_dir" not in data:
+        data["backup_dir"] = "backups"
+    if "backup_retention_days" not in data:
+        data["backup_retention_days"] = 90
+    if "backup_include_env_file" not in data:
+        data["backup_include_env_file"] = False
     if "market_snapshot_archive_enabled" not in data:
         data["market_snapshot_archive_enabled"] = True
     if "signal_log_archive_enabled" not in data:
@@ -388,6 +397,12 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         errors.append("archive_format must currently be csv")
     if config["archive_compression"] not in {"gzip", "none"}:
         errors.append("archive_compression must be gzip or none")
+    if not isinstance(config["backup_dir"], str) or not config["backup_dir"].strip():
+        errors.append("backup_dir must be a non-empty string")
+    if not isinstance(config["backup_retention_days"], int) or config["backup_retention_days"] <= 0:
+        errors.append("backup_retention_days must be an integer greater than 0")
+    if not isinstance(config["backup_include_env_file"], bool):
+        errors.append("backup_include_env_file must be true or false")
     for field in (
         "market_snapshot_archive_enabled",
         "signal_log_archive_enabled",
@@ -608,6 +623,9 @@ def summarize_config_changes(
         "archive_dir",
         "archive_format",
         "archive_compression",
+        "backup_dir",
+        "backup_retention_days",
+        "backup_include_env_file",
         "market_snapshot_archive_enabled",
         "signal_log_archive_enabled",
         "account_snapshot_archive_enabled",

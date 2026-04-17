@@ -401,6 +401,35 @@ How to inspect or restore archived data later:
 
 `paper_trade_logs` are not auto-pruned yet.
 
+## Backup and Restore
+
+Operational recovery uses a separate backup bundle flow.
+
+What gets backed up:
+
+- `data/bitkub.db` through SQLite's backup API so WAL mode stays safe
+- `runtime_state.json` and `runtime_state.pending.json` when present
+- `config.json` and `config.base.json`
+- optional `.env` file when `backup_include_env_file=true`
+
+Backups are written under `backups/YYYY/MM/DD/` by default and include a manifest inside each `.zip` bundle.
+
+Run a backup:
+
+```powershell
+python scripts/backup_runtime.py
+```
+
+Restore from a bundle after stopping the bot and Streamlit:
+
+```powershell
+python scripts/restore_runtime.py --bundle backups/2026/04/17/runtime_backup_20260417_153000.zip --overwrite
+```
+
+Restore is offline work. The helper extracts into a temporary staging directory first and refuses to overwrite existing files unless `--overwrite` is set.
+
+The Diagnostics page shows the latest backup timestamp, backup location, backup size, and a `Run Backup Now` action.
+
 ## Safety Behavior
 
 The engine can enter `safety pause` for important mismatches or invalid state, such as:

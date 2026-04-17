@@ -40,10 +40,9 @@ Generated: April 16, 2026
 
 ## Directory Structure
 
-### `/backup/` - Backup Files
-- `bitkub.db.bak` - Database backup
-- `config.json.bak` - Configuration backup
-- `runtime_state.json.bak` - State backup
+### `/backups/` - Runtime Backup Bundles
+- `YYYY/MM/DD/runtime_backup_*.zip` - Timestamped runtime recovery bundle
+- `manifest.json` inside each bundle - Captured assets and restore targets
 
 ### `/clients/` - API Clients
 - `__init__.py` - Package initializer
@@ -94,6 +93,8 @@ Generated: April 16, 2026
 ### `/scripts/` - Automation Scripts
 - `start_engine.sh` - Engine startup script
 - `start_streamlit.sh` - Streamlit startup script
+- `backup_runtime.py` - Runtime backup helper
+- `restore_runtime.py` - Runtime restore helper
 
 ### `/services/` - Business Services (15 modules)
 - `__init__.py` - Package initializer
