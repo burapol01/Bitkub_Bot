@@ -42,7 +42,7 @@ def _base_config() -> dict[str, object]:
         "watchlist_symbols": ["THB_FF", "THB_SUMX", "THB_TRX"],
         "fee_rate": 0.0025,
         "cooldown_seconds": 60,
-        "market_snapshot_retention_days": 30,
+        "market_snapshot_hot_retention_days": 90,
         "live_auto_entry_min_score": 50.0,
         "live_auto_entry_allowed_biases": ["bullish", "mixed"],
     }

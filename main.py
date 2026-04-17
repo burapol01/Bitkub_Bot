@@ -53,7 +53,7 @@ from services.db_service import (
     insert_trade_journal,
     insert_telegram_command_log,
     insert_runtime_event,
-    prune_sqlite_retention,
+    cleanup_sqlite_retention,
     update_telegram_command_log,
     update_execution_order,
 )
@@ -416,7 +416,7 @@ def main():
     latest_prices: dict[str, float] = {}
     account_snapshot: dict | None = None
     report_filter_symbol: str | None = None
-    last_market_cleanup_day: str | None = None
+    last_retention_cleanup_day: str | None = None
     notice: str | None = None
     notice_lines: list[str] | None = restore_messages or None
     pending_telegram_confirms: dict[str, dict] = {}
@@ -1854,33 +1854,48 @@ def main():
             )
 
     def run_sqlite_retention_cleanup(*, source: str, force: bool):
-        nonlocal last_market_cleanup_day
-        retention_days = {
-            "market_snapshots": int(config["market_snapshot_retention_days"]),
-            "signal_logs": int(config["signal_log_retention_days"]),
-            "runtime_events": int(config["runtime_event_retention_days"]),
-            "account_snapshots": int(config["account_snapshot_retention_days"]),
-            "reconciliation_results": int(config["reconciliation_retention_days"]),
-        }
+        nonlocal last_retention_cleanup_day
         current_day = today_key()
 
-        if not force and last_market_cleanup_day == current_day:
+        if not force and last_retention_cleanup_day == current_day:
             return
 
-        deleted_rows = prune_sqlite_retention(retention_days=retention_days)
-        last_market_cleanup_day = current_day
-        deleted_total = sum(deleted_rows.values())
+        try:
+            cleanup_summary = cleanup_sqlite_retention(config=config)
+        except Exception as e:
+            insert_runtime_event(
+                created_at=now_text(),
+                event_type="sqlite_retention_cleanup",
+                severity="error",
+                message="SQLite retention cleanup failed",
+                details={
+                    "source": source,
+                    "exception": str(e),
+                },
+            )
+            return
 
-        if deleted_total > 0 or force:
+        last_retention_cleanup_day = current_day
+        deleted_rows = dict(cleanup_summary.get("deleted_rows", {}))
+        deleted_total = int(cleanup_summary.get("deleted_total", 0) or 0)
+        archived_total = int(cleanup_summary.get("archived_total", 0) or 0)
+
+        if deleted_total > 0 or archived_total > 0 or force:
             insert_runtime_event(
                 created_at=now_text(),
                 event_type="sqlite_retention_cleanup",
                 severity="info",
-                message=f"SQLite retention cleanup completed; removed {deleted_total} total rows",
+                message=(
+                    "SQLite retention cleanup completed; "
+                    f"archived {archived_total} records and removed {deleted_total} total rows"
+                ),
                 details={
                     "source": source,
                     "deleted_rows": deleted_rows,
-                    "retention_days": retention_days,
+                    "deleted_total": deleted_total,
+                    "archived_total": archived_total,
+                    "archive": cleanup_summary.get("archive", {}),
+                    "archive_delete_results": cleanup_summary.get("archive_delete_results", {}),
                 },
             )
 
@@ -2255,13 +2270,18 @@ def main():
                     "state_path": str(STATE_FILE_PATH),
                     "db_path": str(DB_PATH),
                     "db_storage": db_storage,
+                    "retention_status": db_storage.get("retention_status"),
                     "retention_days": {
-                        "market_snapshots": int(config["market_snapshot_retention_days"]),
-                        "signal_logs": int(config["signal_log_retention_days"]),
+                        "market_snapshots": int(
+                            config["market_snapshot_hot_retention_days"]
+                        ),
+                        "signal_logs": int(config["signal_log_hot_retention_days"]),
                         "runtime_events": int(config["runtime_event_retention_days"]),
-                        "account_snapshots": int(config["account_snapshot_retention_days"]),
+                        "account_snapshots": int(
+                            config["account_snapshot_hot_retention_days"]
+                        ),
                         "reconciliation_results": int(
-                            config["reconciliation_retention_days"]
+                            config["reconciliation_hot_retention_days"]
                         ),
                     },
                     "private_api_status": private_api_status,

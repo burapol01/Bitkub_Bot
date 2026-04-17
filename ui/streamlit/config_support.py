@@ -308,23 +308,86 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                 st.rerun()
 
         st.markdown("#### Retention")
-        st.caption("SQLite cleanup policy for stored snapshots, logs, and reconciliation records.")
+        st.caption("SQLite stays the hot runtime store. Older analytical rows are archived to disk before they are deleted from SQLite.")
         with st.form("config_retention_form"):
-            market_snapshot_retention_days = st.number_input("Market Snapshots Retention", min_value=1, value=int(config["market_snapshot_retention_days"]), step=1)
-            signal_log_retention_days = st.number_input("Signal Logs Retention", min_value=1, value=int(config["signal_log_retention_days"]), step=1)
-            runtime_event_retention_days = st.number_input("Runtime Events Retention", min_value=1, value=int(config["runtime_event_retention_days"]), step=1)
-            account_snapshot_retention_days = st.number_input("Account Snapshots Retention", min_value=1, value=int(config["account_snapshot_retention_days"]), step=1)
-            reconciliation_retention_days = st.number_input("Reconciliation Retention", min_value=1, value=int(config["reconciliation_retention_days"]), step=1)
+            archive_enabled = st.checkbox("Archive Flow Enabled", value=bool(config["archive_enabled"]))
+            archive_dir = st.text_input("Archive Directory", value=str(config["archive_dir"]))
+            archive_format = st.selectbox("Archive Format", ["csv"], index=0)
+            archive_compression = st.selectbox(
+                "Archive Compression",
+                ["gzip", "none"],
+                index=0 if str(config.get("archive_compression", "gzip")) == "gzip" else 1,
+            )
+            archive_cols = st.columns(2)
+            with archive_cols[0]:
+                market_snapshot_archive_enabled = st.checkbox(
+                    "Archive Market Snapshots",
+                    value=bool(config["market_snapshot_archive_enabled"]),
+                )
+                signal_log_archive_enabled = st.checkbox(
+                    "Archive Signal Logs",
+                    value=bool(config["signal_log_archive_enabled"]),
+                )
+            with archive_cols[1]:
+                account_snapshot_archive_enabled = st.checkbox(
+                    "Archive Account Snapshots",
+                    value=bool(config["account_snapshot_archive_enabled"]),
+                )
+                reconciliation_archive_enabled = st.checkbox(
+                    "Archive Reconciliation Records",
+                    value=bool(config["reconciliation_archive_enabled"]),
+                )
+            retention_cols = st.columns(2)
+            with retention_cols[0]:
+                market_snapshot_hot_retention_days = st.number_input(
+                    "Market Snapshots Hot Retention",
+                    min_value=1,
+                    value=int(config["market_snapshot_hot_retention_days"]),
+                    step=1,
+                )
+                signal_log_hot_retention_days = st.number_input(
+                    "Signal Logs Hot Retention",
+                    min_value=1,
+                    value=int(config["signal_log_hot_retention_days"]),
+                    step=1,
+                )
+                runtime_event_retention_days = st.number_input(
+                    "Runtime Events Retention",
+                    min_value=1,
+                    value=int(config["runtime_event_retention_days"]),
+                    step=1,
+                )
+            with retention_cols[1]:
+                account_snapshot_hot_retention_days = st.number_input(
+                    "Account Snapshots Hot Retention",
+                    min_value=1,
+                    value=int(config["account_snapshot_hot_retention_days"]),
+                    step=1,
+                )
+                reconciliation_hot_retention_days = st.number_input(
+                    "Reconciliation Hot Retention",
+                    min_value=1,
+                    value=int(config["reconciliation_hot_retention_days"]),
+                    step=1,
+                )
             submitted_retention = st.form_submit_button("Save Retention", width='stretch')
         if submitted_retention:
             updated = dict(config)
             updated.update(
                 {
-                    "market_snapshot_retention_days": int(market_snapshot_retention_days),
-                    "signal_log_retention_days": int(signal_log_retention_days),
+                    "archive_enabled": bool(archive_enabled),
+                    "archive_dir": str(archive_dir).strip() or "data/archive",
+                    "archive_format": str(archive_format),
+                    "archive_compression": str(archive_compression),
+                    "market_snapshot_archive_enabled": bool(market_snapshot_archive_enabled),
+                    "signal_log_archive_enabled": bool(signal_log_archive_enabled),
+                    "account_snapshot_archive_enabled": bool(account_snapshot_archive_enabled),
+                    "reconciliation_archive_enabled": bool(reconciliation_archive_enabled),
+                    "market_snapshot_hot_retention_days": int(market_snapshot_hot_retention_days),
+                    "signal_log_hot_retention_days": int(signal_log_hot_retention_days),
                     "runtime_event_retention_days": int(runtime_event_retention_days),
-                    "account_snapshot_retention_days": int(account_snapshot_retention_days),
-                    "reconciliation_retention_days": int(reconciliation_retention_days),
+                    "account_snapshot_hot_retention_days": int(account_snapshot_hot_retention_days),
+                    "reconciliation_hot_retention_days": int(reconciliation_hot_retention_days),
                 }
             )
             if save_config_with_feedback(config, updated, "Saved retention settings to config.json"):

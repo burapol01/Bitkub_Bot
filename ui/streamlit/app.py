@@ -124,6 +124,7 @@ def main() -> None:
         elif selected_page == "Diagnostics":
             ctx = build_dashboard_context(config)
             render_diagnostics_page(
+                config=config,
                 today=today,
                 private_ctx=ctx["private_ctx"],
                 latest_prices=ctx["latest_prices"],

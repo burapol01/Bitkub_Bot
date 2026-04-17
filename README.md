@@ -253,11 +253,19 @@ Example:
     "auto_live_exit",
     "runtime_error"
   ],
-  "market_snapshot_retention_days": 30,
-  "signal_log_retention_days": 30,
+  "archive_enabled": true,
+  "archive_dir": "data/archive",
+  "archive_format": "csv",
+  "archive_compression": "gzip",
+  "market_snapshot_archive_enabled": true,
+  "signal_log_archive_enabled": true,
+  "account_snapshot_archive_enabled": true,
+  "reconciliation_archive_enabled": true,
+  "market_snapshot_hot_retention_days": 90,
+  "signal_log_hot_retention_days": 180,
   "runtime_event_retention_days": 30,
-  "account_snapshot_retention_days": 30,
-  "reconciliation_retention_days": 30,
+  "account_snapshot_hot_retention_days": 90,
+  "reconciliation_hot_retention_days": 90,
   "signal_log_file": "signal_log.csv",
   "trade_log_file": "paper_trade_log.csv",
   "rules": {
@@ -370,19 +378,26 @@ Main tables:
 
 ## Retention
 
-Automatic cleanup currently applies to:
+SQLite is the hot runtime store. Long-term analysis history is archived to disk before old analytical rows are removed from SQLite.
 
-- `market_snapshots`
-- `signal_logs`
-- `runtime_events`
-- `account_snapshots`
-- `reconciliation_results`
+Current phase-1 retention behavior:
+
+- `market_snapshots`, `signal_logs`, `account_snapshots`, and `reconciliation_results` use hot retention plus archive-before-delete
+- `runtime_events` stays short-lived and is still pruned directly
+- archive files are written under `archive_dir` in gzip-compressed CSV form
+- archive metadata is tracked in SQLite so archive and cleanup runs are visible in Diagnostics
 
 Current cleanup triggers:
 
 - startup
 - successful config reload
 - at most once per day during runtime
+
+How to inspect or restore archived data later:
+
+- open the archive directory and load the date-partitioned CSV.GZ files directly
+- the SQLite `retention_archive_runs` table records the archived date range, row count, archive path, and cleanup status
+- if you need to rebuild analytics, read the archive files back into SQLite or a separate analysis database
 
 `paper_trade_logs` are not auto-pruned yet.
 

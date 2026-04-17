@@ -640,12 +640,41 @@ def print_health_snapshot(health: dict):
     latest_cleanup = db_storage.get("latest_cleanup")
     if latest_cleanup:
         print(f"latest_cleanup: {latest_cleanup['created_at']} | {latest_cleanup['message']}")
+    retention_status = db_storage.get("retention_status", {})
+    latest_archive_run = retention_status.get("latest_archive_run")
+    if latest_archive_run:
+        print(
+            "latest_archive: "
+            f"{latest_archive_run.get('completed_at', 'n/a')} | "
+            f"{latest_archive_run.get('table_name', 'n/a')} | "
+            f"{latest_archive_run.get('archive_date', 'n/a')} | "
+            f"rows={latest_archive_run.get('record_count', 0)} | "
+            f"cleanup={latest_archive_run.get('cleanup_status', 'n/a')}"
+        )
+    retention_tables = retention_status.get("tables", [])
+    if retention_tables:
+        print("retention_rows:")
+        for row in retention_tables:
+            print(
+                f"- {row.get('table_name', 'n/a')}: count={row.get('record_count', 0)} | "
+                f"oldest={row.get('oldest_at', 'n/a')} | newest={row.get('newest_at', 'n/a')}"
+            )
 
     section_title("RETENTION")
     retention_days = health.get("retention_days", {})
     if retention_days:
         for key, value in retention_days.items():
             print(f"{key}: {value} days")
+    retention_status = health.get("retention_status", {})
+    if retention_status:
+        archive_run = retention_status.get("latest_archive_run")
+        if archive_run:
+            print(
+                f"archive_latest: {archive_run.get('completed_at', 'n/a')} | "
+                f"{archive_run.get('table_name', 'n/a')} | "
+                f"{archive_run.get('archive_date', 'n/a')} | "
+                f"rows={archive_run.get('record_count', 0)}"
+            )
 
     section_title("PRIVATE API")
     print(f"status: {health['private_api_status']}")

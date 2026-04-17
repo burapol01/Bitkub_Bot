@@ -1,17 +1,71 @@
+import csv
+import gzip
 import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from services.env_service import get_env_path
 from utils.time_utils import coerce_time_text, format_date_text, format_time_text, now_dt
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
+DEFAULT_ARCHIVE_DIR = PROJECT_ROOT / "data" / "archive"
 DB_PATH = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_DIR / "bitkub.db")
 DB_DIR = DB_PATH.parent
 SQLITE_TIMEOUT_SECONDS = 30.0
 SQLITE_BUSY_TIMEOUT_MS = int(SQLITE_TIMEOUT_SECONDS * 1000)
+
+RETENTION_ARCHIVE_FORMAT_CSV = "csv"
+RETENTION_ARCHIVE_COMPRESSION_GZIP = "gzip"
+
+RETENTION_ARCHIVE_TABLES: dict[str, dict[str, str]] = {
+    "market_snapshots": {
+        "timestamp_column": "created_at",
+        "hot_retention_key": "market_snapshot_hot_retention_days",
+        "archive_enabled_key": "market_snapshot_archive_enabled",
+    },
+    "signal_logs": {
+        "timestamp_column": "created_at",
+        "hot_retention_key": "signal_log_hot_retention_days",
+        "archive_enabled_key": "signal_log_archive_enabled",
+    },
+    "account_snapshots": {
+        "timestamp_column": "created_at",
+        "hot_retention_key": "account_snapshot_hot_retention_days",
+        "archive_enabled_key": "account_snapshot_archive_enabled",
+    },
+    "reconciliation_results": {
+        "timestamp_column": "created_at",
+        "hot_retention_key": "reconciliation_hot_retention_days",
+        "archive_enabled_key": "reconciliation_archive_enabled",
+    },
+}
+
+RETENTION_RUNTIME_TABLES: dict[str, dict[str, str]] = {
+    "runtime_events": {
+        "timestamp_column": "created_at",
+        "retention_key": "runtime_event_retention_days",
+    },
+    "trade_journal": {
+        "timestamp_column": "created_at",
+        "retention_key": "runtime_event_retention_days",
+    },
+    "validation_runs": {
+        "timestamp_column": "created_at",
+        "retention_key": "runtime_event_retention_days",
+    },
+    "validation_run_slices": {
+        "timestamp_column": "test_end_at",
+        "retention_key": "runtime_event_retention_days",
+    },
+    "validation_consistency_checks": {
+        "timestamp_column": "created_at",
+        "retention_key": "runtime_event_retention_days",
+    },
+}
 
 
 def configure_sqlite_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
@@ -115,6 +169,28 @@ def init_db():
                 warnings_json TEXT,
                 positions_count INTEGER NOT NULL,
                 exchange_balances_json TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS retention_archive_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                table_name TEXT NOT NULL,
+                archive_date TEXT NOT NULL,
+                archive_start_at TEXT NOT NULL,
+                archive_end_at TEXT NOT NULL,
+                hot_retention_days INTEGER NOT NULL,
+                archive_dir TEXT NOT NULL,
+                archive_path TEXT NOT NULL,
+                archive_format TEXT NOT NULL,
+                archive_compression TEXT NOT NULL,
+                record_count INTEGER NOT NULL DEFAULT 0,
+                archive_status TEXT NOT NULL,
+                cleanup_status TEXT NOT NULL,
+                cleanup_deleted_count INTEGER NOT NULL DEFAULT 0,
+                cleanup_completed_at TEXT,
+                error_message TEXT,
+                UNIQUE(table_name, archive_date)
             );
 
             CREATE TABLE IF NOT EXISTS execution_orders (
@@ -336,6 +412,12 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_validation_consistency_checks_created_symbol
             ON validation_consistency_checks(created_at, symbol, id);
+
+            CREATE INDEX IF NOT EXISTS idx_retention_archive_runs_table_date
+            ON retention_archive_runs(table_name, archive_date DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_retention_archive_runs_completed_at
+            ON retention_archive_runs(completed_at DESC, id DESC);
             """
         )
 
@@ -1212,6 +1294,679 @@ def prune_sqlite_retention(*, retention_days: dict[str, int]) -> dict[str, int]:
         }
 
 
+def _resolve_archive_dir(archive_dir_value: Any) -> Path:
+    archive_dir_text = str(archive_dir_value or "").strip()
+    archive_dir = Path(archive_dir_text or str(DEFAULT_ARCHIVE_DIR))
+    if not archive_dir.is_absolute():
+        archive_dir = PROJECT_ROOT / archive_dir
+    return archive_dir
+
+
+def _archive_file_path(
+    *,
+    archive_dir: Path,
+    table_name: str,
+    archive_date: str,
+    archive_format: str,
+    archive_compression: str,
+) -> Path:
+    year = archive_date[:4]
+    month = archive_date[5:7]
+    suffix = ".csv.gz" if archive_compression == RETENTION_ARCHIVE_COMPRESSION_GZIP else ".csv"
+    if archive_format != RETENTION_ARCHIVE_FORMAT_CSV:
+        raise ValueError(f"unsupported archive format: {archive_format}")
+    return (
+        archive_dir
+        / table_name
+        / year
+        / month
+        / f"{table_name}_{archive_date}{suffix}"
+    )
+
+
+def _csv_value(value: Any) -> Any:
+    return "" if value is None else value
+
+
+def _count_csv_archive_rows(path: Path, *, archive_compression: str) -> int:
+    if not path.exists():
+        return 0
+
+    open_fn = gzip.open if archive_compression == RETENTION_ARCHIVE_COMPRESSION_GZIP else open
+    with open_fn(path, "rt", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        row_count = -1
+        for row_count, _ in enumerate(reader):
+            pass
+    return max(row_count, 0)
+
+
+def _write_csv_archive_file(
+    *,
+    path: Path,
+    rows: list[dict[str, Any]],
+    fieldnames: list[str],
+    archive_compression: str,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    open_fn = gzip.open if archive_compression == RETENTION_ARCHIVE_COMPRESSION_GZIP else open
+
+    try:
+        with open_fn(tmp_path, "wt", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _serialize_archive_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+
+    return {
+        "id": int(row["id"]),
+        "created_at": row["created_at"],
+        "completed_at": row["completed_at"],
+        "table_name": row["table_name"],
+        "archive_date": row["archive_date"],
+        "archive_start_at": row["archive_start_at"],
+        "archive_end_at": row["archive_end_at"],
+        "hot_retention_days": int(row["hot_retention_days"]),
+        "archive_dir": row["archive_dir"],
+        "archive_path": row["archive_path"],
+        "archive_format": row["archive_format"],
+        "archive_compression": row["archive_compression"],
+        "record_count": int(row["record_count"] or 0),
+        "archive_status": row["archive_status"],
+        "cleanup_status": row["cleanup_status"],
+        "cleanup_deleted_count": int(row["cleanup_deleted_count"] or 0),
+        "cleanup_completed_at": row["cleanup_completed_at"],
+        "error_message": row["error_message"],
+    }
+
+
+def _upsert_archive_run(
+    conn: sqlite3.Connection,
+    *,
+    created_at: str,
+    completed_at: str | None,
+    table_name: str,
+    archive_date: str,
+    archive_start_at: str,
+    archive_end_at: str,
+    hot_retention_days: int,
+    archive_dir: str,
+    archive_path: str,
+    archive_format: str,
+    archive_compression: str,
+    record_count: int,
+    archive_status: str,
+    cleanup_status: str,
+    cleanup_deleted_count: int = 0,
+    cleanup_completed_at: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO retention_archive_runs (
+            created_at,
+            completed_at,
+            table_name,
+            archive_date,
+            archive_start_at,
+            archive_end_at,
+            hot_retention_days,
+            archive_dir,
+            archive_path,
+            archive_format,
+            archive_compression,
+            record_count,
+            archive_status,
+            cleanup_status,
+            cleanup_deleted_count,
+            cleanup_completed_at,
+            error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(table_name, archive_date) DO UPDATE SET
+            created_at = COALESCE(retention_archive_runs.created_at, excluded.created_at),
+            completed_at = excluded.completed_at,
+            archive_start_at = excluded.archive_start_at,
+            archive_end_at = excluded.archive_end_at,
+            hot_retention_days = excluded.hot_retention_days,
+            archive_dir = excluded.archive_dir,
+            archive_path = excluded.archive_path,
+            archive_format = excluded.archive_format,
+            archive_compression = excluded.archive_compression,
+            record_count = excluded.record_count,
+            archive_status = excluded.archive_status,
+            cleanup_status = excluded.cleanup_status,
+            cleanup_deleted_count = excluded.cleanup_deleted_count,
+            cleanup_completed_at = excluded.cleanup_completed_at,
+            error_message = excluded.error_message
+        """,
+        (
+            created_at,
+            completed_at,
+            table_name,
+            archive_date,
+            archive_start_at,
+            archive_end_at,
+            int(hot_retention_days),
+            archive_dir,
+            archive_path,
+            archive_format,
+            archive_compression,
+            int(record_count),
+            archive_status,
+            cleanup_status,
+            int(cleanup_deleted_count),
+            cleanup_completed_at,
+            error_message,
+        ),
+    )
+
+
+def _fetch_retention_table_stats(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    timestamp_column: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        f"""
+        SELECT
+            COUNT(*) AS record_count,
+            MIN({timestamp_column}) AS oldest_at,
+            MAX({timestamp_column}) AS newest_at
+        FROM {table_name}
+        """,
+    ).fetchone()
+    return {
+        "record_count": int(row["record_count"] or 0),
+        "oldest_at": row["oldest_at"],
+        "newest_at": row["newest_at"],
+    }
+
+
+def _archive_table_partition(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    timestamp_column: str,
+    hot_retention_days: int,
+    archive_enabled: bool,
+    archive_dir: Path,
+    archive_format: str,
+    archive_compression: str,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    archive_dir_text = str(archive_dir)
+    cutoff_date = format_date_text(now_dt() - timedelta(days=hot_retention_days))
+    cutoff_start_at = f"{cutoff_date} 00:00:00"
+
+    if not archive_enabled:
+        return [
+            {
+                "table_name": table_name,
+                "archive_date": None,
+                "archive_status": "disabled",
+                "cleanup_status": "not_required",
+                "record_count": 0,
+                "cleanup_deleted_count": 0,
+                "archive_path": None,
+                "error_message": None,
+            }
+        ]
+
+    candidate_dates = [
+        str(row["archive_date"])
+        for row in conn.execute(
+            f"""
+            SELECT DISTINCT substr({timestamp_column}, 1, 10) AS archive_date
+            FROM {table_name}
+            WHERE {timestamp_column} < ?
+            ORDER BY archive_date ASC
+            """,
+            (cutoff_start_at,),
+        ).fetchall()
+        if str(row["archive_date"] or "") < cutoff_date
+    ]
+
+    for archive_date in candidate_dates:
+        archive_path = _archive_file_path(
+            archive_dir=archive_dir,
+            table_name=table_name,
+            archive_date=archive_date,
+            archive_format=archive_format,
+            archive_compression=archive_compression,
+        )
+        existing_run = conn.execute(
+            """
+            SELECT *
+            FROM retention_archive_runs
+            WHERE table_name = ? AND archive_date = ?
+            """,
+            (table_name, archive_date),
+        ).fetchone()
+
+        day_start_at, day_end_at = _day_range_bounds(archive_date)
+        rows = [dict(row) for row in conn.execute(
+            f"""
+            SELECT *
+            FROM {table_name}
+            WHERE {timestamp_column} >= ? AND {timestamp_column} < ?
+            ORDER BY id ASC
+            """,
+            (day_start_at, day_end_at),
+        ).fetchall()]
+
+        if not rows and archive_path.exists():
+            record_count = (
+                int(existing_run["record_count"])
+                if existing_run is not None
+                else _count_csv_archive_rows(
+                    archive_path,
+                    archive_compression=archive_compression,
+                )
+            )
+            archive_start_at = (
+                existing_run["archive_start_at"]
+                if existing_run is not None
+                else day_start_at
+            )
+            archive_end_at = (
+                existing_run["archive_end_at"]
+                if existing_run is not None
+                else day_end_at
+            )
+            with conn:
+                _upsert_archive_run(
+                    conn,
+                    created_at=(
+                        existing_run["created_at"]
+                        if existing_run is not None
+                        else format_time_text(now_dt())
+                    ),
+                    completed_at=(
+                        existing_run["completed_at"]
+                        if existing_run is not None
+                        else format_time_text(now_dt())
+                    ),
+                    table_name=table_name,
+                    archive_date=archive_date,
+                    archive_start_at=archive_start_at,
+                    archive_end_at=archive_end_at,
+                    hot_retention_days=hot_retention_days,
+                    archive_dir=archive_dir_text,
+                    archive_path=str(archive_path),
+                    archive_format=archive_format,
+                    archive_compression=archive_compression,
+                    record_count=record_count,
+                    archive_status="archived",
+                    cleanup_status=(
+                        existing_run["cleanup_status"]
+                        if existing_run is not None
+                        else "pending"
+                    ),
+                    cleanup_deleted_count=(
+                        int(existing_run["cleanup_deleted_count"] or 0)
+                        if existing_run is not None
+                        else 0
+                    ),
+                    cleanup_completed_at=(
+                        existing_run["cleanup_completed_at"]
+                        if existing_run is not None
+                        else None
+                    ),
+                    error_message=None,
+                )
+            results.append(
+                {
+                    "table_name": table_name,
+                    "archive_date": archive_date,
+                    "archive_status": "archived",
+                    "cleanup_status": (
+                        existing_run["cleanup_status"]
+                        if existing_run is not None
+                        else "pending"
+                    ),
+                    "record_count": record_count,
+                    "cleanup_deleted_count": (
+                        int(existing_run["cleanup_deleted_count"] or 0)
+                        if existing_run is not None
+                        else 0
+                    ),
+                    "archive_path": str(archive_path),
+                    "error_message": None,
+                }
+            )
+            continue
+
+        if not rows:
+            results.append(
+                {
+                    "table_name": table_name,
+                    "archive_date": archive_date,
+                    "archive_status": "skipped",
+                    "cleanup_status": "not_required",
+                    "record_count": 0,
+                    "cleanup_deleted_count": 0,
+                    "archive_path": str(archive_path),
+                    "error_message": None,
+                }
+            )
+            continue
+
+        if not archive_path.exists():
+            _write_csv_archive_file(
+                path=archive_path,
+                rows=rows,
+                fieldnames=list(rows[0].keys()),
+                archive_compression=archive_compression,
+            )
+
+        archive_start_at = str(rows[0][timestamp_column] or day_start_at)
+        archive_end_at = str(rows[-1][timestamp_column] or day_end_at)
+        record_count = len(rows)
+
+        with conn:
+            _upsert_archive_run(
+                conn,
+                created_at=(
+                    existing_run["created_at"]
+                    if existing_run is not None
+                    else format_time_text(now_dt())
+                ),
+                completed_at=format_time_text(now_dt()),
+                table_name=table_name,
+                archive_date=archive_date,
+                archive_start_at=archive_start_at,
+                archive_end_at=archive_end_at,
+                hot_retention_days=hot_retention_days,
+                archive_dir=archive_dir_text,
+                archive_path=str(archive_path),
+                archive_format=archive_format,
+                archive_compression=archive_compression,
+                record_count=record_count,
+                archive_status="archived",
+                cleanup_status=(
+                    existing_run["cleanup_status"]
+                    if existing_run is not None
+                    else "pending"
+                ),
+                cleanup_deleted_count=(
+                    int(existing_run["cleanup_deleted_count"] or 0)
+                    if existing_run is not None
+                    else 0
+                ),
+                cleanup_completed_at=(
+                    existing_run["cleanup_completed_at"]
+                    if existing_run is not None
+                    else None
+                ),
+                error_message=None,
+            )
+        results.append(
+            {
+                "table_name": table_name,
+                "archive_date": archive_date,
+                "archive_status": "archived",
+                "cleanup_status": (
+                    existing_run["cleanup_status"]
+                    if existing_run is not None
+                    else "pending"
+                ),
+                "record_count": record_count,
+                "cleanup_deleted_count": (
+                    int(existing_run["cleanup_deleted_count"] or 0)
+                    if existing_run is not None
+                    else 0
+                ),
+                "archive_path": str(archive_path),
+                "error_message": None,
+            }
+        )
+
+    return results
+
+
+def archive_sqlite_retention(*, config: dict[str, Any]) -> dict[str, Any]:
+    archive_enabled = bool(config.get("archive_enabled", True))
+    archive_dir = _resolve_archive_dir(config.get("archive_dir"))
+    archive_format = str(config.get("archive_format", RETENTION_ARCHIVE_FORMAT_CSV)).lower()
+    archive_compression = str(
+        config.get("archive_compression", RETENTION_ARCHIVE_COMPRESSION_GZIP)
+    ).lower()
+
+    errors: list[str] = []
+    if archive_format != RETENTION_ARCHIVE_FORMAT_CSV:
+        errors.append(f"unsupported archive format: {archive_format}")
+    if archive_compression not in {"none", RETENTION_ARCHIVE_COMPRESSION_GZIP}:
+        errors.append(f"unsupported archive compression: {archive_compression}")
+
+    table_results: dict[str, list[dict[str, Any]]] = {}
+    archived_total = 0
+    with _connect() as conn:
+        for table_name, spec in RETENTION_ARCHIVE_TABLES.items():
+            table_enabled = bool(config.get(spec["archive_enabled_key"], True))
+            hot_retention_days = int(config.get(spec["hot_retention_key"], 90))
+            if errors or not archive_enabled or not table_enabled:
+                table_results[table_name] = [
+                    {
+                        "table_name": table_name,
+                        "archive_date": None,
+                        "archive_status": "disabled" if not archive_enabled or not table_enabled else "error",
+                        "cleanup_status": "not_required",
+                        "record_count": 0,
+                        "cleanup_deleted_count": 0,
+                        "archive_path": None,
+                        "error_message": "; ".join(errors) if errors else None,
+                    }
+                ]
+                continue
+
+            results = _archive_table_partition(
+                conn,
+                table_name=table_name,
+                timestamp_column=spec["timestamp_column"],
+                hot_retention_days=hot_retention_days,
+                archive_enabled=True,
+                archive_dir=archive_dir,
+                archive_format=archive_format,
+                archive_compression=archive_compression,
+            )
+            table_results[table_name] = results
+            archived_total += sum(
+                int(result.get("record_count", 0) or 0)
+                for result in results
+                if result.get("archive_status") == "archived"
+            )
+
+    return {
+        "archive_enabled": archive_enabled,
+        "archive_dir": str(archive_dir),
+        "archive_format": archive_format,
+        "archive_compression": archive_compression,
+        "archived_total": archived_total,
+        "tables": table_results,
+        "errors": errors,
+    }
+
+
+def _delete_archived_table_partitions(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    timestamp_column: str,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    archive_runs = conn.execute(
+        """
+        SELECT *
+        FROM retention_archive_runs
+        WHERE table_name = ?
+          AND archive_status = 'archived'
+          AND cleanup_status != 'deleted'
+        ORDER BY archive_date ASC, id ASC
+        """,
+        (table_name,),
+    ).fetchall()
+
+    for run in archive_runs:
+        archive_date = str(run["archive_date"])
+        day_start_at, day_end_at = _day_range_bounds(archive_date)
+        with conn:
+            cursor = conn.execute(
+                f"""
+                DELETE FROM {table_name}
+                WHERE {timestamp_column} >= ? AND {timestamp_column} < ?
+                """,
+                (day_start_at, day_end_at),
+            )
+            deleted_count = int(cursor.rowcount or 0)
+            _upsert_archive_run(
+                conn,
+                created_at=str(run["created_at"]),
+                completed_at=str(run["completed_at"] or format_time_text(now_dt())),
+                table_name=table_name,
+                archive_date=archive_date,
+                archive_start_at=str(run["archive_start_at"]),
+                archive_end_at=str(run["archive_end_at"]),
+                hot_retention_days=int(run["hot_retention_days"]),
+                archive_dir=str(run["archive_dir"]),
+                archive_path=str(run["archive_path"]),
+                archive_format=str(run["archive_format"]),
+                archive_compression=str(run["archive_compression"]),
+                record_count=int(run["record_count"] or 0),
+                archive_status=str(run["archive_status"]),
+                cleanup_status="deleted",
+                cleanup_deleted_count=deleted_count,
+                cleanup_completed_at=format_time_text(now_dt()),
+                error_message=None,
+            )
+        results.append(
+            {
+                "table_name": table_name,
+                "archive_date": archive_date,
+                "deleted_count": deleted_count,
+                "archive_path": str(run["archive_path"]),
+            }
+        )
+
+    return results
+
+
+def cleanup_sqlite_retention(*, config: dict[str, Any]) -> dict[str, Any]:
+    archive_summary = archive_sqlite_retention(config=config)
+    deleted_rows: dict[str, int] = {}
+    table_results: dict[str, list[dict[str, Any]]] = {}
+    with _connect() as conn:
+        for table_name, spec in RETENTION_ARCHIVE_TABLES.items():
+            table_delete_results = _delete_archived_table_partitions(
+                conn,
+                table_name=table_name,
+                timestamp_column=spec["timestamp_column"],
+            )
+            table_results[table_name] = table_delete_results
+            deleted_rows[table_name] = sum(
+                int(result.get("deleted_count", 0) or 0)
+                for result in table_delete_results
+            )
+        for table_name, spec in RETENTION_RUNTIME_TABLES.items():
+            deleted_rows[table_name] = _prune_table_older_than(
+                conn,
+                table=table_name,
+                timestamp_column=spec["timestamp_column"],
+                retention_days=int(config.get(spec["retention_key"], 30)),
+            )
+
+    return {
+        "archive": archive_summary,
+        "deleted_rows": deleted_rows,
+        "archived_total": int(archive_summary.get("archived_total", 0) or 0),
+        "deleted_total": sum(deleted_rows.values()),
+        "archive_delete_results": table_results,
+    }
+
+
+def fetch_retention_status_summary() -> dict[str, Any]:
+    table_names = ("market_snapshots", "signal_logs", "account_snapshots", "reconciliation_results", "runtime_events")
+    timestamp_columns = {
+        "market_snapshots": "created_at",
+        "signal_logs": "created_at",
+        "account_snapshots": "created_at",
+        "reconciliation_results": "created_at",
+        "runtime_events": "created_at",
+    }
+
+    with _connect() as conn:
+        tables: list[dict[str, Any]] = []
+        for table_name in table_names:
+            stats = _fetch_retention_table_stats(
+                conn,
+                table_name=table_name,
+                timestamp_column=timestamp_columns[table_name],
+            )
+            latest_archive_row = conn.execute(
+                """
+                SELECT *
+                FROM retention_archive_runs
+                WHERE table_name = ?
+                ORDER BY archive_date DESC, id DESC
+                LIMIT 1
+                """,
+                (table_name,),
+            ).fetchone()
+            latest_archive = _serialize_archive_run(latest_archive_row)
+            tables.append(
+                {
+                    "table_name": table_name,
+                    "record_count": stats["record_count"],
+                    "oldest_at": stats["oldest_at"],
+                    "newest_at": stats["newest_at"],
+                    "latest_archive_run": latest_archive,
+                }
+            )
+
+        latest_archive_overall = conn.execute(
+            """
+            SELECT *
+            FROM retention_archive_runs
+            WHERE archive_status = 'archived'
+            ORDER BY completed_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        latest_cleanup = conn.execute(
+            """
+            SELECT created_at, message, details_json
+            FROM runtime_events
+            WHERE event_type = 'sqlite_retention_cleanup'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    return {
+        "tables": tables,
+        "latest_archive_run": _serialize_archive_run(latest_archive_overall),
+        "latest_cleanup": (
+            {
+                "created_at": latest_cleanup["created_at"],
+                "message": latest_cleanup["message"],
+                "details": _load_json(latest_cleanup["details_json"], {}),
+            }
+            if latest_cleanup
+            else None
+        ),
+    }
+
+
 def _load_json(value: str | None, default: Any):
     if value is None:
         return default
@@ -1754,6 +2509,7 @@ def fetch_db_maintenance_summary() -> dict[str, Any]:
             if latest_cleanup
             else None
         ),
+        "retention_status": fetch_retention_status_summary(),
     }
 
 
@@ -2703,6 +3459,7 @@ def fetch_diagnostics_page_dataset(
                 else None
             ),
         },
+        "retention_status": fetch_retention_status_summary(),
         "summary": {
             "latest_account_snapshot": (
                 {
