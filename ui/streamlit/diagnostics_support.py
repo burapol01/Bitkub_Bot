@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
 from typing import Any
 
 import streamlit as st
 
 from services.account_service import account_snapshot_errors, build_live_holdings_snapshot
+from services.audit_service import audit_event
 from services.backup_service import (
     create_runtime_backup,
     latest_runtime_backup_summary,
@@ -23,7 +25,7 @@ from services.reconciliation_service import summarize_live_reconciliation
 from services.telegram_service import telegram_settings_snapshot
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
 from ui.streamlit.strategy_support import evaluate_fee_guardrail
-from utils.time_utils import now_text
+from utils.time_utils import now_dt, now_text
 
 
 def classify_runtime_event(row: dict[str, Any]) -> dict[str, Any]:
@@ -165,6 +167,22 @@ def _runtime_event_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+def _audit_event_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "created_at": row.get("created_at"),
+            "action_type": row.get("action_type"),
+            "actor_type": row.get("actor_type"),
+            "source": row.get("source"),
+            "target": row.get("target_id") or row.get("target_type"),
+            "symbol": row.get("symbol"),
+            "status": row.get("status"),
+            "message": row.get("message"),
+        }
+        for row in rows
+    ]
+
+
 @st.cache_data(ttl=10, show_spinner=False)
 def _cached_logs_page_payload(today: str) -> dict[str, Any]:
     dataset = fetch_logs_page_dataset(today=today)
@@ -180,6 +198,7 @@ def _cached_logs_page_payload(today: str) -> dict[str, Any]:
         ],
         "telegram_rows": list(dataset.get("telegram_rows") or []),
         "telegram_command_rows": list(dataset.get("telegram_command_rows") or []),
+        "audit_rows": list(dataset.get("audit_rows") or []),
         "today_reporting": dict(dataset.get("today_reporting") or {}),
     }
 
@@ -356,6 +375,17 @@ def _run_retention_action(*, config: dict[str, Any], action: str) -> None:
                 message=f"SQLite retention archive completed; archived {archived_total} records",
                 details=summary,
             )
+            audit_event(
+                action_type="retention_archive",
+                actor_type="ui",
+                source="streamlit_diagnostics",
+                target_type="sqlite",
+                target_id="retention",
+                status="failed" if errors else "succeeded",
+                message="SQLite retention archive completed",
+                reason='; '.join(errors) if errors else None,
+                metadata=summary,
+            )
         elif action == "cleanup":
             summary = cleanup_sqlite_retention(config=config)
             archived_total = int(summary.get("archived_total", 0) or 0)
@@ -385,6 +415,17 @@ def _run_retention_action(*, config: dict[str, Any], action: str) -> None:
                 ),
                 details=summary,
             )
+            audit_event(
+                action_type="retention_cleanup",
+                actor_type="ui",
+                source="streamlit_diagnostics",
+                target_type="sqlite",
+                target_id="retention",
+                status="failed" if archive_errors else "succeeded",
+                message="SQLite retention cleanup completed",
+                reason='; '.join(archive_errors) if archive_errors else None,
+                metadata=summary,
+            )
         else:
             raise ValueError(f"unsupported retention action: {action}")
 
@@ -395,6 +436,17 @@ def _run_retention_action(*, config: dict[str, Any], action: str) -> None:
             title="Retention maintenance failed",
             lines=[str(e)],
             tone="error",
+        )
+        audit_event(
+            action_type=("retention_archive" if action == "archive" else "retention_cleanup"),
+            actor_type="ui",
+            source="streamlit_diagnostics",
+            target_type="sqlite",
+            target_id="retention",
+            status="failed",
+            message="Retention maintenance failed",
+            reason=str(e),
+            metadata={"action": action},
         )
         st.error(str(e))
 
@@ -448,6 +500,7 @@ def render_logs_page(*, config: dict[str, Any], today: str) -> None:
     error_rows = list(logs_payload.get("error_rows") or [])
     telegram_rows = list(logs_payload.get("telegram_rows") or [])
     telegram_command_rows = list(logs_payload.get("telegram_command_rows") or [])
+    audit_rows = list(logs_payload.get("audit_rows") or [])
     telegram_settings = telegram_settings_snapshot(config)
     today_reporting = dict(logs_payload.get("today_reporting") or {})
     paper_realized_today = float(today_reporting.get("paper_pnl_thb", 0.0) or 0.0)
@@ -644,6 +697,41 @@ def render_logs_page(*, config: dict[str, Any], today: str) -> None:
             st.json(error_detail_rows, expanded=False)
         else:
             st.caption("No error details to show.")
+
+    audit_action_types = ["ALL"] + sorted({str(row.get("action_type") or "audit") for row in audit_rows})
+    audit_statuses = ["ALL"] + sorted({str(row.get("status") or "unknown") for row in audit_rows})
+    audit_symbols = ["ALL"] + sorted({str(row.get("symbol") or "") for row in audit_rows if str(row.get("symbol") or "")})
+    audit_filter_cols = st.columns(4)
+    with audit_filter_cols[0]:
+        selected_audit_action = st.selectbox("Audit Action Filter", audit_action_types, index=0, key="logs_audit_action_filter")
+    with audit_filter_cols[1]:
+        selected_audit_status = st.selectbox("Audit Status Filter", audit_statuses, index=0, key="logs_audit_status_filter")
+    with audit_filter_cols[2]:
+        selected_audit_symbol = st.selectbox("Audit Symbol Filter", audit_symbols, index=0, key="logs_audit_symbol_filter")
+    with audit_filter_cols[3]:
+        recent_only = st.checkbox("Recent Audit Only (24h)", value=True, key="logs_audit_recent_only")
+
+    audit_cutoff = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    filtered_audit_rows = [
+        row
+        for row in audit_rows
+        if (selected_audit_action == "ALL" or str(row.get("action_type") or "audit") == selected_audit_action)
+        and (selected_audit_status == "ALL" or str(row.get("status") or "unknown") == selected_audit_status)
+        and (selected_audit_symbol == "ALL" or str(row.get("symbol") or "") == selected_audit_symbol)
+        and (not recent_only or str(row.get("created_at") or "") >= audit_cutoff)
+    ]
+
+    render_section_intro("Audit Trail", "Structured operator and system actions live here. Filter this table before falling back to broader runtime history.", "Audit")
+    if filtered_audit_rows:
+        st.dataframe(
+            _audit_event_table_rows(filtered_audit_rows),
+            width='stretch',
+            hide_index=True,
+        )
+        with st.expander("Audit Details", expanded=False):
+            st.json(filtered_audit_rows[:50], expanded=False)
+    else:
+        st.caption("No audit events match the selected filters.")
 
     log_categories = ["ALL"] + sorted({str(row.get("category") or "General") for row in historical_rows})
     selected_category = st.selectbox("Log Category Filter", log_categories, index=0, key="logs_category_filter")

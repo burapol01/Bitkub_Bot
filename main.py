@@ -74,6 +74,11 @@ from services.execution_service import (
     validate_live_sell_request_guardrails,
     validate_manual_live_order_guardrails,
 )
+from services.audit_service import (
+    audit_config_change,
+    audit_event,
+    new_correlation_id,
+)
 from services.log_service import (
     ensure_signal_log_file,
     ensure_trade_log_file,
@@ -190,6 +195,60 @@ def should_queue_config_reload_telegram_notification(*, source: str) -> bool:
 def should_queue_safety_pause_telegram_notification(*, source: str) -> bool:
     normalized_source = str(source or "").strip().lower()
     return normalized_source not in {"telegram", "telegram_confirmation"}
+
+
+def audit_actor_type_from_source(source: str) -> str:
+    normalized_source = str(source or "").strip().lower()
+    if normalized_source.startswith("telegram"):
+        return "telegram"
+    if normalized_source in {"ui", "streamlit_ui"}:
+        return "ui"
+    if "hotkey" in normalized_source or normalized_source in {"console", "operator", "manual"}:
+        return "manual"
+    return "system"
+
+
+def audit_runtime_mode_change(
+    *,
+    old_config: dict[str, Any] | None,
+    new_config: dict[str, Any],
+    actor_type: str,
+    source: str,
+    message: str,
+    actor_id: str | None = None,
+    correlation_id: str | None = None,
+) -> None:
+    if old_config is None:
+        old_state = None
+    else:
+        old_state = {
+            "mode": old_config.get("mode"),
+            "live_execution_enabled": bool(old_config.get("live_execution_enabled", False)),
+            "live_auto_entry_enabled": bool(old_config.get("live_auto_entry_enabled", False)),
+            "live_auto_exit_enabled": bool(old_config.get("live_auto_exit_enabled", False)),
+        }
+    new_state = {
+        "mode": new_config.get("mode"),
+        "live_execution_enabled": bool(new_config.get("live_execution_enabled", False)),
+        "live_auto_entry_enabled": bool(new_config.get("live_auto_entry_enabled", False)),
+        "live_auto_exit_enabled": bool(new_config.get("live_auto_exit_enabled", False)),
+    }
+    if old_state == new_state:
+        return
+
+    audit_event(
+        action_type="mode_change",
+        actor_type=actor_type,
+        actor_id=actor_id,
+        source=source,
+        target_type="runtime_mode",
+        target_id="engine",
+        old_value=old_state,
+        new_value=new_state,
+        status="succeeded",
+        message=message,
+        correlation_id=correlation_id,
+    )
 
 
 def _unsupported_live_entry_reason(*, source: str, error_message: str | None = None) -> str:
@@ -411,6 +470,8 @@ def main():
     manual_pause, restore_messages = load_runtime_state(
         last_zones, positions, daily_stats, cooldowns
     )
+    runtime_run_id = new_correlation_id("engine_run")
+    shutdown_reason = "operator_quit"
     safety_pause = False
     safety_pause_lines: list[str] | None = None
     latest_prices: dict[str, float] = {}
@@ -612,6 +673,19 @@ def main():
             message=notice,
             details={"lines": safety_pause_lines},
         )
+        audit_event(
+            action_type="safety_pause",
+            actor_type="system",
+            source="startup",
+            target_type="runtime_state",
+            target_id="safety_pause",
+            old_value={"safety_pause": False},
+            new_value={"safety_pause": True},
+            status="succeeded",
+            message=notice,
+            correlation_id=runtime_run_id,
+            metadata={"lines": safety_pause_lines},
+        )
 
     startup_reconciliation_warnings = reconcile_positions_with_balances(
         positions, account_snapshot
@@ -647,6 +721,21 @@ def main():
                 "mode": startup_mode,
             },
         )
+        audit_event(
+            action_type="reconciliation_review",
+            actor_type="system",
+            source="startup",
+            target_type="positions",
+            target_id="runtime_state",
+            status="failed",
+            message=notice,
+            correlation_id=runtime_run_id,
+            metadata={
+                "lines": reconciliation_lines,
+                "safety_pause": reconciliation_requires_safety_pause(startup_mode),
+                "mode": startup_mode,
+            },
+        )
 
     startup_execution_orders = fetch_open_execution_orders()
     if startup_execution_orders:
@@ -663,6 +752,35 @@ def main():
                 message="Open execution orders require reconciliation review",
                 details={"warnings": startup_execution_warnings},
             )
+            audit_event(
+                action_type="execution_reconciliation",
+                actor_type="system",
+                source="startup",
+                target_type="execution_orders",
+                target_id="open",
+                status="failed",
+                message="Open execution orders require reconciliation review",
+                correlation_id=runtime_run_id,
+                metadata={"warnings": startup_execution_warnings},
+            )
+
+    audit_event(
+        action_type="runtime_startup",
+        actor_type="system",
+        source="startup",
+        target_type="engine",
+        target_id="main",
+        status="succeeded",
+        message="Bitkub engine startup completed",
+        correlation_id=runtime_run_id,
+        metadata={
+            "mode": startup_mode,
+            "manual_pause": manual_pause,
+            "safety_pause": safety_pause,
+            "private_api_status": private_api_status,
+            "version": version_snapshot,
+        },
+    )
 
     def persist_state():
         save_runtime_state(
@@ -960,12 +1078,14 @@ def main():
 
     def create_telegram_confirmation(*, chat_id: str, action: str, payload: dict, summary_lines: list[str]) -> list[str]:
         cleanup_pending_telegram_confirms()
+        correlation_id = new_correlation_id(f"telegram_{action}")
         code = secrets.token_hex(3).upper()
         pending_telegram_confirms[str(chat_id)] = {
             "code": code,
             "action": action,
             "payload": payload,
             "expires_at": time.time() + telegram_confirm_ttl_seconds,
+            "correlation_id": correlation_id,
         }
         return [
             f"Confirmation required for {action}.",
@@ -1002,12 +1122,30 @@ def main():
         updated_config: dict,
         event_type: str,
         success_title: str,
+        source: str = "telegram_confirmation",
+        actor_type: str = "telegram",
+        actor_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> tuple[bool, str, list[str]]:
         nonlocal config, notice, notice_lines, report_filter_symbol
         old_config = config
         saved_config, errors = save_config(updated_config)
         if errors or saved_config is None:
             failed_lines = [str(error) for error in errors] if errors else ["Config save failed."]
+            audit_event(
+                action_type="config_update",
+                actor_type=actor_type,
+                actor_id=actor_id,
+                source=source,
+                target_type="config",
+                target_id="active",
+                new_value=updated_config,
+                status="failed",
+                message="Config update failed",
+                reason="; ".join(failed_lines),
+                correlation_id=correlation_id,
+                metadata={"event_type": event_type},
+            )
             return False, "Config update failed", failed_lines
 
         config = saved_config
@@ -1030,6 +1168,29 @@ def main():
             message=success_title,
             details={"changes": change_lines},
         )
+        audit_config_change(
+            old_config=old_config,
+            new_config=saved_config,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            source=source,
+            message=success_title,
+            correlation_id=correlation_id,
+            action_type="config_update",
+            metadata={
+                "event_type": event_type,
+                "change_lines": change_lines,
+            },
+        )
+        audit_runtime_mode_change(
+            old_config=old_config,
+            new_config=saved_config,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            source=source,
+            correlation_id=correlation_id,
+            message="Runtime mode controls updated",
+        )
         persist_state()
         return True, success_title, change_lines
 
@@ -1040,12 +1201,50 @@ def main():
         amount_thb: float,
         amount_coin: float,
         rate: float,
+        chat_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> tuple[bool, str, list[str]]:
         nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
+        order_request = {
+            "symbol": symbol,
+            "side": side,
+            "amount_thb": float(amount_thb),
+            "amount_coin": float(amount_coin),
+            "rate": float(rate),
+            "order_type": "limit",
+        }
+        correlation_id = correlation_id or new_correlation_id("telegram_manual_order")
+        audit_event(
+            action_type="manual_order",
+            actor_type="telegram",
+            actor_id=chat_id,
+            source="telegram",
+            target_type="order_request",
+            target_id=symbol,
+            symbol=symbol,
+            new_value=order_request,
+            status="started",
+            message="Telegram manual live order requested",
+            correlation_id=correlation_id,
+        )
         if private_client is None:
             failed_lines = [
                 "Set BITKUB_API_KEY and BITKUB_API_SECRET in .env before using Telegram live order controls."
             ]
+            audit_event(
+                action_type="manual_order",
+                actor_type="telegram",
+                actor_id=chat_id,
+                source="telegram",
+                target_type="order_request",
+                target_id=symbol,
+                symbol=symbol,
+                new_value=order_request,
+                status="failed",
+                message="Telegram manual live order requires private API credentials",
+                reason="missing_private_api_credentials",
+                correlation_id=correlation_id,
+            )
             return False, "Telegram live order requires private API credentials", failed_lines
 
         try:
@@ -1058,6 +1257,20 @@ def main():
                 severity="error",
                 message="Telegram manual live order failed while refreshing account snapshot",
                 details={"errors": failed_lines, "symbol": symbol, "side": side},
+            )
+            audit_event(
+                action_type="manual_order",
+                actor_type="telegram",
+                actor_id=chat_id,
+                source="telegram",
+                target_type="order_request",
+                target_id=symbol,
+                symbol=symbol,
+                new_value=order_request,
+                status="failed",
+                message="Telegram manual live order failed while refreshing account snapshot",
+                reason="; ".join(failed_lines),
+                correlation_id=correlation_id,
             )
             return False, "Telegram manual live order failed", failed_lines
 
@@ -1117,6 +1330,21 @@ def main():
                 message="Telegram manual live order blocked by guardrails",
                 details={"errors": failed_lines, "symbol": symbol, "side": side},
             )
+            audit_event(
+                action_type="manual_order",
+                actor_type="telegram",
+                actor_id=chat_id,
+                source="telegram",
+                target_type="order_request",
+                target_id=symbol,
+                symbol=symbol,
+                new_value=order_request,
+                status="failed",
+                message="Telegram manual live order blocked by guardrails",
+                reason="; ".join(failed_lines),
+                correlation_id=correlation_id,
+                metadata={"guardrails": live_guardrails},
+            )
             return False, "Telegram manual live order blocked by guardrails", failed_lines
         except Exception as e:
             failed_lines = [str(e)]
@@ -1126,6 +1354,20 @@ def main():
                 severity="error",
                 message="Telegram manual live order submission failed",
                 details={"errors": failed_lines, "symbol": symbol, "side": side},
+            )
+            audit_event(
+                action_type="manual_order",
+                actor_type="telegram",
+                actor_id=chat_id,
+                source="telegram",
+                target_type="order_request",
+                target_id=symbol,
+                symbol=symbol,
+                new_value=order_request,
+                status="failed",
+                message="Telegram manual live order submission failed",
+                reason="; ".join(failed_lines),
+                correlation_id=correlation_id,
             )
             return False, "Telegram manual live order submission failed", failed_lines
 
@@ -1180,6 +1422,25 @@ def main():
                 "state": order_record["state"],
             },
         )
+        audit_event(
+            action_type="manual_order",
+            actor_type="telegram",
+            actor_id=chat_id,
+            source="telegram",
+            target_type="execution_order",
+            target_id=str(execution_order_id),
+            symbol=order_record["symbol"],
+            new_value={
+                "request": order_request,
+                "execution_order_id": execution_order_id,
+                "state": order_record["state"],
+                "exchange_order_id": order_record.get("exchange_order_id"),
+            },
+            status="succeeded",
+            message="Telegram manual live order submitted",
+            correlation_id=correlation_id,
+            metadata={"guardrails": order_record.get("guardrails")},
+        )
         return True, "Telegram manual live order submitted", success_lines
 
     def execute_telegram_confirmation(*, chat_id: str, code: str) -> tuple[str, list[str], str]:
@@ -1201,15 +1462,20 @@ def main():
         pending_telegram_confirms.pop(str(chat_id), None)
         action = str(pending.get("action") or "")
         payload = dict(pending.get("payload") or {})
+        correlation_id = str(pending.get("correlation_id") or "").strip() or None
 
         if action == "reload":
-            reload_config_action(source="telegram_confirmation")
+            reload_config_action(
+                source="telegram_confirmation",
+                actor_id=chat_id,
+                correlation_id=correlation_id,
+            )
             return notice or "Config reload completed", notice_lines or ["Config reload finished."], "processed"
         if action == "pause":
-            set_manual_pause_action(True)
+            set_manual_pause_action(True, source="telegram_confirmation")
             return notice or "Manual pause enabled", notice_lines or ["Trading loop is manually paused."], "processed"
         if action == "resume":
-            set_manual_pause_action(False)
+            set_manual_pause_action(False, source="telegram_confirmation")
             return notice or "Manual pause cleared", notice_lines or ["Trading loop resumed."], "processed"
         if action == "cancel":
             execution_order_id = int(payload.get("execution_order_id", 0) or 0)
@@ -1240,6 +1506,8 @@ def main():
                 amount_thb=float(payload.get("amount_thb", 0.0) or 0.0),
                 amount_coin=float(payload.get("amount_coin", 0.0) or 0.0),
                 rate=float(payload.get("rate", 0.0) or 0.0),
+                chat_id=chat_id,
+                correlation_id=correlation_id,
             )
             return result_title, result_lines, "processed" if success else "failed"
         if action == "sell":
@@ -1249,6 +1517,8 @@ def main():
                 amount_thb=float(payload.get("amount_thb", 0.0) or 0.0),
                 amount_coin=float(payload.get("amount_coin", 0.0) or 0.0),
                 rate=float(payload.get("rate", 0.0) or 0.0),
+                chat_id=chat_id,
+                correlation_id=correlation_id,
             )
             return result_title, result_lines, "processed" if success else "failed"
         if action == "set_config":
@@ -1259,6 +1529,10 @@ def main():
                 updated_config=updated_config,
                 event_type="telegram_set_config",
                 success_title="Config updated from Telegram",
+                source="telegram_confirmation",
+                actor_type="telegram",
+                actor_id=chat_id,
+                correlation_id=correlation_id,
             )
             return result_title, result_lines, "processed" if success else "failed"
         if action == "promote_symbol":
@@ -1279,6 +1553,10 @@ def main():
                 updated_config=updated,
                 event_type="telegram_promote_symbol",
                 success_title=f"Promoted {symbol} into live rules",
+                source="telegram_confirmation",
+                actor_type="telegram",
+                actor_id=chat_id,
+                correlation_id=correlation_id,
             )
             return result_title, result_lines, "processed" if success else "failed"
         if action == "set_rule":
@@ -1306,6 +1584,10 @@ def main():
                 updated_config=updated,
                 event_type="telegram_set_rule",
                 success_title=f"Saved rule for {symbol} from Telegram",
+                source="telegram_confirmation",
+                actor_type="telegram",
+                actor_id=chat_id,
+                correlation_id=correlation_id,
             )
             return result_title, result_lines, "processed" if success else "failed"
 
@@ -1856,6 +2138,7 @@ def main():
     def run_sqlite_retention_cleanup(*, source: str, force: bool):
         nonlocal last_retention_cleanup_day
         current_day = today_key()
+        correlation_id = new_correlation_id("retention_cleanup")
 
         if not force and last_retention_cleanup_day == current_day:
             return
@@ -1872,6 +2155,18 @@ def main():
                     "source": source,
                     "exception": str(e),
                 },
+            )
+            audit_event(
+                action_type="retention_cleanup",
+                actor_type=audit_actor_type_from_source(source),
+                source=source,
+                target_type="sqlite",
+                target_id="retention",
+                status="failed",
+                message="SQLite retention cleanup failed",
+                reason=str(e),
+                correlation_id=correlation_id,
+                metadata={"force": force},
             )
             return
 
@@ -1891,6 +2186,24 @@ def main():
                 ),
                 details={
                     "source": source,
+                    "deleted_rows": deleted_rows,
+                    "deleted_total": deleted_total,
+                    "archived_total": archived_total,
+                    "archive": cleanup_summary.get("archive", {}),
+                    "archive_delete_results": cleanup_summary.get("archive_delete_results", {}),
+                },
+            )
+            audit_event(
+                action_type="retention_cleanup",
+                actor_type=audit_actor_type_from_source(source),
+                source=source,
+                target_type="sqlite",
+                target_id="retention",
+                status="succeeded",
+                message="SQLite retention cleanup completed",
+                correlation_id=correlation_id,
+                metadata={
+                    "force": force,
                     "deleted_rows": deleted_rows,
                     "deleted_total": deleted_total,
                     "archived_total": archived_total,
@@ -1981,6 +2294,19 @@ def main():
                     message=reason,
                     details={"lines": safety_pause_lines, "immediate": immediate, "source": source},
                 )
+                audit_event(
+                    action_type="safety_pause",
+                    actor_type=audit_actor_type_from_source(source),
+                    source=source,
+                    target_type="runtime_state",
+                    target_id="safety_pause",
+                    old_value={"safety_pause": False},
+                    new_value={"safety_pause": True},
+                    status="succeeded",
+                    message=reason,
+                    correlation_id=runtime_run_id,
+                    metadata={"lines": safety_pause_lines, "immediate": immediate},
+                )
                 if should_queue_safety_pause_telegram_notification(source=source):
                     notify_telegram(
                         "safety_pause",
@@ -2003,10 +2329,17 @@ def main():
                 safety_pause = False
                 safety_pause_lines = None
 
-            def reload_config_action(*, source: str = "console"):
+            def reload_config_action(
+                *,
+                source: str = "console",
+                actor_id: str | None = None,
+                correlation_id: str | None = None,
+            ):
                 nonlocal config, notice, notice_lines, report_filter_symbol
                 old_config = config
                 new_config, errors = reload_config()
+                actor_type = audit_actor_type_from_source(source)
+                correlation_id = correlation_id or new_correlation_id("config_reload")
 
                 if errors or new_config is None:
                     activate_safety_pause(
@@ -2014,6 +2347,18 @@ def main():
                         errors,
                         immediate=True,
                         source=source,
+                    )
+                    audit_event(
+                        action_type="config_reload",
+                        actor_type=actor_type,
+                        source=source,
+                        target_type="config",
+                        target_id="active",
+                        status="failed",
+                        message="Config reload rejected",
+                        reason="; ".join(errors),
+                        actor_id=actor_id,
+                        correlation_id=correlation_id,
                     )
                     return True
 
@@ -2030,6 +2375,19 @@ def main():
                         ],
                         immediate=True,
                         source=source,
+                    )
+                    audit_event(
+                        action_type="config_reload",
+                        actor_type=actor_type,
+                        source=source,
+                        target_type="config",
+                        target_id="active",
+                        status="failed",
+                        message="Config reload rejected because open positions would become unmanaged",
+                        reason="removed_symbols_with_open_positions",
+                        actor_id=actor_id,
+                        correlation_id=correlation_id,
+                        metadata={"removed_symbols": removed_symbols},
                     )
                     return True
 
@@ -2056,6 +2414,26 @@ def main():
                     severity="info",
                     message=notice,
                     details={"changes": change_lines},
+                )
+                audit_config_change(
+                    old_config=old_config,
+                    new_config=new_config,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    source=source,
+                    message=notice,
+                    correlation_id=correlation_id,
+                    action_type="config_reload",
+                    metadata={"change_lines": change_lines},
+                )
+                audit_runtime_mode_change(
+                    old_config=old_config,
+                    new_config=new_config,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    source=source,
+                    correlation_id=correlation_id,
+                    message="Runtime mode controls reloaded",
                 )
                 if should_queue_config_reload_telegram_notification(source=source):
                     notify_telegram(
@@ -2086,13 +2464,26 @@ def main():
                 target_state = not manual_pause
                 return set_manual_pause_action(target_state)
 
-            def set_manual_pause_action(target_state: bool):
+            def set_manual_pause_action(target_state: bool, *, source: str = "console"):
                 nonlocal manual_pause, notice, notice_lines
                 if not target_state and safety_pause:
                     notice = "Manual resume blocked while safety pause is active"
                     notice_lines = safety_pause_lines or [
                         "Fix the safety condition and press R to clear the safety pause."
                     ]
+                    audit_event(
+                        action_type="manual_pause_change",
+                        actor_type=audit_actor_type_from_source(source),
+                        source=source,
+                        target_type="runtime_state",
+                        target_id="manual_pause",
+                        old_value={"manual_pause": manual_pause},
+                        new_value={"manual_pause": target_state},
+                        status="failed",
+                        message=notice,
+                        reason="safety_pause_active",
+                        correlation_id=runtime_run_id,
+                    )
                     return True
 
                 if manual_pause == target_state:
@@ -2104,6 +2495,7 @@ def main():
                     notice_lines = None
                     return True
 
+                previous_state = manual_pause
                 manual_pause = target_state
                 notice = "Manual pause enabled" if manual_pause else "Manual pause cleared"
                 notice_lines = None
@@ -2113,6 +2505,18 @@ def main():
                     severity="info",
                     message=notice,
                     details={"manual_pause": manual_pause},
+                )
+                audit_event(
+                    action_type="manual_pause_change",
+                    actor_type=audit_actor_type_from_source(source),
+                    source=source,
+                    target_type="runtime_state",
+                    target_id="manual_pause",
+                    old_value={"manual_pause": previous_state},
+                    new_value={"manual_pause": manual_pause},
+                    status="succeeded",
+                    message=notice,
+                    correlation_id=runtime_run_id,
                 )
                 persist_state()
                 return True
@@ -2330,11 +2734,23 @@ def main():
 
             def import_wallet_positions_action():
                 nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
+                correlation_id = new_correlation_id("wallet_import")
                 if safety_pause:
                     notice = "Wallet import blocked while safety pause is active"
                     notice_lines = safety_pause_lines or [
                         "Fix the safety condition and press R before importing balances into paper positions."
                     ]
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="safety_pause_active",
+                        correlation_id=correlation_id,
+                    )
                     return True
 
                 if trading_mode != "paper":
@@ -2343,6 +2759,18 @@ def main():
                         "Switch mode to paper in config.json, press R, then import wallet balances again.",
                         "Read-only and live-disabled modes do not manage imported paper positions.",
                     ]
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="trading_mode_not_paper",
+                        correlation_id=correlation_id,
+                        metadata={"mode": trading_mode},
+                    )
                     return True
 
                 if private_client is None:
@@ -2350,6 +2778,17 @@ def main():
                     notice_lines = [
                         "Set BITKUB_API_KEY and BITKUB_API_SECRET in .env before importing wallet balances."
                     ]
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="missing_private_api_credentials",
+                        correlation_id=correlation_id,
+                    )
                     return True
 
                 try:
@@ -2363,6 +2802,17 @@ def main():
                         severity="error",
                         message=notice,
                         details={"errors": notice_lines},
+                    )
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
                     )
                     return True
 
@@ -2393,6 +2843,18 @@ def main():
                         message=notice,
                         details={"status": private_api_status},
                     )
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="no_readable_balances",
+                        correlation_id=correlation_id,
+                        metadata={"private_api_status": private_api_status},
+                    )
                     return True
 
                 try:
@@ -2406,6 +2868,17 @@ def main():
                         severity="error",
                         message=notice,
                         details={"errors": notice_lines},
+                    )
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
                     )
                     return True
 
@@ -2466,6 +2939,17 @@ def main():
                             "skipped": skipped_lines,
                         },
                     )
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="succeeded",
+                        message=notice,
+                        correlation_id=correlation_id,
+                        metadata={"imported": imported_lines, "skipped": skipped_lines},
+                    )
                 else:
                     notice = "No wallet balances were imported into paper positions"
                     notice_lines = skipped_lines or [
@@ -2477,6 +2961,18 @@ def main():
                         severity="warning",
                         message=notice,
                         details={"skipped": skipped_lines},
+                    )
+                    audit_event(
+                        action_type="wallet_import",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        status="failed",
+                        message=notice,
+                        reason="nothing_imported",
+                        correlation_id=correlation_id,
+                        metadata={"skipped": skipped_lines},
                     )
 
                 persist_state()
@@ -2512,16 +3008,63 @@ def main():
                     message=notice,
                     details={"removed_symbols": removed_symbols},
                 )
+                audit_event(
+                    action_type="clear_paper_positions",
+                    actor_type="manual",
+                    source="console_hotkey",
+                    target_type="paper_positions",
+                    target_id="runtime_state",
+                    old_value={"symbols": removed_symbols},
+                    new_value={"symbols": []},
+                    status="succeeded",
+                    message=notice,
+                    correlation_id=runtime_run_id,
+                )
                 persist_state()
                 return True
 
             def submit_manual_live_order_action():
                 nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
+                correlation_id = new_correlation_id("console_manual_order")
+                manual_order = dict(config.get("live_manual_order", {}))
+                order_request = {
+                    "symbol": str(manual_order.get("symbol") or ""),
+                    "side": str(manual_order.get("side") or ""),
+                    "order_type": str(manual_order.get("order_type") or ""),
+                    "amount_thb": float(manual_order.get("amount_thb", 0.0) or 0.0),
+                    "amount_coin": float(manual_order.get("amount_coin", 0.0) or 0.0),
+                    "rate": float(manual_order.get("rate", 0.0) or 0.0),
+                }
+                audit_event(
+                    action_type="manual_order",
+                    actor_type="manual",
+                    source="console_hotkey",
+                    target_type="order_request",
+                    target_id=order_request["symbol"],
+                    symbol=order_request["symbol"],
+                    new_value=order_request,
+                    status="started",
+                    message="Console manual live order requested",
+                    correlation_id=correlation_id,
+                )
                 if private_client is None:
                     notice = "Manual live order requires private API credentials"
                     notice_lines = [
                         "Set BITKUB_API_KEY and BITKUB_API_SECRET in .env before using live order features."
                     ]
+                    audit_event(
+                        action_type="manual_order",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="order_request",
+                        target_id=order_request["symbol"],
+                        symbol=order_request["symbol"],
+                        new_value=order_request,
+                        status="failed",
+                        message=notice,
+                        reason="missing_private_api_credentials",
+                        correlation_id=correlation_id,
+                    )
                     return True
 
                 try:
@@ -2535,6 +3078,19 @@ def main():
                         severity="error",
                         message=notice,
                         details={"errors": notice_lines},
+                    )
+                    audit_event(
+                        action_type="manual_order",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="order_request",
+                        target_id=order_request["symbol"],
+                        symbol=order_request["symbol"],
+                        new_value=order_request,
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
                     )
                     notify_telegram("manual_live_order", notice, notice_lines)
                     return True
@@ -2566,7 +3122,6 @@ def main():
                     strategy_execution_wired=strategy_execution_wired,
                 )
 
-                manual_order = dict(config.get("live_manual_order", {}))
                 if not confirm_action(
                     "Confirm manual live order?",
                     [
@@ -2580,6 +3135,18 @@ def main():
                 ):
                     notice = "Manual live order canceled by user"
                     notice_lines = ["No real order was submitted."]
+                    audit_event(
+                        action_type="manual_order",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="order_request",
+                        target_id=order_request["symbol"],
+                        symbol=order_request["symbol"],
+                        new_value=order_request,
+                        status="cancelled",
+                        message=notice,
+                        correlation_id=correlation_id,
+                    )
                     return True
 
                 if shadow_live_mode:
@@ -2620,6 +3187,20 @@ def main():
                             message=notice,
                             details={"errors": notice_lines, "guardrails": live_guardrails, "shadow_live": True},
                         )
+                        audit_event(
+                            action_type="manual_order",
+                            actor_type="manual",
+                            source="console_hotkey",
+                            target_type="order_request",
+                            target_id=order_request["symbol"],
+                            symbol=order_request["symbol"],
+                            new_value=order_request,
+                            status="failed",
+                            message=notice,
+                            reason="; ".join(notice_lines),
+                            correlation_id=correlation_id,
+                            metadata={"guardrails": live_guardrails, "shadow_live": True},
+                        )
                         return True
 
                     journal_id = record_trade_journal(
@@ -2654,6 +3235,23 @@ def main():
                             "side": manual_request["side"],
                             "shadow_live": True,
                         },
+                    )
+                    audit_event(
+                        action_type="manual_order",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="trade_journal",
+                        target_id=str(journal_id),
+                        symbol=manual_request["symbol"],
+                        new_value={
+                            "request": order_request,
+                            "journal_id": journal_id,
+                            "shadow_live": True,
+                        },
+                        status="succeeded",
+                        message=notice,
+                        correlation_id=correlation_id,
+                        metadata={"guardrails": live_guardrails},
                     )
                     notify_telegram(
                         "manual_live_order",
@@ -2698,6 +3296,20 @@ def main():
                         message=notice,
                         details={"errors": notice_lines, "guardrails": live_guardrails},
                     )
+                    audit_event(
+                        action_type="manual_order",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="order_request",
+                        target_id=order_request["symbol"],
+                        symbol=order_request["symbol"],
+                        new_value=order_request,
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
+                        metadata={"guardrails": live_guardrails},
+                    )
                     notify_telegram(
                         "manual_live_order",
                         notice,
@@ -2725,6 +3337,19 @@ def main():
                         severity="error",
                         message=notice,
                         details={"errors": notice_lines},
+                    )
+                    audit_event(
+                        action_type="manual_order",
+                        actor_type="manual",
+                        source="console_hotkey",
+                        target_type="order_request",
+                        target_id=order_request["symbol"],
+                        symbol=order_request["symbol"],
+                        new_value=order_request,
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
                     )
                     notify_telegram("manual_live_order", notice, notice_lines)
                     return True
@@ -2801,6 +3426,24 @@ def main():
                         "side": order_record["side"],
                         "state": order_record["state"],
                     },
+                )
+                audit_event(
+                    action_type="manual_order",
+                    actor_type="manual",
+                    source="console_hotkey",
+                    target_type="execution_order",
+                    target_id=str(execution_order_id),
+                    symbol=order_record["symbol"],
+                    new_value={
+                        "request": order_request,
+                        "execution_order_id": execution_order_id,
+                        "state": order_record["state"],
+                        "exchange_order_id": order_record.get("exchange_order_id"),
+                    },
+                    status="succeeded",
+                    message=notice,
+                    correlation_id=correlation_id,
+                    metadata={"guardrails": order_record.get("guardrails")},
                 )
                 notify_telegram(
                     "manual_live_order",
@@ -3520,6 +4163,24 @@ def main():
             def cancel_specific_live_order(target_order: dict, *, source: str):
                 nonlocal account_snapshot, notice, notice_lines, private_api_status, private_api_capabilities
                 execution_order_id = int(target_order["id"])
+                correlation_id = new_correlation_id("live_order_cancel")
+                audit_event(
+                    action_type="live_order_cancel",
+                    actor_type=audit_actor_type_from_source(source),
+                    source=source,
+                    target_type="execution_order",
+                    target_id=str(execution_order_id),
+                    symbol=str(target_order.get("symbol") or ""),
+                    old_value={
+                        "execution_order_id": execution_order_id,
+                        "symbol": target_order.get("symbol"),
+                        "side": target_order.get("side"),
+                        "state": target_order.get("state"),
+                    },
+                    status="started",
+                    message="Live order cancel requested",
+                    correlation_id=correlation_id,
+                )
 
                 try:
                     account_snapshot = fetch_account_snapshot(private_client)
@@ -3532,6 +4193,24 @@ def main():
                         severity="error",
                         message=notice,
                         details={"errors": notice_lines, "source": source},
+                    )
+                    audit_event(
+                        action_type="live_order_cancel",
+                        actor_type=audit_actor_type_from_source(source),
+                        source=source,
+                        target_type="execution_order",
+                        target_id=str(execution_order_id),
+                        symbol=str(target_order.get("symbol") or ""),
+                        old_value={
+                            "execution_order_id": execution_order_id,
+                            "symbol": target_order.get("symbol"),
+                            "side": target_order.get("side"),
+                            "state": target_order.get("state"),
+                        },
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
                     )
                     return False, notice, notice_lines
 
@@ -3570,6 +4249,24 @@ def main():
                             "source": source,
                         },
                     )
+                    audit_event(
+                        action_type="live_order_cancel",
+                        actor_type=audit_actor_type_from_source(source),
+                        source=source,
+                        target_type="execution_order",
+                        target_id=str(execution_order_id),
+                        symbol=str(target_order.get("symbol") or ""),
+                        old_value={
+                            "execution_order_id": execution_order_id,
+                            "symbol": target_order.get("symbol"),
+                            "side": target_order.get("side"),
+                            "state": target_order.get("state"),
+                        },
+                        status="failed",
+                        message=notice,
+                        reason="; ".join(notice_lines),
+                        correlation_id=correlation_id,
+                    )
                     return False, notice, notice_lines
 
                 persist_execution_order_changes(
@@ -3597,6 +4294,30 @@ def main():
                         "state": canceled_record["state"],
                         "source": source,
                     },
+                )
+                audit_event(
+                    action_type="live_order_cancel",
+                    actor_type=audit_actor_type_from_source(source),
+                    source=source,
+                    target_type="execution_order",
+                    target_id=str(execution_order_id),
+                    symbol=canceled_record["symbol"],
+                    old_value={
+                        "execution_order_id": execution_order_id,
+                        "symbol": target_order.get("symbol"),
+                        "side": target_order.get("side"),
+                        "state": target_order.get("state"),
+                    },
+                    new_value={
+                        "execution_order_id": execution_order_id,
+                        "symbol": canceled_record["symbol"],
+                        "side": canceled_record["side"],
+                        "state": canceled_record["state"],
+                        "exchange_order_id": canceled_record.get("exchange_order_id"),
+                    },
+                    status="succeeded",
+                    message=notice,
+                    correlation_id=correlation_id,
                 )
                 sync_selected_execution_order()
                 return True, notice, notice_lines
@@ -4141,10 +4862,12 @@ def main():
 
             should_continue = wait_with_hotkeys(interval_seconds, hotkey_actions)
             if not should_continue:
+                shutdown_reason = "operator_quit"
                 break
 
         except KeyboardInterrupt:
             persist_state()
+            shutdown_reason = "keyboard_interrupt"
             print("\nStopped by user")
             break
         except Exception as e:
@@ -4165,6 +4888,18 @@ def main():
             )
             print(f"\nRuntime error: {e}")
             time.sleep(5)
+
+    audit_event(
+        action_type="runtime_shutdown",
+        actor_type="system" if shutdown_reason == "runtime_stop" else "manual",
+        source=shutdown_reason,
+        target_type="engine",
+        target_id="main",
+        status="succeeded",
+        message="Bitkub engine shutdown completed",
+        correlation_id=runtime_run_id,
+        metadata={"reason": shutdown_reason},
+    )
 
 
 if __name__ == "__main__":
