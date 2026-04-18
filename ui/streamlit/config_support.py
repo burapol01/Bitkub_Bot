@@ -11,6 +11,7 @@ from config import (
     save_config,
     summarize_config_changes,
 )
+from services.audit_service import audit_config_change
 from services.db_service import fetch_open_execution_orders
 from services.telegram_service import DEFAULT_TELEGRAM_NOTIFY_EVENTS
 from ui.streamlit.strategy_support import build_rule_seed, fetch_market_symbol_universe
@@ -64,17 +65,36 @@ def save_config_with_feedback(
     current_config: dict[str, Any],
     updated_config: dict[str, Any],
     success_title: str,
+    *,
+    audit_action_type: str = "config_update",
+    audit_source: str = "streamlit_ui",
+    audit_metadata: dict[str, Any] | None = None,
+    audit_reason: str | None = None,
 ) -> bool:
-    _, errors = save_config(updated_config)
+    saved_config, errors = save_config(updated_config)
     if errors:
         for error in errors:
             st.error(error)
         return False
 
+    if saved_config is None:
+        st.error("Config save failed.")
+        return False
+
     st.session_state["config_save_title"] = success_title
     st.session_state["config_save_summary"] = summarize_config_changes(
         current_config,
-        updated_config,
+        saved_config,
+    )
+    audit_config_change(
+        old_config=current_config,
+        new_config=saved_config,
+        actor_type="ui",
+        message=success_title,
+        source=audit_source,
+        reason=audit_reason,
+        action_type=audit_action_type,
+        metadata=audit_metadata,
     )
     return True
 
@@ -586,3 +606,5 @@ def render_config_page(*, config: dict[str, Any]) -> None:
 
     with st.expander("Raw Config Preview", expanded=False):
         st.json(config, expanded=False)
+
+

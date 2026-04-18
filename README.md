@@ -74,6 +74,32 @@ Important:
 - On the VPS that target is `runtime/config.json`.
 - The console engine still needs its own reload/apply step.
 
+## Audit Logging
+
+Structured audit records are stored separately from casual runtime/debug events.
+
+- Primary store: SQLite `audit_events` table in [data/bitkub.db](/d:/Project/Bitkub/data/bitkub.db)
+- Fallback store when SQLite audit writes fail: `data/audit_events.jsonl`
+- Streamlit view: `Logs` page, `Audit Trail` section
+
+Current high-value audit coverage:
+
+- config saves and updates from Streamlit and Telegram
+- config reloads and runtime mode-control transitions
+- manual pause and resume
+- manual live orders from Streamlit, Telegram, and console hotkey
+- live order cancel actions from operator and Telegram flows
+- retention archive / cleanup runs
+- startup and shutdown lifecycle events
+- startup reconciliation and open-order reconciliation warnings
+- wallet import and clear-paper-position operator actions
+
+Redaction rules:
+
+- fields whose names look like secrets are stored as `***REDACTED***`
+- this includes keys such as `secret`, `token`, `password`, `api_key`, and `api_secret`
+- audit records keep the shape of config diffs, but sensitive values are not written in clear text
+
 ## VPS Deploy
 
 Recommended target:

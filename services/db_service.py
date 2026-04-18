@@ -380,6 +380,25 @@ def init_db():
                 response_text TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                source TEXT,
+                target_type TEXT,
+                target_id TEXT,
+                symbol TEXT,
+                old_value_json TEXT,
+                new_value_json TEXT,
+                status TEXT NOT NULL,
+                message TEXT NOT NULL,
+                reason TEXT,
+                correlation_id TEXT,
+                metadata_json TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_market_snapshots_created_symbol_id
             ON market_snapshots(created_at, symbol, id);
 
@@ -418,6 +437,15 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_retention_archive_runs_completed_at
             ON retention_archive_runs(completed_at DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_created_at
+            ON audit_events(created_at DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_action_status
+            ON audit_events(action_type, status, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_audit_events_symbol
+            ON audit_events(symbol, id DESC);
             """
         )
 
@@ -462,6 +490,66 @@ def insert_runtime_event(
             """,
             (_normalize_time_text(created_at), event_type, severity, message, _to_json(details)),
         )
+
+
+def insert_audit_event(
+    *,
+    created_at: str,
+    action_type: str,
+    actor_type: str,
+    actor_id: str | None = None,
+    source: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    symbol: str | None = None,
+    old_value: Any = None,
+    new_value: Any = None,
+    status: str,
+    message: str,
+    reason: str | None = None,
+    correlation_id: str | None = None,
+    metadata: Any = None,
+) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO audit_events (
+                created_at,
+                action_type,
+                actor_type,
+                actor_id,
+                source,
+                target_type,
+                target_id,
+                symbol,
+                old_value_json,
+                new_value_json,
+                status,
+                message,
+                reason,
+                correlation_id,
+                metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _normalize_time_text(created_at),
+                str(action_type),
+                str(actor_type),
+                str(actor_id) if actor_id is not None else None,
+                str(source) if source is not None else None,
+                str(target_type) if target_type is not None else None,
+                str(target_id) if target_id is not None else None,
+                str(symbol) if symbol is not None else None,
+                _to_json(old_value),
+                _to_json(new_value),
+                str(status),
+                str(message),
+                str(reason) if reason is not None else None,
+                str(correlation_id) if correlation_id is not None else None,
+                _to_json(metadata),
+            ),
+        )
+    return int(cursor.lastrowid)
 
 
 def insert_telegram_outbox(
@@ -2896,6 +2984,7 @@ def fetch_logs_page_dataset(
     today: str,
     runtime_limit: int = 200,
     telegram_limit: int = 50,
+    audit_limit: int = 200,
 ) -> dict[str, Any]:
     with _connect() as conn:
         latest_account_snapshot = conn.execute(
@@ -2942,6 +3031,31 @@ def fetch_logs_page_dataset(
             LIMIT ?
             """,
             (int(telegram_limit),),
+        ).fetchall()
+        audit_rows = conn.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                action_type,
+                actor_type,
+                actor_id,
+                source,
+                target_type,
+                target_id,
+                symbol,
+                old_value_json,
+                new_value_json,
+                status,
+                message,
+                reason,
+                correlation_id,
+                metadata_json
+            FROM audit_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(audit_limit),),
         ).fetchall()
         paper_today_row = conn.execute(
             """
@@ -3017,6 +3131,27 @@ def fetch_logs_page_dataset(
             for row in telegram_rows
         ],
         "telegram_command_rows": [dict(row) for row in telegram_command_rows],
+        "audit_rows": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "action_type": row["action_type"],
+                "actor_type": row["actor_type"],
+                "actor_id": row["actor_id"],
+                "source": row["source"],
+                "target_type": row["target_type"],
+                "target_id": row["target_id"],
+                "symbol": row["symbol"],
+                "old_value": _load_json(row["old_value_json"], None),
+                "new_value": _load_json(row["new_value_json"], None),
+                "status": row["status"],
+                "message": row["message"],
+                "reason": row["reason"],
+                "correlation_id": row["correlation_id"],
+                "metadata": _load_json(row["metadata_json"], {}),
+            }
+            for row in audit_rows
+        ],
         "today_reporting": {
             "paper_trades": int((paper_today_row or {})["paper_trades"] or 0)
             if paper_today_row
@@ -4065,6 +4200,75 @@ def fetch_recent_telegram_command_log(*, limit: int = 50) -> list[dict[str, Any]
             (int(limit),),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def fetch_recent_audit_events(
+    *,
+    limit: int = 200,
+    action_type: str | None = None,
+    actor_type: str | None = None,
+    symbol: str | None = None,
+    status: str | None = None,
+    created_after: str | None = None,
+) -> list[dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if action_type:
+        clauses.append("action_type = ?")
+        params.append(str(action_type))
+    if actor_type:
+        clauses.append("actor_type = ?")
+        params.append(str(actor_type))
+    if symbol:
+        clauses.append("symbol = ?")
+        params.append(str(symbol))
+    if status:
+        clauses.append("status = ?")
+        params.append(str(status))
+    if created_after:
+        clauses.append("created_at >= ?")
+        params.append(_normalize_time_text(created_after))
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                id,
+                created_at,
+                action_type,
+                actor_type,
+                actor_id,
+                source,
+                target_type,
+                target_id,
+                symbol,
+                old_value_json,
+                new_value_json,
+                status,
+                message,
+                reason,
+                correlation_id,
+                metadata_json
+            FROM audit_events
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (*params, int(limit)),
+        ).fetchall()
+
+    return [
+        {
+            **dict(row),
+            "old_value": _load_json(row["old_value_json"], None),
+            "new_value": _load_json(row["new_value_json"], None),
+            "metadata": _load_json(row["metadata_json"], {}),
+        }
+        for row in rows
+    ]
 
 
 def fetch_recent_trade_journal(

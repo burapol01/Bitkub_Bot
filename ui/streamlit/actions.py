@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from clients.bitkub_private_client import BitkubPrivateClient
+from services.audit_service import audit_event, new_correlation_id
 from services.db_service import (
     insert_execution_order,
     insert_execution_order_event,
@@ -75,8 +76,21 @@ def submit_manual_order_from_ui(
     account_snapshot: dict[str, Any] | None,
     form_values: dict[str, Any],
 ) -> tuple[int, dict[str, Any]]:
+    correlation_id = new_correlation_id("ui_manual_order")
     modified_config = dict(config)
     modified_config["live_manual_order"] = form_values
+    audit_event(
+        action_type="manual_order",
+        actor_type="ui",
+        source="streamlit_ui",
+        target_type="order_request",
+        target_id=str(form_values.get("symbol") or ""),
+        symbol=str(form_values.get("symbol") or ""),
+        new_value=form_values,
+        status="started",
+        message="Manual live order requested from Streamlit UI",
+        correlation_id=correlation_id,
+    )
     _, _, _, total_pnl = calc_daily_totals(runtime["daily_stats"])
     guardrails = build_live_execution_guardrails(
         config=modified_config,
@@ -89,14 +103,31 @@ def submit_manual_order_from_ui(
         available_balances=extract_available_balances(account_snapshot),
         strategy_execution_wired=False,
     )
-    order_record, order_events = submit_manual_live_order(
-        client=client,
-        config=modified_config,
-        rules=config["rules"],
-        guardrails=guardrails,
-        available_balances=extract_available_balances(account_snapshot),
-        created_at=now_text(),
-    )
+    try:
+        order_record, order_events = submit_manual_live_order(
+            client=client,
+            config=modified_config,
+            rules=config["rules"],
+            guardrails=guardrails,
+            available_balances=extract_available_balances(account_snapshot),
+            created_at=now_text(),
+        )
+    except Exception as exc:
+        audit_event(
+            action_type="manual_order",
+            actor_type="ui",
+            source="streamlit_ui",
+            target_type="order_request",
+            target_id=str(form_values.get("symbol") or ""),
+            symbol=str(form_values.get("symbol") or ""),
+            new_value=form_values,
+            status="failed",
+            message="Manual live order failed from Streamlit UI",
+            reason=str(exc),
+            correlation_id=correlation_id,
+            metadata={"guardrails": guardrails},
+        )
+        raise
     execution_order_id = persist_execution_order_insert(order_record, order_events)
     insert_runtime_event(
         created_at=now_text(),
@@ -109,5 +140,23 @@ def submit_manual_order_from_ui(
             "side": order_record["side"],
             "state": order_record["state"],
         },
+    )
+    audit_event(
+        action_type="manual_order",
+        actor_type="ui",
+        source="streamlit_ui",
+        target_type="execution_order",
+        target_id=str(execution_order_id),
+        symbol=order_record["symbol"],
+        new_value={
+            "request": form_values,
+            "execution_order_id": execution_order_id,
+            "state": order_record["state"],
+            "exchange_order_id": order_record.get("exchange_order_id"),
+        },
+        status="succeeded",
+        message="Manual live order submitted from Streamlit UI",
+        correlation_id=correlation_id,
+        metadata={"guardrails": order_record.get("guardrails")},
     )
     return execution_order_id, order_record
