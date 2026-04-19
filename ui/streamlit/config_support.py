@@ -48,6 +48,35 @@ def build_saved_watchlist_symbols(
     )
 
 
+def _editable_rule_values(*, symbol: str, rule: dict[str, Any]) -> dict[str, Any]:
+    default_rule = build_rule_seed({"rules": {}}, symbol)
+    merged_rule = dict(default_rule)
+    merged_rule.update(dict(rule or {}))
+    return {
+        "buy_below": float(merged_rule.get("buy_below", default_rule["buy_below"])),
+        "sell_above": float(merged_rule.get("sell_above", default_rule["sell_above"])),
+        "budget_thb": float(merged_rule.get("budget_thb", default_rule["budget_thb"])),
+        "stop_loss_percent": float(
+            merged_rule.get("stop_loss_percent", default_rule["stop_loss_percent"])
+        ),
+        "take_profit_percent": float(
+            merged_rule.get(
+                "take_profit_percent",
+                default_rule["take_profit_percent"],
+            )
+        ),
+        "max_trades_per_day": max(
+            1,
+            int(
+                merged_rule.get(
+                    "max_trades_per_day",
+                    default_rule["max_trades_per_day"],
+                )
+            ),
+        ),
+    }
+
+
 def _show_config_save_feedback() -> None:
     summary_lines = st.session_state.get("config_save_summary")
     summary_title = st.session_state.get("config_save_title")
@@ -164,12 +193,7 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             [
                 {
                     "symbol": symbol,
-                    "buy_below": float(rule["buy_below"]),
-                    "sell_above": float(rule["sell_above"]),
-                    "budget_thb": float(rule["budget_thb"]),
-                    "stop_loss_percent": float(rule["stop_loss_percent"]),
-                    "take_profit_percent": float(rule["take_profit_percent"]),
-                    "max_trades_per_day": int(rule["max_trades_per_day"]),
+                    **_editable_rule_values(symbol=symbol, rule=rule),
                 }
                 for symbol, rule in sorted(config["rules"].items())
             ],
@@ -182,6 +206,10 @@ def render_config_page(*, config: dict[str, Any]) -> None:
     with left:
         st.markdown("#### System Settings")
         st.caption("These fields shape the console engine behavior after it reloads config.")
+        st.caption(
+            "Live Max Order THB = cap per live order. "
+            "Live Min THB Balance = minimum THB to keep in wallet."
+        )
         modes = ["paper", "read-only", "live-disabled", "shadow-live", "live"]
         rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
         current_rank_resolution = str(config.get("live_auto_entry_rank_resolution", "240"))
@@ -280,12 +308,14 @@ def render_config_page(*, config: dict[str, Any]) -> None:
                 min_value=1.0,
                 step=10.0,
                 key="config_system_live_max_order_thb",
+                help="Cap per live order.",
             )
             live_min_thb_balance = st.number_input(
                 "Live Min THB Balance",
                 min_value=0.0,
                 step=10.0,
                 key="config_system_live_min_thb_balance",
+                help="Minimum THB to keep in wallet.",
             )
             live_slippage_tolerance_percent = st.number_input(
                 "Live Slippage Tolerance %",
@@ -499,8 +529,24 @@ def render_config_page(*, config: dict[str, Any]) -> None:
 
         st.markdown("#### Rules Editor")
         st.caption("Edit one symbol at a time. Changes are saved back into the shared config file.")
+        st.caption("Budget THB = per-symbol order budget.")
         selected_rule_symbol = st.selectbox("Rule Symbol", symbols, key="selected_rule_symbol")
-        rule = dict(config["rules"][selected_rule_symbol])
+        rule = _editable_rule_values(
+            symbol=selected_rule_symbol,
+            rule=config["rules"].get(selected_rule_symbol, {}),
+        )
+        _sync_form_defaults(
+            prefix="config_rule_editor",
+            values={
+                "selected_symbol": selected_rule_symbol,
+                "buy_below": float(rule["buy_below"]),
+                "sell_above": float(rule["sell_above"]),
+                "budget_thb": float(rule["budget_thb"]),
+                "stop_loss_percent": float(rule["stop_loss_percent"]),
+                "take_profit_percent": float(rule["take_profit_percent"]),
+                "max_trades_per_day": int(rule["max_trades_per_day"]),
+            },
+        )
         st.markdown(
             " ".join(
                 [
@@ -512,12 +558,43 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             unsafe_allow_html=True,
         )
         with st.form("config_rule_editor_form"):
-            buy_below = st.number_input("Buy Below", min_value=0.00000001, value=float(rule["buy_below"]), format="%.8f")
-            sell_above = st.number_input("Sell Above", min_value=0.00000001, value=float(rule["sell_above"]), format="%.8f")
-            budget_thb = st.number_input("Budget THB", min_value=0.01, value=float(rule["budget_thb"]), step=10.0)
-            stop_loss_percent = st.number_input("Stop Loss %", min_value=0.01, value=float(rule["stop_loss_percent"]), format="%.4f")
-            take_profit_percent = st.number_input("Take Profit %", min_value=0.01, value=float(rule["take_profit_percent"]), format="%.4f")
-            max_trades_per_day = st.number_input("Max Trades Per Day", min_value=1, value=int(rule["max_trades_per_day"]), step=1)
+            buy_below = st.number_input(
+                "Buy Below",
+                min_value=0.00000001,
+                format="%.8f",
+                key="config_rule_editor_buy_below",
+            )
+            sell_above = st.number_input(
+                "Sell Above",
+                min_value=0.00000001,
+                format="%.8f",
+                key="config_rule_editor_sell_above",
+            )
+            budget_thb = st.number_input(
+                "Budget THB",
+                min_value=0.01,
+                step=10.0,
+                key="config_rule_editor_budget_thb",
+                help="Per-symbol order budget.",
+            )
+            stop_loss_percent = st.number_input(
+                "Stop Loss %",
+                min_value=0.01,
+                format="%.4f",
+                key="config_rule_editor_stop_loss_percent",
+            )
+            take_profit_percent = st.number_input(
+                "Take Profit %",
+                min_value=0.01,
+                format="%.4f",
+                key="config_rule_editor_take_profit_percent",
+            )
+            max_trades_per_day = st.number_input(
+                "Max Trades Per Day",
+                min_value=1,
+                step=1,
+                key="config_rule_editor_max_trades_per_day",
+            )
             submitted_rule = st.form_submit_button("Save Rule", width='stretch')
         if submitted_rule:
             updated = dict(config)
@@ -533,6 +610,66 @@ def render_config_page(*, config: dict[str, Any]) -> None:
             updated["rules"] = updated_rules
             if save_config_with_feedback(config, updated, f"Saved rule for {selected_rule_symbol}"):
                 st.rerun()
+
+        st.markdown("#### Bulk Budget Update")
+        st.caption(
+            "Update only Budget THB for selected live rules. "
+            "Nothing changes until you click Apply Budget Update."
+        )
+        _sync_form_defaults(
+            prefix="config_bulk_budget",
+            values={
+                "selected_symbol": selected_rule_symbol,
+                "symbols": [selected_rule_symbol],
+                "budget_thb": float(rule["budget_thb"]),
+                "apply_all": False,
+            },
+        )
+        with st.form("config_bulk_budget_form"):
+            bulk_budget_thb = st.number_input(
+                "Budget THB",
+                min_value=0.01,
+                step=10.0,
+                key="config_bulk_budget_budget_thb",
+                help="Per-symbol order budget.",
+            )
+            bulk_symbols = st.multiselect(
+                "Symbols",
+                configured_symbols,
+                key="config_bulk_budget_symbols",
+                help="Pick the rules to update. This selection is ignored when apply to all live rules is enabled.",
+            )
+            bulk_apply_all = st.checkbox(
+                "Apply to all live rules",
+                key="config_bulk_budget_apply_all",
+            )
+            bulk_submitted = st.form_submit_button("Apply Budget Update", width='stretch')
+
+        if bulk_submitted:
+            target_symbols = (
+                list(configured_symbols)
+                if bulk_apply_all
+                else ordered_unique_symbols(list(bulk_symbols))
+            )
+            if not target_symbols:
+                st.error("Select at least one symbol or enable apply to all live rules.")
+            else:
+                updated = dict(config)
+                updated_rules = dict(config["rules"])
+                for symbol in target_symbols:
+                    updated_rule = _editable_rule_values(
+                        symbol=symbol,
+                        rule=updated_rules.get(symbol, {}),
+                    )
+                    updated_rule["budget_thb"] = float(bulk_budget_thb)
+                    updated_rules[symbol] = updated_rule
+                updated["rules"] = updated_rules
+                if save_config_with_feedback(
+                    config,
+                    updated,
+                    f"Saved budget for {len(target_symbols)} live rule(s)",
+                ):
+                    st.rerun()
 
         st.markdown("#### Add / Remove Rule")
         st.caption("Use this section only for symbol lifecycle changes. It is riskier than normal rule edits.")
