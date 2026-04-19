@@ -26,6 +26,7 @@ from services.strategy_lab_service import (
 )
 from ui.streamlit.actions import persist_execution_order_update
 from ui.streamlit.config_support import render_config_page, save_config_with_feedback
+from ui.streamlit.navigation import queue_live_ops_navigation, queue_strategy_workspace_navigation
 from ui.streamlit.ops_pages import render_account_page, render_live_ops_page, render_overview_page
 from ui.streamlit.diagnostics_support import render_diagnostics_page, render_logs_page
 from ui.streamlit.data import calc_daily_totals, capability_badge_tone
@@ -174,17 +175,13 @@ def _revalidate_prune_blocked_symbols(
 
 
 def _open_live_ops_for_symbol(*, symbol: str) -> None:
-    st.session_state["ui_page"] = "Live Ops"
+    queue_live_ops_navigation(symbol=symbol)
     st.query_params["page"] = "Live Ops"
-    st.session_state["live_ops_focus_symbol"] = str(symbol)
-    st.session_state["live_ops_manual_symbol"] = str(symbol)
     st.rerun()
 
 
 def _queue_strategy_workspace(*, workspace: str, symbol: str | None = None) -> None:
-    st.session_state["strategy_workspace_autorun"] = str(workspace)
-    if symbol is not None:
-        st.session_state["strategy_workspace_focus_symbol"] = str(symbol)
+    queue_strategy_workspace_navigation(workspace=workspace, symbol=symbol)
 
 
 def _render_symbol_operational_state(
@@ -616,6 +613,7 @@ def render_strategy_page(
     default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
     if workspace_autorun in strategy_workspace_options:
         default_strategy_workspace = str(workspace_autorun)
+        st.session_state["strategy_workspace"] = default_strategy_workspace
     if default_strategy_workspace not in strategy_workspace_options:
         default_strategy_workspace = "Sync & Rank"
     _sync_select_state(
@@ -638,6 +636,7 @@ def render_strategy_page(
                 "days": int(st.session_state.get("strategy_compare_days", ranking_days) or ranking_days),
             }
         elif strategy_workspace == "Live Tuning":
+            st.session_state["strategy_tuning_focus_symbol"] = str(workspace_focus_symbol)
             st.session_state["strategy_tuning_focus_autorun"] = str(workspace_focus_symbol)
     render_callout(
         "Workspace Focus",
@@ -1288,6 +1287,8 @@ def render_strategy_page(
                 )
                 if default_focus_symbol not in tuning_focus_options:
                     default_focus_symbol = tuning_focus_options[0]
+                if default_focus_symbol in tuning_focus_options:
+                    st.session_state["strategy_tuning_focus_symbol"] = default_focus_symbol
                 current_focus_symbol = st.session_state.get("strategy_tuning_focus_symbol", default_focus_symbol)
                 if current_focus_symbol not in tuning_focus_options:
                     current_focus_symbol = default_focus_symbol
