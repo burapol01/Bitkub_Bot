@@ -128,6 +128,7 @@ paper_trade_log.csv
 data/*.db
 data/*.db-*
 data/*.tmp
+.tmp/
 
 # Local backup / environment-specific config artifacts
 backup/

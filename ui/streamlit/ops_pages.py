@@ -696,7 +696,10 @@ def render_live_ops_page(
     thb_available = float(available_balances.get("THB", 0.0))
     symbols = sorted(config["rules"].keys())
     manual_defaults = dict(config.get("live_manual_order", {}))
+    focus_symbol = str(st.session_state.get("live_ops_focus_symbol", "") or "").strip()
     default_symbol = str(manual_defaults.get("symbol", symbols[0]))
+    if focus_symbol in symbols:
+        default_symbol = focus_symbol
 
     manual_symbol_key = "live_ops_manual_symbol"
     manual_side_key = "live_ops_manual_side"
@@ -1055,9 +1058,18 @@ def render_live_ops_page(
                     f"id={order['id']} | {order['symbol']} | {order['side']} | {order['state']}": order
                     for order in open_execution_orders
                 }
+                ordered_labels = list(focus_options.keys())
+                if focus_symbol:
+                    preferred_label = next(
+                        (label for label, order in focus_options.items() if str(order.get("symbol")) == focus_symbol),
+                        None,
+                    )
+                else:
+                    preferred_label = None
                 current_focus = st.selectbox(
                     "Selected Open Order",
-                    list(focus_options.keys()),
+                    ordered_labels,
+                    index=ordered_labels.index(preferred_label) if preferred_label in ordered_labels else 0,
                     key="live_ops_selected_order",
                 )
                 focus_order = focus_options[current_focus]
@@ -1077,6 +1089,27 @@ def render_live_ops_page(
                     st.caption(f"exchange_order_id={focus_order['exchange_order_id']}")
                 if focus_order.get("message"):
                     st.caption(str(focus_order["message"]))
+                nav_left, nav_right = st.columns(2)
+                with nav_left:
+                    if st.button(
+                        "Open Compare",
+                        key=f"live_ops_focus_open_compare_{focus_order['id']}",
+                        width='stretch',
+                    ):
+                        _open_strategy_workspace_for_symbol(
+                            symbol=str(focus_order["symbol"]),
+                            workspace="Compare",
+                        )
+                with nav_right:
+                    if st.button(
+                        "Open Live Tuning",
+                        key=f"live_ops_focus_open_tuning_{focus_order['id']}",
+                        width='stretch',
+                    ):
+                        _open_strategy_workspace_for_symbol(
+                            symbol=str(focus_order["symbol"]),
+                            workspace="Live Tuning",
+                        )
             else:
                 st.caption("No open live order is currently selected.")
 

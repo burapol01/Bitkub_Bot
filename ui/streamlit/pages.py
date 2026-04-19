@@ -15,7 +15,7 @@ from services.db_service import (
     fetch_runtime_event_log,
     insert_runtime_event,
 )
-from services.execution_service import refresh_live_order_from_exchange
+from services.execution_service import cancel_live_order, refresh_live_order_from_exchange
 from services.strategy_lab_service import (
     build_coin_ranking,
     fetch_market_snapshot_coverage,
@@ -31,6 +31,7 @@ from ui.streamlit.diagnostics_support import render_diagnostics_page, render_log
 from ui.streamlit.data import calc_daily_totals, capability_badge_tone
 from ui.streamlit.refresh import PAGE_ORDER, render_refreshable_fragment
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro, render_sidebar_block
+from ui.streamlit.symbol_state import build_symbol_operational_state
 from ui.streamlit.strategy_support import (
     annotate_strategy_compare_rows,
     build_live_rule_tuning_rows,
@@ -170,6 +171,99 @@ def _revalidate_prune_blocked_symbols(
         open_orders=refreshed_open_orders,
     )
     return blocked_symbols, refresh_errors
+
+
+def _open_live_ops_for_symbol(*, symbol: str) -> None:
+    st.session_state["ui_page"] = "Live Ops"
+    st.query_params["page"] = "Live Ops"
+    st.session_state["live_ops_focus_symbol"] = str(symbol)
+    st.session_state["live_ops_manual_symbol"] = str(symbol)
+    st.rerun()
+
+
+def _queue_strategy_workspace(*, workspace: str, symbol: str | None = None) -> None:
+    st.session_state["strategy_workspace_autorun"] = str(workspace)
+    if symbol is not None:
+        st.session_state["strategy_workspace_focus_symbol"] = str(symbol)
+
+
+def _render_symbol_operational_state(
+    *,
+    symbol: str,
+    config: dict[str, Any],
+    private_ctx: dict[str, Any],
+    latest_prices: dict[str, float],
+    runtime: dict[str, Any] | None = None,
+    open_execution_orders: list[dict[str, Any]] | None = None,
+    title: str,
+    kicker: str,
+) -> dict[str, Any]:
+    state = build_symbol_operational_state(
+        symbol=symbol,
+        config=config,
+        account_snapshot=private_ctx.get("account_snapshot"),
+        latest_prices=latest_prices,
+        runtime=runtime,
+        execution_orders=open_execution_orders,
+    )
+
+    tone = "bad" if state["review_required"] else "warn" if state["entry_blocked"] or state["exit_blocked"] else "good"
+    st.markdown(
+        " ".join(
+            [
+                badge(f"symbol {state['symbol']}", "info"),
+                badge(
+                    f"open buy {state['open_buy_count']}",
+                    "warn" if state["open_buy_count"] else "good",
+                ),
+                badge(
+                    f"open sell {state['open_sell_count']}",
+                    "warn" if state["open_sell_count"] else "good",
+                ),
+                badge(
+                    f"reserved THB {state['reserved_thb']:,.2f}",
+                    "warn" if state["reserved_thb"] > 0 else "good",
+                ),
+                badge(
+                    f"reserved coin {state['reserved_coin']:,.8f}",
+                    "warn" if state["reserved_coin"] > 0 else "good",
+                ),
+                badge(
+                    "partial fill" if state["partial_fill"] else "no partial fill",
+                    "warn" if state["partial_fill"] else "good",
+                ),
+                badge(
+                    "review required" if state["review_required"] else "state clear",
+                    tone,
+                ),
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+    render_callout(
+        title,
+        f"{state['state_summary']}<br>{state['risk_summary']}",
+        "info",
+    )
+    if state["entry_block_reasons"]:
+        st.caption("Entry blocked: " + "; ".join(state["entry_block_reasons"]))
+    else:
+        st.caption("Entry blocked: no symbol-level blockers were detected.")
+    if state["exit_block_reasons"]:
+        st.caption("Exit blocked: " + "; ".join(state["exit_block_reasons"]))
+    else:
+        st.caption("Exit blocked: no symbol-level blockers were detected.")
+    if state["review_required"]:
+        st.warning("Review required: " + "; ".join(state["review_reasons"]))
+    recent_guardrail_block = state.get("recent_guardrail_block")
+    if recent_guardrail_block:
+        message = str(recent_guardrail_block.get("message") or "")
+        if message:
+            st.caption(
+                "Recent guardrail block: "
+                f"{message} ({recent_guardrail_block.get('channel', 'n/a')})"
+            )
+    return state
 
 
 def _strategy_compare_scope_key(
@@ -470,14 +564,19 @@ def render_sidebar(
 def render_strategy_page(
     *,
     config: dict[str, Any],
+    private_ctx: dict[str, Any] | None = None,
+    runtime: dict[str, Any] | None = None,
     latest_prices: dict[str, float] | None = None,
     quote_fetched_at: str | None = None,
 ) -> None:
+    private_ctx = dict(private_ctx or {})
+    runtime = dict(runtime or {})
     latest_prices = {
         str(symbol): float(price)
         for symbol, price in dict(latest_prices or {}).items()
         if str(symbol)
     }
+    open_execution_orders = fetch_open_execution_orders()
     render_section_intro(
         "Strategy Lab",
         "Research first, then tighten live rules. Watchlist symbols are your research universe, while config rules remain the live shortlist.",
@@ -497,6 +596,14 @@ def render_strategy_page(
         "Recommended order: Coin Ranking -> Auto Entry Shortlist -> Live Rule Tuning -> Strategy Compare Lab -> Replay Lab for manual deep-dive."
     )
 
+    rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
+    default_rank_resolution = str(st.session_state.get("strategy_rank_resolution", "240"))
+    if default_rank_resolution not in rank_resolution_options:
+        default_rank_resolution = "240"
+    default_rank_days = int(st.session_state.get("strategy_rank_days", 14))
+    ranking_resolution = str(st.session_state.get("strategy_rank_resolution", default_rank_resolution))
+    ranking_days = int(st.session_state.get("strategy_rank_days", default_rank_days))
+
     strategy_workspace_options = [
         "Overview",
         "Sync & Rank",
@@ -504,7 +611,11 @@ def render_strategy_page(
         "Compare",
         "Replay",
     ]
+    workspace_autorun = st.session_state.pop("strategy_workspace_autorun", None)
+    workspace_focus_symbol = st.session_state.pop("strategy_workspace_focus_symbol", None)
     default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
+    if workspace_autorun in strategy_workspace_options:
+        default_strategy_workspace = str(workspace_autorun)
     if default_strategy_workspace not in strategy_workspace_options:
         default_strategy_workspace = "Sync & Rank"
     _sync_select_state(
@@ -518,6 +629,16 @@ def render_strategy_page(
         horizontal=True,
         key="strategy_workspace",
     )
+    if workspace_focus_symbol:
+        if strategy_workspace == "Compare":
+            st.session_state["strategy_compare_autorun"] = {
+                "symbol": str(workspace_focus_symbol),
+                "source": str(st.session_state.get("strategy_compare_source", "candles")),
+                "resolution": str(st.session_state.get("strategy_compare_resolution", ranking_resolution)),
+                "days": int(st.session_state.get("strategy_compare_days", ranking_days) or ranking_days),
+            }
+        elif strategy_workspace == "Live Tuning":
+            st.session_state["strategy_tuning_focus_autorun"] = str(workspace_focus_symbol)
     render_callout(
         "Workspace Focus",
         {
@@ -548,14 +669,6 @@ def render_strategy_page(
             config.get("market_snapshot_retention_days", 30),
         )
     )
-    rank_resolution_options = ["1", "5", "15", "60", "240", "1D"]
-    default_rank_resolution = str(st.session_state.get("strategy_rank_resolution", "240"))
-    if default_rank_resolution not in rank_resolution_options:
-        default_rank_resolution = "240"
-    default_rank_days = int(st.session_state.get("strategy_rank_days", 14))
-    ranking_resolution = str(st.session_state.get("strategy_rank_resolution", default_rank_resolution))
-    ranking_days = int(st.session_state.get("strategy_rank_days", default_rank_days))
-
     auto_entry_min_score = float(config.get("live_auto_entry_min_score", 50.0))
     auto_entry_allowed_biases = {
         str(value).strip().lower()
@@ -911,24 +1024,17 @@ def render_strategy_page(
                     st.caption("No action queue right now. All current live rules are either stable or still accumulating evidence.")
 
                 if prune_rows:
-                    prune_option_symbols = [row["symbol"] for row in actionable_rows]
-                    blocked_prune_symbols = _blocked_execution_order_symbols(
-                        symbols=prune_option_symbols,
-                        open_orders=fetch_open_execution_orders(),
-                    )
-                    selectable_prune_symbols = [
-                        symbol for symbol in prune_option_symbols if symbol not in blocked_prune_symbols
-                    ]
-                    prune_default_symbols = [
-                        row["symbol"] for row in prune_rows if row["symbol"] not in blocked_prune_symbols
-                    ]
+                    prune_option_symbols = [row["symbol"] for row in prune_rows]
+                    prune_default_symbols = list(prune_option_symbols)
                     prune_selection_key = "strategy_prune_live_rules_selection"
                     prune_remove_key = "strategy_prune_live_rules_quick_remove"
                     prune_add_key = "strategy_prune_live_rules_quick_add"
+                    prune_action_key = "strategy_prune_live_rules_action"
+                    prune_cancel_confirm_key = "strategy_prune_live_rules_confirm_cancel"
 
                     _sync_multiselect_state(
                         key=prune_selection_key,
-                        options=selectable_prune_symbols,
+                        options=prune_option_symbols,
                         default=prune_default_symbols,
                     )
                     current_prune_selection = list(
@@ -943,27 +1049,18 @@ def render_strategy_page(
                         key=prune_add_key,
                         options=[
                             symbol
-                            for symbol in selectable_prune_symbols
+                            for symbol in prune_option_symbols
                             if symbol not in current_prune_selection
                         ],
                         default=[],
                     )
 
-                    if blocked_prune_symbols:
-                        st.caption(
-                            "Locked by open execution order and excluded from the default prune selection: "
-                            + ", ".join(blocked_prune_symbols)
-                        )
-                        st.caption(
-                            "Submit prune once and the page will revalidate those open orders against Bitkub automatically before it blocks the action."
-                        )
-
                     with st.form("strategy_prune_live_rules_form"):
                         prune_selection = st.multiselect(
                             "Prune From Live Rules",
-                            selectable_prune_symbols,
+                            prune_option_symbols,
                             key=prune_selection_key,
-                            help="Default selection includes symbols currently marked PRUNE, excluding any symbol that still has an open execution order.",
+                            help="Select the live-rule symbols you want to prune. If linked live orders exist, the form will force a review or an explicit cancel path.",
                         )
                         prune_remove_symbols = st.multiselect(
                             "Quick Remove From Current Selection",
@@ -975,7 +1072,7 @@ def render_strategy_page(
                             "Quick Add Back To Selection",
                             [
                                 symbol
-                                for symbol in selectable_prune_symbols
+                                for symbol in prune_option_symbols
                                 if symbol not in prune_selection
                             ],
                             key=prune_add_key,
@@ -986,12 +1083,7 @@ def render_strategy_page(
                             value=False,
                             help="Leave this off if you still want ranking, replay, and research coverage for the symbol after pruning it from live rules.",
                         )
-                        prune_submitted = st.form_submit_button(
-                            "Prune Selected Live Rules",
-                            type="primary",
-                            width='stretch',
-                        )
-                    if prune_submitted:
+
                         effective_prune_selection = ordered_unique_symbols(
                             [
                                 symbol
@@ -1000,31 +1092,156 @@ def render_strategy_page(
                             ],
                             prune_add_symbols,
                         )
-                        blocked_symbols: list[str] = []
-                        refresh_errors: list[str] = []
+                        linked_state_rows: list[dict[str, Any]] = []
+                        unclear_symbols: list[str] = []
+                        for symbol in effective_prune_selection:
+                            state = build_symbol_operational_state(
+                                symbol=symbol,
+                                config=config,
+                                account_snapshot=private_ctx.get("account_snapshot"),
+                                latest_prices=latest_prices,
+                                runtime=runtime,
+                                execution_orders=open_execution_orders,
+                            )
+                            if (
+                                state["open_buy_count"]
+                                or state["open_sell_count"]
+                                or state["reserved_thb"] > 0
+                                or state["reserved_coin"] > 0
+                            ):
+                                linked_state_rows.append(
+                                    {
+                                        "symbol": symbol,
+                                        "open_buy": state["open_buy_count"],
+                                        "open_sell": state["open_sell_count"],
+                                        "reserved_thb": state["reserved_thb"],
+                                        "reserved_coin": state["reserved_coin"],
+                                        "partial_fill": "YES" if state["partial_fill"] else "NO",
+                                    }
+                                )
+                            if state["review_required"]:
+                                unclear_symbols.append(symbol)
+
+                        if linked_state_rows:
+                            st.dataframe(linked_state_rows, width='stretch', hide_index=True)
+                            st.caption(
+                                "Linked live orders exist for the selected symbol(s). Choose a safe action below; review is required if any order state is unclear."
+                            )
+
+                        prune_action_options = ["Prune rule only"]
+                        if linked_state_rows and not unclear_symbols:
+                            prune_action_options = [
+                                "Prune rule only",
+                                "Cancel linked orders and prune",
+                                "Review in Live Ops",
+                            ]
+                        elif linked_state_rows and unclear_symbols:
+                            prune_action_options = ["Review in Live Ops"]
+
+                        if prune_action_key not in st.session_state:
+                            st.session_state[prune_action_key] = prune_action_options[0]
+                        if str(st.session_state.get(prune_action_key)) not in prune_action_options:
+                            st.session_state[prune_action_key] = prune_action_options[0]
+
+                        prune_action = st.radio(
+                            "Prune Action",
+                            prune_action_options,
+                            key=prune_action_key,
+                            help="Cancel-linked pruning is only available when the symbol state is clear enough to proceed.",
+                        )
+                        confirm_cancel_linked = False
+                        if prune_action == "Cancel linked orders and prune":
+                            confirm_cancel_linked = st.checkbox(
+                                "I understand linked live orders will be canceled first.",
+                                key=prune_cancel_confirm_key,
+                            )
+                        prune_submitted = st.form_submit_button(
+                            "Continue",
+                            type="primary",
+                            width='stretch',
+                        )
+
+                    if prune_submitted:
                         if not effective_prune_selection:
                             st.warning("Select at least one symbol before pruning live rules.")
-                        else:
-                            blocked_symbols, refresh_errors = _revalidate_prune_blocked_symbols(
-                                symbols_to_prune=list(effective_prune_selection)
-                            )
-                        if blocked_symbols:
-                            if refresh_errors:
-                                st.warning(
-                                    "Prune revalidation hit exchange refresh issues: "
-                                    + "; ".join(refresh_errors[:3])
-                                )
+                        elif prune_action == "Review in Live Ops":
+                            _open_live_ops_for_symbol(symbol=effective_prune_selection[0])
+                        elif linked_state_rows and unclear_symbols:
                             st.error(
-                                "Cannot prune live rules while open execution orders still exist for: "
-                                + ", ".join(blocked_symbols)
-                                + ". Clear them from Bitkub first; the page already revalidated with the exchange before blocking this prune."
+                                "Order state is unclear for: "
+                                + ", ".join(sorted(set(unclear_symbols)))
+                                + ". Review in Live Ops before pruning."
                             )
-                        elif effective_prune_selection:
-                            if refresh_errors:
-                                st.info(
-                                    "Prune revalidation cleared stale open-order blocks, but some exchange refresh warnings remained: "
-                                    + "; ".join(refresh_errors[:3])
-                                )
+                        elif prune_action == "Cancel linked orders and prune":
+                            if not confirm_cancel_linked:
+                                st.error("Confirm the cancel step before continuing.")
+                            else:
+                                prune_client = private_ctx.get("client")
+                                if prune_client is None:
+                                    st.error("Private API client is unavailable, so linked orders cannot be canceled.")
+                                else:
+                                    cancelled_orders: list[dict[str, Any]] = []
+                                    ambiguous_symbols: list[str] = []
+                                    error_lines: list[str] = []
+                                    selection_set = set(effective_prune_selection)
+                                    for order in open_execution_orders:
+                                        if str(order.get("symbol")) not in selection_set:
+                                            continue
+                                        try:
+                                            canceled_record, events = cancel_live_order(
+                                                client=prune_client,
+                                                order_record=order,
+                                                occurred_at=now_text(),
+                                            )
+                                            persist_execution_order_update(
+                                                int(order["id"]),
+                                                canceled_record,
+                                                events,
+                                            )
+                                            cancelled_orders.append(canceled_record)
+                                            if str(canceled_record.get("state")) not in {"canceled", "filled"}:
+                                                ambiguous_symbols.append(str(order.get("symbol")))
+                                        except Exception as e:
+                                            ambiguous_symbols.append(str(order.get("symbol")))
+                                            error_lines.append(
+                                                f"{order.get('symbol')}: cancel failed ({e})"
+                                            )
+
+                                    if ambiguous_symbols:
+                                        st.error(
+                                            "Cancel result was not clear for: "
+                                            + ", ".join(sorted(set(ambiguous_symbols)))
+                                            + ". Review in Live Ops before pruning."
+                                        )
+                                        if error_lines:
+                                            st.warning("; ".join(error_lines[:3]))
+                                    elif cancelled_orders:
+                                        updated = _build_pruned_live_rules_config(
+                                            config=config,
+                                            symbols_to_prune=list(effective_prune_selection),
+                                            remove_from_watchlist=bool(remove_from_watchlist),
+                                        )
+                                        if save_config_with_feedback(
+                                            config,
+                                            updated,
+                                            f"Canceled linked orders and pruned {len(effective_prune_selection)} symbol(s)",
+                                        ):
+                                            insert_runtime_event(
+                                                created_at=now_text(),
+                                                event_type="strategy_tuning",
+                                                severity="info",
+                                                message=f"Canceled linked orders and pruned {len(effective_prune_selection)} symbol(s)",
+                                                details={
+                                                    "action": "cancel_linked_orders_and_prune",
+                                                    "symbols": list(effective_prune_selection),
+                                                    "remove_from_watchlist": bool(remove_from_watchlist),
+                                                },
+                                            )
+                                            _cached_strategy_tuning_history.clear()
+                                            st.rerun()
+                                    else:
+                                        st.error("No linked orders were canceled, so pruning was not applied.")
+                        else:
                             updated = _build_pruned_live_rules_config(
                                 config=config,
                                 symbols_to_prune=list(effective_prune_selection),
@@ -1082,6 +1299,16 @@ def render_strategy_page(
                     key="strategy_tuning_focus_symbol",
                 )
                 focus_row = next(row for row in tuning_rows if row["symbol"] == focus_symbol)
+                _render_symbol_operational_state(
+                    symbol=str(focus_row["symbol"]),
+                    config=config,
+                    private_ctx=private_ctx,
+                    latest_prices=latest_prices,
+                    runtime=runtime,
+                    open_execution_orders=open_execution_orders,
+                    title="Symbol Operational State",
+                    kicker="State",
+                )
                 st.markdown(
                     badge(
                         f"{focus_row['symbol']} -> {focus_row['recommendation']} | {focus_row['confidence']}",
@@ -1112,6 +1339,26 @@ def render_strategy_page(
                 st.caption(f"Tuning note: {focus_row['tuning_note']}")
                 st.caption(f"Confidence: {focus_row['confidence_note']}")
                 st.caption(f"Fee guardrail: {focus_row.get('fee_guardrail_note', 'n/a')}")
+                nav_left, nav_right = st.columns(2)
+                with nav_left:
+                    if st.button(
+                        "Open Live Ops",
+                        key=f"tuning_open_live_ops_{focus_row['symbol']}",
+                        width='stretch',
+                    ):
+                        _open_live_ops_for_symbol(symbol=str(focus_row["symbol"]))
+                with nav_right:
+                    if st.button(
+                        "Open Compare",
+                        key=f"tuning_open_compare_{focus_row['symbol']}",
+                        width='stretch',
+                    ):
+                        _queue_strategy_workspace(
+                            workspace="Compare",
+                            symbol=str(focus_row["symbol"]),
+                        )
+                        st.query_params["page"] = "Strategy"
+                        st.rerun()
                 focus_next_step = (
                     "Next step: keep this symbol live and monitor Latest Auto Entry Review for execution quality."
                     if focus_row["recommendation"] == "KEEP"
@@ -1332,6 +1579,16 @@ def render_strategy_page(
                         _cached_strategy_compare_selection_history.clear()
                     focus_variant_row = next(row for row in compare_rows if row["variant"] == selected_variant)
                     decision_tone = "good" if str(focus_variant_row.get("decision")) in {"Clearly better", "Marginally better"} else "warn" if str(focus_variant_row.get("decision")) in {"Tied with baseline", "Needs more samples", "Current baseline"} else "bad"
+                    _render_symbol_operational_state(
+                        symbol=str(compare_payload.get("symbol", "")),
+                        config=config,
+                        private_ctx=private_ctx,
+                        latest_prices=latest_prices,
+                        runtime=runtime,
+                        open_execution_orders=open_execution_orders,
+                        title="Symbol Operational State",
+                        kicker="State",
+                    )
                     st.markdown(
                         badge(
                             f"{focus_variant_row['variant']} | {focus_variant_row['decision']}",
@@ -1372,6 +1629,27 @@ def render_strategy_page(
                             st.caption(
                                 f"Last applied variant was {latest_applied_variant.get('variant', 'n/a')} ({latest_applied_variant.get('created_at', 'n/a')}), but the current live rule has changed since then."
                             )
+
+                    nav_left, nav_right = st.columns(2)
+                    with nav_left:
+                        if st.button(
+                            "Open Live Ops",
+                            key=f"compare_open_live_ops_{compare_payload['symbol']}",
+                            width='stretch',
+                        ):
+                            _open_live_ops_for_symbol(symbol=str(compare_payload["symbol"]))
+                    with nav_right:
+                        if st.button(
+                            "Open Live Tuning",
+                            key=f"compare_open_live_tuning_{compare_payload['symbol']}",
+                            width='stretch',
+                        ):
+                            _queue_strategy_workspace(
+                                workspace="Live Tuning",
+                                symbol=str(compare_payload["symbol"]),
+                            )
+                            st.query_params["page"] = "Strategy"
+                            st.rerun()
 
                     _sync_select_state(
                         key=apply_variant_key,
