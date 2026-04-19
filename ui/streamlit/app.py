@@ -14,6 +14,7 @@ from services.version_service import (
     format_app_version_label,
     get_app_version_snapshot,
 )
+from ui.streamlit.execution_assistant import render_execution_assistant_page
 from ui.streamlit.pages import (
     render_account_page,
     render_config_page,
@@ -119,6 +120,15 @@ def main() -> None:
                 latest_prices=ctx["latest_prices"],
                 quote_fetched_at=str(ctx.get("quote_fetched_at") or ""),
                 auto_refresh_run_every=run_every,
+            )
+        elif selected_page == "Execution Assistant":
+            ctx = build_dashboard_context(config)
+            render_execution_assistant_page(
+                config=config,
+                private_ctx=ctx["private_ctx"],
+                runtime=ctx["runtime"],
+                latest_prices=dict(ctx.get("latest_prices") or {}),
+                quote_fetched_at=str(ctx.get("quote_fetched_at") or ""),
             )
         elif selected_page == "Strategy":
             ctx = build_dashboard_context(config)
