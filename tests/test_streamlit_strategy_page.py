@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import os
 import json
+import hashlib
+import tempfile
 import textwrap
 import unittest
+from pathlib import Path
+
+_TEST_TEMP_DIR = Path.cwd() / ".tmp" / "streamlit_tests"
+_TEST_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+os.environ["TMP"] = str(_TEST_TEMP_DIR)
+os.environ["TEMP"] = str(_TEST_TEMP_DIR)
+os.environ["TMPDIR"] = str(_TEST_TEMP_DIR)
+tempfile.tempdir = str(_TEST_TEMP_DIR)
 
 from streamlit.testing.v1 import AppTest
 
@@ -213,6 +224,16 @@ def _app_script(
     )
 
 
+def _app_test_from_script(script: str) -> AppTest:
+    script_hash = hashlib.md5(script.encode("utf-8")).hexdigest()
+    script_path = _TEST_TEMP_DIR / f"streamlit_strategy_{script_hash}.py"
+    script_path.write_text(script, encoding="utf-8")
+    return AppTest.from_file(script_path)
+
+
+AppTest.from_string = staticmethod(_app_test_from_script)  # type: ignore[method-assign]
+
+
 class StrategyPageAppTests(unittest.TestCase):
     def test_live_tuning_prune_submit_does_not_raise(self) -> None:
         script = _app_script(
@@ -251,11 +272,11 @@ class StrategyPageAppTests(unittest.TestCase):
 
         self.assertEqual(len(at.exception), 0)
         prune_widget = at.multiselect(key="strategy_prune_live_rules_selection")
-        self.assertEqual(list(prune_widget.options), ["THB_SUMX"])
-        self.assertEqual(list(prune_widget.value), ["THB_SUMX"])
+        self.assertEqual(list(prune_widget.options), ["THB_FF", "THB_SUMX"])
+        self.assertEqual(list(prune_widget.value), ["THB_FF", "THB_SUMX"])
 
         submit_button = next(
-            button for button in at.button if button.label == "Prune Selected Live Rules"
+            button for button in at.button if button.label == "Continue"
         )
         submit_button.click()
         at.run(timeout=20)
@@ -401,6 +422,144 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertEqual(len(at.exception), 0)
         rendered = "\n".join(str(caption.value) for caption in at.caption)
         self.assertIn("Live price overlay: price=10.50000000", rendered)
+
+    def test_compare_open_live_ops_sets_focus_symbol(self) -> None:
+        script = _app_script(
+            workspace="Compare",
+            body=f"""
+            COMPARE_ROWS = json.loads({_json_string(_compare_rows())})
+            COMPARE_VARIANTS = json.loads({_json_string([{"variant": row["variant"], "rule": row["rule"]} for row in _compare_rows()])})
+
+            pages.build_rule_seed = lambda config, symbol, market_price=None: dict(config["rules"][symbol])
+            pages.build_rule_compare_variants = lambda base_rule: COMPARE_VARIANTS
+            pages.annotate_strategy_compare_rows = lambda rows: rows
+            pages.run_strategy_compare_rows = lambda **kwargs: COMPARE_ROWS
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._latest_strategy_compare_selection_map = lambda limit=200: {{}}
+            pages._latest_strategy_compare_applied_map = lambda limit=200: {{}}
+            pages.build_symbol_operational_state = lambda **kwargs: {{
+                "symbol": str(kwargs["symbol"]),
+                "state_summary": "open buy 0 | open sell 0 | reserved THB 0.00 | reserved coin 0.00000000",
+                "risk_summary": "entry clear | exit clear",
+                "available_coin": 0.0,
+                "reserved_coin": 0.0,
+                "reserved_thb": 0.0,
+                "open_buy_count": 0,
+                "open_sell_count": 0,
+                "partial_fill": False,
+                "entry_blocked": False,
+                "exit_blocked": False,
+                "entry_block_reasons": [],
+                "exit_block_reasons": [],
+                "review_required": False,
+                "review_reasons": [],
+                "recent_guardrail_block": None,
+                "holdings_row": {{}},
+                "exchange_open_order_count": 0,
+                "exchange_open_orders": [],
+                "local_open_orders": [],
+                "findings": {{}},
+                "symbol_findings": {{}},
+            }}
+
+            st.session_state["strategy_compare_symbol"] = "THB_TRX"
+            st.session_state["strategy_compare_source"] = "candles"
+            st.session_state["strategy_compare_resolution"] = "240"
+            st.session_state["strategy_compare_days"] = 14
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        next(button for button in at.button if button.label == "Open Live Ops").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(at.session_state["ui_page"], "Live Ops")
+        self.assertEqual(at.session_state["live_ops_focus_symbol"], "THB_TRX")
+
+    def test_live_tuning_prune_shows_linked_order_actions(self) -> None:
+        script = _app_script(
+            workspace="Live Tuning",
+            body=f"""
+            RANKING_PAYLOAD = {{"rows": [], "coverage": [], "errors": []}}
+            TUNING_ROWS = json.loads({_json_string(_tuning_rows())})
+            AUTO_ENTRY_REPORT = {{
+                "events": [],
+                "latest_context": {{}},
+                "rejection_summary": [],
+                "symbol_reject_summary": [],
+                "symbol_candidate_summary": [],
+                "top_candidates": [],
+            }}
+
+            pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
+            pages.build_live_rule_tuning_rows = lambda **kwargs: TUNING_ROWS
+            pages.fetch_open_execution_orders = lambda: [{{"symbol": "THB_SUMX", "side": "buy", "state": "open", "request_payload": {{"amt": 100.0}}}}]
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._build_auto_entry_review_report = lambda limit=40: AUTO_ENTRY_REPORT
+            pages.build_symbol_operational_state = lambda **kwargs: (
+                {{
+                    "symbol": "THB_SUMX",
+                    "state_summary": "open buy 1 | open sell 0 | reserved THB 100.00 | reserved coin 1.00000000",
+                    "risk_summary": "entry blocked | exit clear",
+                    "available_coin": 1.0,
+                    "reserved_coin": 1.0,
+                    "reserved_thb": 100.0,
+                    "open_buy_count": 1,
+                    "open_sell_count": 0,
+                    "partial_fill": False,
+                    "entry_blocked": True,
+                    "exit_blocked": False,
+                    "entry_block_reasons": ["open buy order exists"],
+                    "exit_block_reasons": [],
+                    "review_required": False,
+                    "review_reasons": [],
+                    "recent_guardrail_block": None,
+                    "holdings_row": {{}},
+                    "exchange_open_order_count": 1,
+                    "exchange_open_orders": [],
+                    "local_open_orders": [{{"symbol": "THB_SUMX"}}],
+                    "findings": {{}},
+                    "symbol_findings": {{}},
+                }}
+                if str(kwargs["symbol"]) == "THB_SUMX"
+                else {{
+                    "symbol": str(kwargs["symbol"]),
+                    "state_summary": "open buy 0 | open sell 0 | reserved THB 0.00 | reserved coin 0.00000000",
+                    "risk_summary": "entry clear | exit clear",
+                    "available_coin": 0.0,
+                    "reserved_coin": 0.0,
+                    "reserved_thb": 0.0,
+                    "open_buy_count": 0,
+                    "open_sell_count": 0,
+                    "partial_fill": False,
+                    "entry_blocked": False,
+                    "exit_blocked": False,
+                    "entry_block_reasons": [],
+                    "exit_block_reasons": [],
+                    "review_required": False,
+                    "review_reasons": [],
+                    "recent_guardrail_block": None,
+                    "holdings_row": {{}},
+                    "exchange_open_order_count": 0,
+                    "exchange_open_orders": [],
+                    "local_open_orders": [],
+                    "findings": {{}},
+                    "symbol_findings": {{}},
+                }}
+            )
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        prune_action = at.radio(key="strategy_prune_live_rules_action")
+        self.assertIn("Prune rule only", list(prune_action.options))
+        self.assertIn("Cancel linked orders and prune", list(prune_action.options))
+        self.assertIn("Review in Live Ops", list(prune_action.options))
 
 
 if __name__ == "__main__":
