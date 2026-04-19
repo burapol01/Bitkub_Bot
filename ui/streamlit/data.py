@@ -16,7 +16,7 @@ from services.account_service import (
     summarize_account_capabilities,
 )
 from services.state_service import load_runtime_state
-from utils.time_utils import today_key
+from utils.time_utils import now_text, today_key
 
 
 @st.cache_data(ttl=5, show_spinner=False)
@@ -170,8 +170,12 @@ def sidebar_private_context() -> dict[str, Any]:
 
 
 @st.cache_data(ttl=5, show_spinner=False)
-def _cached_ticker() -> dict[str, Any]:
-    return get_ticker()
+def _cached_ticker_snapshot() -> dict[str, Any]:
+    ticker = get_ticker()
+    return {
+        "ticker": ticker if isinstance(ticker, dict) else {},
+        "fetched_at": now_text(),
+    }
 
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -259,7 +263,8 @@ def build_dashboard_context(config: dict[str, Any]) -> dict[str, Any]:
         rule_symbols=rule_symbols,
         open_orders_mode="global",
     )
-    ticker = _cached_ticker()
+    ticker_snapshot = _cached_ticker_snapshot()
+    ticker = dict(ticker_snapshot.get("ticker") or {})
     latest_prices = {
         symbol: float(payload["last"])
         for symbol, payload in ticker.items()
@@ -271,7 +276,22 @@ def build_dashboard_context(config: dict[str, Any]) -> dict[str, Any]:
         "runtime": runtime,
         "private_ctx": private_ctx,
         "latest_prices": latest_prices,
+        "quote_fetched_at": str(ticker_snapshot.get("fetched_at") or ""),
         "ticker_rows": market_rows(config, ticker),
+    }
+
+
+def latest_market_price_snapshot() -> dict[str, Any]:
+    ticker_snapshot = _cached_ticker_snapshot()
+    ticker = dict(ticker_snapshot.get("ticker") or {})
+    latest_prices = {
+        symbol: float(payload["last"])
+        for symbol, payload in ticker.items()
+        if isinstance(payload, dict) and "last" in payload
+    }
+    return {
+        "latest_prices": latest_prices,
+        "quote_fetched_at": str(ticker_snapshot.get("fetched_at") or ""),
     }
 
 

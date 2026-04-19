@@ -4,6 +4,7 @@ from clients.bitkub_private_client import BitkubPrivateClient, BitkubPrivateClie
 from services.api_retry_service import classify_retry_error, log_api_retry_event
 from services.order_service import build_place_ask_payload, build_place_bid_payload
 from services.strategy_lab_service import build_coin_ranking
+from utils.time_utils import parse_time_text
 
 ORDER_STATE_CREATED = "created"
 ORDER_STATE_SUBMITTED = "submitted"
@@ -376,6 +377,78 @@ def validate_live_sell_request_guardrails(
             )
 
     return reasons
+
+
+def build_exit_guardrail_resolution(
+    *,
+    symbol: str,
+    requested_sell_rate: float,
+    latest_price: float | None,
+    live_slippage_tolerance_percent: float,
+    quote_observed_at: str | None = None,
+    quote_checked_at: str | None = None,
+    quote_stale_after_seconds: float = 30.0,
+) -> dict[str, Any]:
+    requested_rate = float(requested_sell_rate)
+    tolerance_percent = max(0.0, float(live_slippage_tolerance_percent))
+    latest_live_price = float(latest_price or 0.0)
+    stale_after_seconds = max(1.0, float(quote_stale_after_seconds))
+
+    quote_age_seconds: float | None = None
+    quote_freshness = "unknown"
+    if latest_live_price <= 0:
+        quote_freshness = "unavailable"
+    elif quote_observed_at and quote_checked_at:
+        try:
+            observed_dt = parse_time_text(str(quote_observed_at))
+            checked_dt = parse_time_text(str(quote_checked_at))
+            quote_age_seconds = max(
+                0.0,
+                (checked_dt - observed_dt).total_seconds(),
+            )
+            quote_freshness = (
+                "fresh"
+                if quote_age_seconds <= stale_after_seconds
+                else "stale"
+            )
+        except Exception:
+            quote_freshness = "invalid_time"
+
+    band_low = None
+    band_high = None
+    deviation_percent = None
+    suggested_safe_sell_rate = None
+    suggestion_reason = "no_quote"
+
+    if latest_live_price > 0:
+        band_low = latest_live_price * (1.0 - tolerance_percent / 100.0)
+        band_high = latest_live_price * (1.0 + tolerance_percent / 100.0)
+        deviation_percent = abs((requested_rate - latest_live_price) / latest_live_price) * 100.0
+        if quote_freshness in {"fresh", "unknown"}:
+            suggested_safe_sell_rate = min(max(requested_rate, band_low), band_high)
+            if requested_rate < band_low:
+                suggestion_reason = "clamped_to_lower_band"
+            elif requested_rate > band_high:
+                suggestion_reason = "clamped_to_upper_band"
+            else:
+                suggestion_reason = "already_inside_band"
+        elif quote_freshness == "stale":
+            suggestion_reason = "quote_stale"
+
+    return {
+        "symbol": str(symbol),
+        "latest_live_price": latest_live_price if latest_live_price > 0 else None,
+        "requested_sell_rate": requested_rate,
+        "deviation_percent": deviation_percent,
+        "live_slippage_tolerance_percent": tolerance_percent,
+        "allowed_sell_band_low": band_low,
+        "allowed_sell_band_high": band_high,
+        "suggested_safe_sell_rate": suggested_safe_sell_rate,
+        "suggestion_reason": suggestion_reason,
+        "quote_freshness": quote_freshness,
+        "quote_age_seconds": quote_age_seconds,
+        "quote_safe_for_suggestion": quote_freshness in {"fresh", "unknown"},
+    }
 
 
 def evaluate_live_entry_candidates(

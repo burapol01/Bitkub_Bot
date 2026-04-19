@@ -7,6 +7,7 @@ from services.db_service import init_db
 from ui.streamlit.data import (
     build_dashboard_context,
     build_overview_context,
+    latest_market_price_snapshot,
     sidebar_private_context,
 )
 from services.version_service import (
@@ -110,10 +111,16 @@ def main() -> None:
                 runtime=ctx["runtime"],
                 private_ctx=ctx["private_ctx"],
                 latest_prices=ctx["latest_prices"],
+                quote_fetched_at=str(ctx.get("quote_fetched_at") or ""),
                 auto_refresh_run_every=run_every,
             )
         elif selected_page == "Strategy":
-            render_strategy_page(config=config)
+            market_snapshot = latest_market_price_snapshot()
+            render_strategy_page(
+                config=config,
+                latest_prices=dict(market_snapshot.get("latest_prices") or {}),
+                quote_fetched_at=str(market_snapshot.get("quote_fetched_at") or ""),
+            )
         elif selected_page == "Reports":
             render_reports_page(today=today, config=config)
         elif selected_page == "Logs":

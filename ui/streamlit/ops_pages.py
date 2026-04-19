@@ -16,9 +16,11 @@ from services.db_service import (
     fetch_latest_filled_execution_orders_by_symbol,
     fetch_open_execution_orders,
     fetch_overview_summary,
+    fetch_recent_trade_journal,
 )
 from services.execution_service import (
     LiveExecutionGuardrailError,
+    build_exit_guardrail_resolution,
     build_live_execution_guardrails,
     cancel_live_order,
     refresh_live_order_from_exchange,
@@ -67,6 +69,81 @@ def _show_live_ops_feedback() -> None:
 
     for line in lines:
         st.caption(line)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _is_sell_slippage_guardrail_message(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    return (
+        "sell rate deviates" in normalized
+        and "live_slippage_tolerance_percent" in normalized
+    )
+
+
+def _latest_auto_exit_slippage_block_row(
+    *,
+    limit: int = 40,
+) -> dict[str, Any] | None:
+    rows = fetch_recent_trade_journal(
+        limit=limit,
+        channel="auto_live_exit",
+        status="blocked",
+    )
+    for row in rows:
+        details = dict(row.get("details") or {})
+        errors = [str(line) for line in list(details.get("errors") or [])]
+        if any(_is_sell_slippage_guardrail_message(line) for line in errors):
+            return row
+    return None
+
+
+def _queue_manual_one_time_sell_prefill(
+    *,
+    symbol: str,
+    amount_coin: float,
+    rate: float,
+) -> None:
+    st.session_state["live_ops_manual_order_prefill"] = {
+        "symbol": str(symbol),
+        "side": "sell",
+        "order_type": "limit",
+        "amount_coin": float(amount_coin),
+        "rate": float(rate),
+        "confirm": False,
+    }
+
+
+def _open_strategy_workspace_for_symbol(
+    *,
+    symbol: str,
+    workspace: str,
+) -> None:
+    st.session_state["ui_page"] = "Strategy"
+    st.query_params["page"] = "Strategy"
+    st.session_state["strategy_workspace"] = str(workspace)
+
+    if workspace == "Live Tuning":
+        st.session_state["strategy_tuning_focus_symbol"] = str(symbol)
+    elif workspace == "Compare":
+        compare_source = str(st.session_state.get("strategy_compare_source", "candles"))
+        compare_resolution = str(st.session_state.get("strategy_compare_resolution", "240"))
+        compare_days = int(st.session_state.get("strategy_compare_days", 14) or 14)
+        st.session_state["strategy_compare_symbol"] = str(symbol)
+        st.session_state["strategy_compare_symbol__input"] = str(symbol)
+        st.session_state["strategy_compare_autorun"] = {
+            "symbol": str(symbol),
+            "source": compare_source,
+            "resolution": compare_resolution,
+            "days": compare_days,
+        }
+
+    st.rerun()
 
 
 
@@ -606,6 +683,7 @@ def render_live_ops_page(
     runtime: dict[str, Any],
     private_ctx: dict[str, Any],
     latest_prices: dict[str, float],
+    quote_fetched_at: str | None = None,
     auto_refresh_run_every: str | None = None,
 ) -> None:
     client = private_ctx["client"]
@@ -619,6 +697,68 @@ def render_live_ops_page(
     symbols = sorted(config["rules"].keys())
     manual_defaults = dict(config.get("live_manual_order", {}))
     default_symbol = str(manual_defaults.get("symbol", symbols[0]))
+
+    manual_symbol_key = "live_ops_manual_symbol"
+    manual_side_key = "live_ops_manual_side"
+    manual_order_type_key = "live_ops_manual_order_type"
+    manual_amount_thb_key = "live_ops_manual_amount_thb"
+    manual_amount_coin_key = "live_ops_manual_amount_coin"
+    manual_rate_key = "live_ops_manual_rate"
+    manual_confirm_key = "live_ops_manual_confirm"
+
+    pending_prefill = st.session_state.pop("live_ops_manual_order_prefill", None)
+    if isinstance(pending_prefill, dict):
+        prefill_symbol = str(pending_prefill.get("symbol", ""))
+        if prefill_symbol in symbols:
+            st.session_state[manual_symbol_key] = prefill_symbol
+            prefill_side = str(pending_prefill.get("side", "sell")).lower()
+            if prefill_side in {"buy", "sell"}:
+                st.session_state[manual_side_key] = prefill_side
+            prefill_order_type = str(pending_prefill.get("order_type", "limit")).lower()
+            if prefill_order_type in {"limit"}:
+                st.session_state[manual_order_type_key] = prefill_order_type
+            if "amount_thb" in pending_prefill:
+                st.session_state[manual_amount_thb_key] = _safe_float(
+                    pending_prefill.get("amount_thb"),
+                    _safe_float(manual_defaults.get("amount_thb", 100.0), 100.0),
+                )
+            if "amount_coin" in pending_prefill:
+                st.session_state[manual_amount_coin_key] = _safe_float(
+                    pending_prefill.get("amount_coin"),
+                    _safe_float(manual_defaults.get("amount_coin", 0.0), 0.0),
+                )
+            if "rate" in pending_prefill:
+                st.session_state[manual_rate_key] = _safe_float(
+                    pending_prefill.get("rate"),
+                    _safe_float(manual_defaults.get("rate", 1.0), 1.0),
+                )
+            st.session_state[manual_confirm_key] = False
+
+    if st.session_state.get(manual_symbol_key) not in symbols:
+        st.session_state[manual_symbol_key] = (
+            default_symbol if default_symbol in symbols else symbols[0]
+        )
+    if st.session_state.get(manual_side_key) not in {"buy", "sell"}:
+        st.session_state[manual_side_key] = str(manual_defaults.get("side", "buy"))
+    if st.session_state.get(manual_order_type_key) not in {"limit"}:
+        st.session_state[manual_order_type_key] = "limit"
+    if manual_amount_thb_key not in st.session_state:
+        st.session_state[manual_amount_thb_key] = _safe_float(
+            manual_defaults.get("amount_thb", 100.0),
+            100.0,
+        )
+    if manual_amount_coin_key not in st.session_state:
+        st.session_state[manual_amount_coin_key] = _safe_float(
+            manual_defaults.get("amount_coin", 0.0),
+            0.0,
+        )
+    if manual_rate_key not in st.session_state:
+        st.session_state[manual_rate_key] = _safe_float(
+            latest_prices.get(st.session_state[manual_symbol_key], manual_defaults.get("rate", 1.0)),
+            _safe_float(manual_defaults.get("rate", 1.0), 1.0),
+        )
+    if manual_confirm_key not in st.session_state:
+        st.session_state[manual_confirm_key] = False
 
     def _load_live_ops_dynamic() -> dict[str, Any]:
         _, _, _, total_pnl = calc_daily_totals(runtime["daily_stats"])
@@ -640,6 +780,7 @@ def render_live_ops_page(
             "open_execution_orders": execution_summary["open_orders"],
             "recent_execution_orders": execution_summary["recent_orders"],
             "recent_execution_events": execution_summary["recent_events"],
+            "latest_auto_exit_slippage_block": _latest_auto_exit_slippage_block_row(),
         }
 
     def _render_live_ops_dynamic_top() -> None:
@@ -696,6 +837,192 @@ def render_live_ops_page(
                 "No blocking reasons right now. The engine can still reject the final submit if the exchange response changes.",
                 "good",
             )
+
+        slippage_block_row = dynamic.get("latest_auto_exit_slippage_block")
+        if slippage_block_row:
+            details = dict(slippage_block_row.get("details") or {})
+            candidate = dict(details.get("candidate") or {})
+            symbol = str(
+                slippage_block_row.get("symbol")
+                or candidate.get("symbol")
+                or ""
+            )
+            requested_sell_rate = _safe_float(
+                slippage_block_row.get("request_rate"),
+                _safe_float(candidate.get("rate"), 0.0),
+            )
+            tolerance_percent = _safe_float(
+                dict(details.get("guardrails") or {}).get(
+                    "live_slippage_tolerance_percent",
+                ),
+                _safe_float(config.get("live_slippage_tolerance_percent"), 0.0),
+            )
+            latest_live_price = _safe_float(latest_prices.get(symbol), 0.0)
+            decision_time_price = _safe_float(
+                slippage_block_row.get("latest_price"),
+                _safe_float(candidate.get("latest_price"), 0.0),
+            )
+            amount_coin = _safe_float(
+                slippage_block_row.get("amount_coin"),
+                _safe_float(candidate.get("amount_coin"), 0.0),
+            )
+            resolution = build_exit_guardrail_resolution(
+                symbol=symbol,
+                requested_sell_rate=requested_sell_rate,
+                latest_price=latest_live_price,
+                live_slippage_tolerance_percent=tolerance_percent,
+                quote_observed_at=str(quote_fetched_at or ""),
+                quote_checked_at=now_text(),
+            )
+
+            render_section_intro(
+                "Exit Guardrail Resolution Helper",
+                "Latest slippage-blocked auto exit with one-time manual reprice options. No order is sent automatically.",
+                "Auto Exit",
+            )
+            st.markdown(
+                " ".join(
+                    [
+                        badge(f"symbol {symbol}", "info"),
+                        badge(
+                            f"blocked_at {slippage_block_row.get('created_at', 'n/a')}",
+                            "warn",
+                        ),
+                        badge(
+                            f"exit_reason {slippage_block_row.get('exit_reason', 'n/a')}",
+                            "info",
+                        ),
+                    ]
+                ),
+                unsafe_allow_html=True,
+            )
+
+            latest_live_price_value = resolution.get("latest_live_price")
+            deviation_percent = resolution.get("deviation_percent")
+            band_low = resolution.get("allowed_sell_band_low")
+            band_high = resolution.get("allowed_sell_band_high")
+            suggested_rate = resolution.get("suggested_safe_sell_rate")
+            quote_freshness = str(resolution.get("quote_freshness") or "unknown")
+            quote_age_seconds = resolution.get("quote_age_seconds")
+
+            st.caption(
+                f"Latest live price: {latest_live_price_value:,.8f}"
+                if latest_live_price_value is not None
+                else "Latest live price: unavailable from current quote snapshot."
+            )
+            st.caption(f"Requested sell rate: {requested_sell_rate:,.8f}")
+            st.caption(
+                f"Deviation from latest live price: {deviation_percent:.2f}%"
+                if deviation_percent is not None
+                else "Deviation from latest live price: n/a"
+            )
+            st.caption(
+                f"Configured live_slippage_tolerance_percent: {tolerance_percent:.2f}%"
+            )
+            st.caption(
+                f"Allowed sell band from latest live price: {band_low:,.8f} to {band_high:,.8f}"
+                if band_low is not None and band_high is not None
+                else "Allowed sell band from latest live price: n/a"
+            )
+            st.caption(
+                f"Suggested safe sell rate: {suggested_rate:,.8f}"
+                if suggested_rate is not None
+                else "Suggested safe sell rate: unavailable (quote stale or unavailable)."
+            )
+            if quote_age_seconds is not None:
+                st.caption(
+                    f"Quote freshness: {quote_freshness} ({quote_age_seconds:.0f}s old)"
+                )
+            else:
+                st.caption(f"Quote freshness: {quote_freshness}")
+            if decision_time_price > 0:
+                st.caption(
+                    f"Decision-time price at block event: {decision_time_price:,.8f}"
+                )
+
+            quote_safe = bool(resolution.get("quote_safe_for_suggestion"))
+            if not quote_safe:
+                st.warning(
+                    "Quote is stale or unavailable. Safe one-time rate suggestions are disabled until a fresh quote is available."
+                )
+
+            st.caption(
+                "One-time reprice only: these actions prefill the manual order form for this round and do not change saved rule values or tolerance."
+            )
+            action_left, action_right, action_tune, action_compare = st.columns(4)
+            with action_left:
+                use_latest = st.button(
+                    "Use Latest Price (One-time)",
+                    disabled=(not quote_safe) or latest_live_price_value is None or amount_coin <= 0,
+                    key=f"exit_guardrail_use_latest_{symbol}",
+                    width='stretch',
+                )
+            with action_right:
+                use_safe_edge = st.button(
+                    "Use Safe Edge (One-time)",
+                    disabled=(not quote_safe) or suggested_rate is None or amount_coin <= 0,
+                    key=f"exit_guardrail_use_safe_{symbol}",
+                    width='stretch',
+                )
+            with action_tune:
+                open_tuning = st.button(
+                    "Open Live Tuning",
+                    disabled=not bool(symbol),
+                    key=f"exit_guardrail_open_tuning_{symbol}",
+                    width='stretch',
+                )
+            with action_compare:
+                open_compare = st.button(
+                    "Open Compare",
+                    disabled=not bool(symbol),
+                    key=f"exit_guardrail_open_compare_{symbol}",
+                    width='stretch',
+                )
+
+            if use_latest and latest_live_price_value is not None:
+                _queue_manual_one_time_sell_prefill(
+                    symbol=symbol,
+                    amount_coin=amount_coin,
+                    rate=float(latest_live_price_value),
+                )
+                _set_live_ops_feedback(
+                    "Manual form prefilled from exit helper",
+                    [
+                        f"symbol={symbol} side=sell amount_coin={amount_coin:,.8f}",
+                        f"rate={float(latest_live_price_value):,.8f} (latest live price)",
+                        "Review and submit manually to execute once.",
+                    ],
+                    tone="warning",
+                )
+                st.rerun()
+
+            if use_safe_edge and suggested_rate is not None:
+                _queue_manual_one_time_sell_prefill(
+                    symbol=symbol,
+                    amount_coin=amount_coin,
+                    rate=float(suggested_rate),
+                )
+                _set_live_ops_feedback(
+                    "Manual form prefilled from exit helper",
+                    [
+                        f"symbol={symbol} side=sell amount_coin={amount_coin:,.8f}",
+                        f"rate={float(suggested_rate):,.8f} (safe edge in slippage band)",
+                        "Review and submit manually to execute once.",
+                    ],
+                    tone="warning",
+                )
+                st.rerun()
+
+            if open_tuning:
+                _open_strategy_workspace_for_symbol(
+                    symbol=symbol,
+                    workspace="Live Tuning",
+                )
+            if open_compare:
+                _open_strategy_workspace_for_symbol(
+                    symbol=symbol,
+                    workspace="Compare",
+                )
 
         _show_live_ops_feedback()
 
@@ -759,28 +1086,50 @@ def render_live_ops_page(
     with left:
         render_section_intro("Manual Live Order", "Submit a real order only after the pre-flight checks look clean.", "Action Form")
         with st.form("manual_live_order_form"):
+            current_manual_symbol = str(st.session_state.get(manual_symbol_key, default_symbol))
+            if current_manual_symbol not in symbols:
+                current_manual_symbol = default_symbol if default_symbol in symbols else symbols[0]
+                st.session_state[manual_symbol_key] = current_manual_symbol
             symbol = st.selectbox(
                 "Symbol",
                 symbols,
-                index=max(0, symbols.index(default_symbol)) if default_symbol in symbols else 0,
+                index=max(0, symbols.index(current_manual_symbol)),
+                key=manual_symbol_key,
             )
-            side = st.selectbox("Side", ["buy", "sell"], index=0 if manual_defaults.get("side", "buy") == "buy" else 1)
-            order_type = st.selectbox("Order Type", ["limit"], index=0)
+            side = st.selectbox(
+                "Side",
+                ["buy", "sell"],
+                index=0 if str(st.session_state.get(manual_side_key, "buy")) == "buy" else 1,
+                key=manual_side_key,
+            )
+            order_type = st.selectbox(
+                "Order Type",
+                ["limit"],
+                index=0,
+                key=manual_order_type_key,
+            )
             amount_thb = st.number_input(
                 "Amount THB",
                 min_value=0.0,
-                value=float(manual_defaults.get("amount_thb", 100.0)),
                 step=10.0,
+                key=manual_amount_thb_key,
             )
             amount_coin = st.number_input(
                 "Amount Coin",
                 min_value=0.0,
-                value=float(manual_defaults.get("amount_coin", 0.0)),
                 format="%.8f",
+                key=manual_amount_coin_key,
             )
-            default_rate = float(latest_prices.get(symbol, manual_defaults.get("rate", 1.0)))
-            rate = st.number_input("Rate", min_value=0.0, value=default_rate, format="%.8f")
-            confirm = st.checkbox("I understand this can submit a real Bitkub order.")
+            rate = st.number_input(
+                "Rate",
+                min_value=0.0,
+                format="%.8f",
+                key=manual_rate_key,
+            )
+            confirm = st.checkbox(
+                "I understand this can submit a real Bitkub order.",
+                key=manual_confirm_key,
+            )
             submitted = st.form_submit_button("Submit Manual Order", type="primary", width='stretch')
 
         selected_rule = dict(config["rules"][symbol])

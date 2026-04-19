@@ -40,7 +40,7 @@ from ui.streamlit.strategy_support import (
     fetch_market_symbol_universe,
     run_strategy_compare_rows,
 )
-from utils.time_utils import now_text
+from utils.time_utils import now_dt, now_text, parse_time_text
 
 
 def _summarize_text_lines(lines: list[str]) -> list[dict[str, Any]]:
@@ -187,6 +187,48 @@ def _strategy_compare_scope_key(
             str(int(days)),
         ]
     )
+
+
+def _render_live_rule_price_overlay(
+    *,
+    symbol: str,
+    buy_below: float,
+    sell_above: float,
+    latest_prices: dict[str, float],
+    quote_fetched_at: str | None,
+) -> None:
+    live_price = float(latest_prices.get(str(symbol), 0.0) or 0.0)
+    if live_price <= 0:
+        st.caption(
+            "Live price overlay: market price is unavailable for this symbol right now."
+        )
+        return
+
+    buy_gap_percent = ((buy_below - live_price) / live_price) * 100.0
+    sell_gap_percent = ((sell_above - live_price) / live_price) * 100.0
+    st.caption(
+        "Live price overlay: "
+        f"price={live_price:,.8f} | "
+        f"buy_below={buy_below:,.8f} ({buy_gap_percent:+.2f}%) | "
+        f"sell_above={sell_above:,.8f} ({sell_gap_percent:+.2f}%)"
+    )
+
+    if quote_fetched_at:
+        try:
+            quote_age_seconds = max(
+                0.0,
+                (now_dt() - parse_time_text(str(quote_fetched_at))).total_seconds(),
+            )
+            freshness = "fresh" if quote_age_seconds <= 30.0 else "stale"
+            st.caption(
+                f"Live quote freshness: {freshness} ({quote_age_seconds:.0f}s old)"
+            )
+        except Exception:
+            st.caption(
+                f"Live quote freshness: timestamp unavailable ({quote_fetched_at})"
+            )
+    else:
+        st.caption("Live quote freshness: unavailable.")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -425,7 +467,17 @@ def render_sidebar(
     return str(page_name)
 
 
-def render_strategy_page(*, config: dict[str, Any]) -> None:
+def render_strategy_page(
+    *,
+    config: dict[str, Any],
+    latest_prices: dict[str, float] | None = None,
+    quote_fetched_at: str | None = None,
+) -> None:
+    latest_prices = {
+        str(symbol): float(price)
+        for symbol, price in dict(latest_prices or {}).items()
+        if str(symbol)
+    }
     render_section_intro(
         "Strategy Lab",
         "Research first, then tighten live rules. Watchlist symbols are your research universe, while config rules remain the live shortlist.",
@@ -1050,6 +1102,13 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                 st.caption(
                     f"Rule: buy_below={focus_row['buy_below']:,.8f} sell_above={focus_row['sell_above']:,.8f} stop_ref={focus_row['stop_reference']:,.8f} ({focus_row['stop_gap_percent']:+.2f}%) take={focus_row['take_profit_percent']:.2f}%"
                 )
+                _render_live_rule_price_overlay(
+                    symbol=str(focus_row["symbol"]),
+                    buy_below=float(focus_row["buy_below"]),
+                    sell_above=float(focus_row["sell_above"]),
+                    latest_prices=latest_prices,
+                    quote_fetched_at=quote_fetched_at,
+                )
                 st.caption(f"Tuning note: {focus_row['tuning_note']}")
                 st.caption(f"Confidence: {focus_row['confidence_note']}")
                 st.caption(f"Fee guardrail: {focus_row.get('fee_guardrail_note', 'n/a')}")
@@ -1283,6 +1342,17 @@ def render_strategy_page(*, config: dict[str, Any]) -> None:
                     st.caption(
                         f"Rule: buy_below={focus_variant_row['buy_below']:,.8f} sell_above={focus_variant_row['sell_above']:,.8f} stop={focus_variant_row['stop_loss_percent']:.2f}% take={focus_variant_row['take_profit_percent']:.2f}%"
                     )
+                    current_live_rule = dict(
+                        config["rules"].get(str(compare_payload.get("symbol", ""))) or {}
+                    )
+                    if current_live_rule:
+                        _render_live_rule_price_overlay(
+                            symbol=str(compare_payload.get("symbol", "")),
+                            buy_below=float(current_live_rule.get("buy_below", 0.0) or 0.0),
+                            sell_above=float(current_live_rule.get("sell_above", 0.0) or 0.0),
+                            latest_prices=latest_prices,
+                            quote_fetched_at=quote_fetched_at,
+                        )
                     st.caption(
                         f"Replay: trades={focus_variant_row['trades']} win_rate={focus_variant_row['win_rate_percent']:.2f}% hold={focus_variant_row['avg_hold_minutes']:.1f} min open_position={focus_variant_row['open_position']}"
                     )
