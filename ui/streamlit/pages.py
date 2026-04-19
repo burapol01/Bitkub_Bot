@@ -640,6 +640,10 @@ def render_strategy_page(
         and queued_compare_target
         and queued_compare_target in configured_symbols
     ):
+        # Queued Compare navigation must win over any stale widget/session state
+        # left behind by an earlier render or test.
+        st.session_state.pop("strategy_compare_payload", None)
+        st.session_state.pop("strategy_compare_symbol__input__signature", None)
         st.session_state["strategy_compare_symbol"] = queued_compare_target
         st.session_state["strategy_compare_symbol__input"] = queued_compare_target
         st.session_state["strategy_compare_autorun"] = {
