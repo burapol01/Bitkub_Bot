@@ -733,7 +733,10 @@ class StrategyPageAppTests(unittest.TestCase):
     def test_live_ops_open_compare_switches_to_strategy_compare(self) -> None:
         script = _app_main_script(
             start_page="Live Ops",
-            body=_navigation_live_ops_body(symbol="THB_FF"),
+            body=_navigation_live_ops_body(symbol="THB_FF")
+            + "\n"
+            + '    st.session_state.setdefault("strategy_compare_symbol", "THB_TRX")\n'
+            + '    st.session_state.setdefault("strategy_compare_symbol__input", "THB_TRX")\n',
         )
 
         at = AppTest.from_string(script)
@@ -747,6 +750,7 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertEqual(at.session_state["sidebar_page"], "Strategy")
         self.assertEqual(at.session_state["strategy_workspace"], "Compare")
         self.assertEqual(at.session_state["strategy_compare_symbol"], "THB_FF")
+        self.assertEqual(at.session_state["strategy_compare_symbol__input"], "THB_FF")
 
     def test_live_ops_open_live_tuning_switches_to_strategy_tuning(self) -> None:
         script = _app_main_script(
