@@ -134,6 +134,31 @@ Flag-only cases:
 
 Details: [docs/runtime_reconciliation.md](/d:/Project/Bitkub/docs/runtime_reconciliation.md)
 
+## API Retry Handling
+
+Exchange and notification calls now use endpoint-specific retry rules instead of one broad retry policy.
+
+- public market reads: bounded exponential backoff
+- balance/account reads: cautious retry
+- open-order and status reads: cautious retry
+- create-order: no blind retry on ambiguous failures
+- cancel-order: re-check status before one retry when the first cancel outcome is ambiguous
+- Telegram polling and delivery: retry only for safe transient failures
+
+Retry classes:
+
+- `timeout`
+- `rate_limit`
+- `network`
+- `server`
+- `client`
+- `validation`
+- `auth`
+
+Structured retry events are written to `runtime_events` with `event_type=api_retry`, including endpoint, action, attempt, outcome, category, and correlation id when the caller provides one.
+
+Details: [docs/api_retry_handling.md](/d:/Project/Bitkub/docs/api_retry_handling.md)
+
 ## VPS Deploy
 
 Recommended target:

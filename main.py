@@ -1334,6 +1334,7 @@ def main():
                 guardrails=live_guardrails,
                 available_balances=extract_available_balances(account_snapshot),
                 created_at=now_text(),
+                correlation_id=correlation_id,
             )
         except LiveExecutionGuardrailError as e:
             failed_lines = str(e).split("; ")
@@ -3535,6 +3536,7 @@ def main():
                         guardrails=live_guardrails,
                         available_balances=extract_available_balances(account_snapshot),
                         created_at=now_text(),
+                        correlation_id=correlation_id,
                     )
                 except LiveExecutionGuardrailError as e:
                     notice = "Manual live order blocked by guardrails"
@@ -4470,6 +4472,7 @@ def main():
                         client=private_client,
                         order_record=target_order,
                         occurred_at=now_text(),
+                        correlation_id=correlation_id,
                     )
                 except Exception as e:
                     notice = "Live order cancel failed"

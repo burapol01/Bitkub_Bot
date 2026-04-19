@@ -111,6 +111,7 @@ def submit_manual_order_from_ui(
             guardrails=guardrails,
             available_balances=extract_available_balances(account_snapshot),
             created_at=now_text(),
+            correlation_id=correlation_id,
         )
     except Exception as exc:
         audit_event(
