@@ -379,17 +379,19 @@ def validate_live_sell_request_guardrails(
     return reasons
 
 
-def build_exit_guardrail_resolution(
+def build_live_price_band_resolution(
     *,
     symbol: str,
-    requested_sell_rate: float,
+    side: str,
+    requested_rate: float,
     latest_price: float | None,
     live_slippage_tolerance_percent: float,
     quote_observed_at: str | None = None,
     quote_checked_at: str | None = None,
     quote_stale_after_seconds: float = 30.0,
 ) -> dict[str, Any]:
-    requested_rate = float(requested_sell_rate)
+    normalized_side = str(side or "").strip().lower() or "unknown"
+    requested_rate_value = float(requested_rate)
     tolerance_percent = max(0.0, float(live_slippage_tolerance_percent))
     latest_live_price = float(latest_price or 0.0)
     stale_after_seconds = max(1.0, float(quote_stale_after_seconds))
@@ -417,18 +419,18 @@ def build_exit_guardrail_resolution(
     band_low = None
     band_high = None
     deviation_percent = None
-    suggested_safe_sell_rate = None
+    suggested_safe_rate = None
     suggestion_reason = "no_quote"
 
     if latest_live_price > 0:
         band_low = latest_live_price * (1.0 - tolerance_percent / 100.0)
         band_high = latest_live_price * (1.0 + tolerance_percent / 100.0)
-        deviation_percent = abs((requested_rate - latest_live_price) / latest_live_price) * 100.0
+        deviation_percent = abs((requested_rate_value - latest_live_price) / latest_live_price) * 100.0
         if quote_freshness in {"fresh", "unknown"}:
-            suggested_safe_sell_rate = min(max(requested_rate, band_low), band_high)
-            if requested_rate < band_low:
+            suggested_safe_rate = min(max(requested_rate_value, band_low), band_high)
+            if requested_rate_value < band_low:
                 suggestion_reason = "clamped_to_lower_band"
-            elif requested_rate > band_high:
+            elif requested_rate_value > band_high:
                 suggestion_reason = "clamped_to_upper_band"
             else:
                 suggestion_reason = "already_inside_band"
@@ -437,17 +439,55 @@ def build_exit_guardrail_resolution(
 
     return {
         "symbol": str(symbol),
+        "side": normalized_side,
         "latest_live_price": latest_live_price if latest_live_price > 0 else None,
-        "requested_sell_rate": requested_rate,
+        "requested_rate": requested_rate_value,
         "deviation_percent": deviation_percent,
         "live_slippage_tolerance_percent": tolerance_percent,
-        "allowed_sell_band_low": band_low,
-        "allowed_sell_band_high": band_high,
-        "suggested_safe_sell_rate": suggested_safe_sell_rate,
+        "allowed_band_low": band_low,
+        "allowed_band_high": band_high,
+        "suggested_safe_rate": suggested_safe_rate,
         "suggestion_reason": suggestion_reason,
         "quote_freshness": quote_freshness,
         "quote_age_seconds": quote_age_seconds,
         "quote_safe_for_suggestion": quote_freshness in {"fresh", "unknown"},
+    }
+
+
+def build_exit_guardrail_resolution(
+    *,
+    symbol: str,
+    requested_sell_rate: float,
+    latest_price: float | None,
+    live_slippage_tolerance_percent: float,
+    quote_observed_at: str | None = None,
+    quote_checked_at: str | None = None,
+    quote_stale_after_seconds: float = 30.0,
+) -> dict[str, Any]:
+    resolution = build_live_price_band_resolution(
+        symbol=symbol,
+        side="sell",
+        requested_rate=requested_sell_rate,
+        latest_price=latest_price,
+        live_slippage_tolerance_percent=live_slippage_tolerance_percent,
+        quote_observed_at=quote_observed_at,
+        quote_checked_at=quote_checked_at,
+        quote_stale_after_seconds=quote_stale_after_seconds,
+    )
+
+    return {
+        "symbol": str(symbol),
+        "latest_live_price": resolution.get("latest_live_price"),
+        "requested_sell_rate": resolution.get("requested_rate"),
+        "deviation_percent": resolution.get("deviation_percent"),
+        "live_slippage_tolerance_percent": resolution.get("live_slippage_tolerance_percent"),
+        "allowed_sell_band_low": resolution.get("allowed_band_low"),
+        "allowed_sell_band_high": resolution.get("allowed_band_high"),
+        "suggested_safe_sell_rate": resolution.get("suggested_safe_rate"),
+        "suggestion_reason": resolution.get("suggestion_reason"),
+        "quote_freshness": resolution.get("quote_freshness"),
+        "quote_age_seconds": resolution.get("quote_age_seconds"),
+        "quote_safe_for_suggestion": resolution.get("quote_safe_for_suggestion"),
     }
 
 

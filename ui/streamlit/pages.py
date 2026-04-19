@@ -553,7 +553,7 @@ def render_sidebar(
 
         render_sidebar_block(
             "Guideline",
-            "Overview = health first<br>Live Ops = real actions<br>Strategy = tune rules before widening automation<br>Logs = debug only when summary says something is wrong",
+            "Overview = health first<br>Live Ops = real actions<br>Execution Assistant = adjust live rule prices against the current quote<br>Strategy = tune rules before widening automation<br>Logs = debug only when summary says something is wrong",
         )
     return str(page_name)
 
