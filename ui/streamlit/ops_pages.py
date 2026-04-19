@@ -128,18 +128,7 @@ def _open_strategy_workspace_for_symbol(
     if workspace == "Live Tuning":
         queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=symbol)
     elif workspace == "Compare":
-        compare_source = str(st.session_state.get("strategy_compare_source", "candles"))
-        compare_resolution = str(st.session_state.get("strategy_compare_resolution", "240"))
-        compare_days = int(st.session_state.get("strategy_compare_days", 14) or 14)
         queue_strategy_workspace_navigation(workspace="Compare", symbol=symbol)
-        st.session_state["strategy_compare_symbol"] = str(symbol)
-        st.session_state["strategy_compare_symbol__input"] = str(symbol)
-        st.session_state["strategy_compare_autorun"] = {
-            "symbol": str(symbol),
-            "source": compare_source,
-            "resolution": compare_resolution,
-            "days": compare_days,
-        }
 
     st.query_params["page"] = "Strategy"
     st.rerun()

@@ -14,7 +14,17 @@ def queue_live_ops_navigation(*, symbol: str) -> None:
 
 
 def queue_strategy_workspace_navigation(*, workspace: str, symbol: str | None = None) -> None:
+    normalized_workspace = str(workspace)
     queue_page_autorun(page="Strategy")
-    st.session_state["strategy_workspace_autorun"] = str(workspace)
-    if symbol is not None:
-        st.session_state["strategy_workspace_focus_symbol"] = str(symbol)
+    st.session_state["strategy_workspace_autorun"] = normalized_workspace
+    if symbol is None:
+        return
+
+    normalized_symbol = str(symbol)
+    st.session_state["strategy_workspace_focus_symbol"] = normalized_symbol
+    if normalized_workspace == "Compare":
+        st.session_state["strategy_compare_symbol_autorun"] = normalized_symbol
+        st.session_state.pop("strategy_tuning_focus_symbol_autorun", None)
+    elif normalized_workspace == "Live Tuning":
+        st.session_state["strategy_tuning_focus_symbol_autorun"] = normalized_symbol
+        st.session_state.pop("strategy_compare_symbol_autorun", None)

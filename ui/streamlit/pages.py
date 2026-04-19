@@ -600,62 +600,6 @@ def render_strategy_page(
     default_rank_days = int(st.session_state.get("strategy_rank_days", 14))
     ranking_resolution = str(st.session_state.get("strategy_rank_resolution", default_rank_resolution))
     ranking_days = int(st.session_state.get("strategy_rank_days", default_rank_days))
-
-    strategy_workspace_options = [
-        "Overview",
-        "Sync & Rank",
-        "Live Tuning",
-        "Compare",
-        "Replay",
-    ]
-    workspace_autorun = st.session_state.pop("strategy_workspace_autorun", None)
-    workspace_focus_symbol = st.session_state.pop("strategy_workspace_focus_symbol", None)
-    default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
-    if workspace_autorun in strategy_workspace_options:
-        default_strategy_workspace = str(workspace_autorun)
-        st.session_state["strategy_workspace"] = default_strategy_workspace
-    if default_strategy_workspace not in strategy_workspace_options:
-        default_strategy_workspace = "Sync & Rank"
-    _sync_select_state(
-        key="strategy_workspace",
-        options=strategy_workspace_options,
-        default=default_strategy_workspace,
-    )
-    strategy_workspace = st.radio(
-        "Strategy Workspace",
-        strategy_workspace_options,
-        horizontal=True,
-        key="strategy_workspace",
-    )
-    if workspace_focus_symbol:
-        if strategy_workspace == "Compare":
-            st.session_state["strategy_compare_autorun"] = {
-                "symbol": str(workspace_focus_symbol),
-                "source": str(st.session_state.get("strategy_compare_source", "candles")),
-                "resolution": str(st.session_state.get("strategy_compare_resolution", ranking_resolution)),
-                "days": int(st.session_state.get("strategy_compare_days", ranking_days) or ranking_days),
-            }
-        elif strategy_workspace == "Live Tuning":
-            st.session_state["strategy_tuning_focus_symbol"] = str(workspace_focus_symbol)
-            st.session_state["strategy_tuning_focus_autorun"] = str(workspace_focus_symbol)
-    render_callout(
-        "Workspace Focus",
-        {
-            "Overview": "Lightweight summary of actual paper-trade analytics only.",
-            "Sync & Rank": "Sync candles, inspect ranking, and decide which symbols deserve live attention.",
-            "Live Tuning": "Run the expensive live-rule review, fee guardrails, and auto-entry review report only when you are actively tuning.",
-            "Compare": "Compare variants for one live symbol without reloading ranking and tuning matrices.",
-            "Replay": "Manual deep-dive for a single symbol with its own replay controls and coverage.",
-        }[strategy_workspace],
-        "info",
-    )
-
-    should_show_overview = strategy_workspace == "Overview"
-    should_show_ranking = strategy_workspace == "Sync & Rank"
-    should_show_tuning = strategy_workspace == "Live Tuning"
-    should_show_compare = strategy_workspace == "Compare"
-    should_show_replay = strategy_workspace == "Replay"
-
     configured_symbols = sorted(config["rules"].keys())
     watchlist_symbols = [
         str(symbol)
@@ -674,6 +618,77 @@ def render_strategy_page(
         for value in config.get("live_auto_entry_allowed_biases", ["bullish", "mixed"])
         if str(value).strip()
     } or {"bullish", "mixed"}
+
+    strategy_workspace_options = [
+        "Overview",
+        "Sync & Rank",
+        "Live Tuning",
+        "Compare",
+        "Replay",
+    ]
+    workspace_autorun = st.session_state.pop("strategy_workspace_autorun", None)
+    queued_compare_symbol = st.session_state.pop("strategy_compare_symbol_autorun", None)
+    queued_tuning_symbol = st.session_state.pop("strategy_tuning_focus_symbol_autorun", None)
+    workspace_focus_symbol = st.session_state.pop("strategy_workspace_focus_symbol", None)
+    default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
+    if workspace_autorun in strategy_workspace_options:
+        default_strategy_workspace = str(workspace_autorun)
+        st.session_state["strategy_workspace"] = default_strategy_workspace
+    queued_compare_target = str(queued_compare_symbol or workspace_focus_symbol or "").strip()
+    if (
+        default_strategy_workspace == "Compare"
+        and queued_compare_target
+        and queued_compare_target in configured_symbols
+    ):
+        st.session_state["strategy_compare_symbol"] = queued_compare_target
+        st.session_state["strategy_compare_autorun"] = {
+            "symbol": queued_compare_target,
+            "source": str(st.session_state.get("strategy_compare_source", "candles")),
+            "resolution": str(
+                st.session_state.get(
+                    "strategy_compare_resolution",
+                    ranking_resolution,
+                )
+            ),
+            "days": int(
+                st.session_state.get("strategy_compare_days", ranking_days)
+                or ranking_days
+            ),
+        }
+    queued_tuning_target = str(queued_tuning_symbol or workspace_focus_symbol or "").strip()
+    if default_strategy_workspace == "Live Tuning" and queued_tuning_target:
+        st.session_state["strategy_tuning_focus_symbol"] = queued_tuning_target
+        st.session_state["strategy_tuning_focus_autorun"] = queued_tuning_target
+    if default_strategy_workspace not in strategy_workspace_options:
+        default_strategy_workspace = "Sync & Rank"
+    _sync_select_state(
+        key="strategy_workspace",
+        options=strategy_workspace_options,
+        default=default_strategy_workspace,
+    )
+    strategy_workspace = st.radio(
+        "Strategy Workspace",
+        strategy_workspace_options,
+        horizontal=True,
+        key="strategy_workspace",
+    )
+    render_callout(
+        "Workspace Focus",
+        {
+            "Overview": "Lightweight summary of actual paper-trade analytics only.",
+            "Sync & Rank": "Sync candles, inspect ranking, and decide which symbols deserve live attention.",
+            "Live Tuning": "Run the expensive live-rule review, fee guardrails, and auto-entry review report only when you are actively tuning.",
+            "Compare": "Compare variants for one live symbol without reloading ranking and tuning matrices.",
+            "Replay": "Manual deep-dive for a single symbol with its own replay controls and coverage.",
+        }[strategy_workspace],
+        "info",
+    )
+
+    should_show_overview = strategy_workspace == "Overview"
+    should_show_ranking = strategy_workspace == "Sync & Rank"
+    should_show_tuning = strategy_workspace == "Live Tuning"
+    should_show_compare = strategy_workspace == "Compare"
+    should_show_replay = strategy_workspace == "Replay"
 
     market_universe = fetch_market_symbol_universe() if (should_show_ranking or should_show_replay) else {"symbols": [], "error": None}
     market_symbols = list(market_universe.get("symbols", []))
