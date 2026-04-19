@@ -78,6 +78,52 @@ class SymbolStateTests(unittest.TestCase):
         self.assertTrue(state["review_required"])
         self.assertIsNotNone(state["recent_guardrail_block"])
 
+    def test_build_symbol_operational_state_marks_unclear_exchange_coverage_for_review(self) -> None:
+        account_snapshot = {
+            "open_orders_meta": {
+                "mode": "symbol",
+                "requires_symbol": True,
+                "error": "exchange timeout",
+            },
+            "open_orders": {},
+        }
+
+        with (
+            patch.object(symbol_state, "fetch_open_execution_orders", return_value=[]),
+            patch.object(symbol_state, "fetch_latest_filled_execution_orders_by_symbol", return_value={}),
+            patch.object(symbol_state, "fetch_recent_trade_journal", return_value=[]),
+            patch.object(
+                symbol_state,
+                "build_live_holdings_snapshot",
+                return_value=[
+                    {
+                        "symbol": "THB_BTC",
+                        "available_qty": 0.0,
+                        "reserved_qty": 0.0,
+                    }
+                ],
+            ),
+            patch.object(
+                symbol_state,
+                "collect_runtime_reconciliation_findings",
+                return_value={"mismatches": {}},
+            ),
+        ):
+            state = symbol_state.build_symbol_operational_state(
+                symbol="THB_BTC",
+                config={
+                    "live_auto_entry_enabled": True,
+                    "live_auto_exit_enabled": True,
+                },
+                account_snapshot=account_snapshot,
+                latest_prices={"THB_BTC": 1000.0},
+                runtime={"manual_pause": False, "safety_pause": False},
+            )
+
+        self.assertTrue(state["review_required"])
+        self.assertIn("exchange open-orders coverage is partial", state["review_reasons"])
+        self.assertIn("exchange open-orders query returned an error", state["review_reasons"])
+
 
 if __name__ == "__main__":
     unittest.main()

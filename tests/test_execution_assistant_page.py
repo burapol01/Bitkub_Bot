@@ -117,6 +117,33 @@ class ExecutionAssistantPageTests(unittest.TestCase):
         self.assertIn("Execution Assistant", PAGE_ORDER)
         self.assertIn("Execution Assistant", AUTO_REFRESH_SAFE_PAGES)
 
+    def test_compare_context_prefills_execution_assistant_symbol(self) -> None:
+        script = _page_script(
+            body=f"""
+            CONFIG["rules"]["THB_XLM"] = {{
+                "buy_below": 4.5,
+                "sell_above": 5.5,
+                "budget_thb": 180.0,
+                "stop_loss_percent": 1.0,
+                "take_profit_percent": 2.0,
+                "max_trades_per_day": 1,
+            }}
+            LATEST_PRICES["THB_XLM"] = 5.0
+            execution_assistant.fetch_open_execution_orders = lambda: []
+            execution_assistant.build_symbol_operational_state = lambda **kwargs: json.loads({_json_string(_operational_state())})
+            execution_assistant.insert_runtime_event = lambda **kwargs: None
+            execution_assistant.save_config_with_feedback = lambda *args, **kwargs: True
+            execution_assistant.now_text = lambda: "2026-04-19 10:00:20"
+            st.session_state["strategy_compare_symbol"] = "THB_XLM"
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(at.selectbox(key="execution_assistant_symbol").value, "THB_XLM")
+
     def test_stale_quote_disables_snap_actions_and_save(self) -> None:
         script = _page_script(
             body=f"""
@@ -136,6 +163,35 @@ class ExecutionAssistantPageTests(unittest.TestCase):
         self.assertTrue(at.button(key="execution_assistant_snap_sell").disabled)
         self.assertTrue(at.button(key="execution_assistant_snap_both").disabled)
         self.assertTrue(at.button(key="execution_assistant_save_rule").disabled)
+
+    def test_snap_buy_and_snap_sell_update_only_target_rate(self) -> None:
+        script = _page_script(
+            body=f"""
+            execution_assistant.fetch_open_execution_orders = lambda: []
+            execution_assistant.build_symbol_operational_state = lambda **kwargs: json.loads({_json_string(_operational_state())})
+            execution_assistant.insert_runtime_event = lambda **kwargs: None
+            execution_assistant.save_config_with_feedback = lambda *args, **kwargs: True
+            execution_assistant.now_text = lambda: "2026-04-19 10:00:20"
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+        at.button(key="execution_assistant_snap_buy").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertAlmostEqual(float(at.number_input(key="execution_assistant_draft_buy_below").value), 9.9, places=8)
+        self.assertAlmostEqual(float(at.number_input(key="execution_assistant_draft_sell_above").value), 10.5, places=8)
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+        at.button(key="execution_assistant_snap_sell").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertAlmostEqual(float(at.number_input(key="execution_assistant_draft_buy_below").value), 9.5, places=8)
+        self.assertAlmostEqual(float(at.number_input(key="execution_assistant_draft_sell_above").value), 10.1, places=8)
 
     def test_snap_both_updates_draft_rates_to_safe_band(self) -> None:
         script = _page_script(
