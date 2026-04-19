@@ -177,7 +177,14 @@ def _compare_rows() -> list[dict[str, object]]:
     ]
 
 
-def _app_script(*, workspace: str, body: str) -> str:
+def _app_script(
+    *,
+    workspace: str,
+    body: str,
+    latest_prices: dict[str, float] | None = None,
+    quote_fetched_at: str = "2026-04-19 10:00:00",
+) -> str:
+    latest_prices = dict(latest_prices or {})
     return "\n".join(
         [
             "import sys",
@@ -194,12 +201,13 @@ def _app_script(*, workspace: str, body: str) -> str:
             "from ui.streamlit import pages",
             "",
             f"CONFIG = json.loads({_json_string(_base_config())})",
+            f"LATEST_PRICES = json.loads({_json_string(latest_prices)})",
             "init_db()",
             "",
             textwrap.dedent(body).strip(),
             "",
             f"st.session_state['strategy_workspace'] = {workspace!r}",
-            "pages.render_strategy_page(config=CONFIG)",
+            f"pages.render_strategy_page(config=CONFIG, latest_prices=LATEST_PRICES, quote_fetched_at={quote_fetched_at!r})",
             "",
         ]
     )
@@ -332,6 +340,67 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertEqual(at.selectbox(key="strategy_compare_symbol__input").value, "THB_SUMX")
         rendered = "\n".join(str(markdown.value) for markdown in at.markdown)
         self.assertIn("Symbol THB_SUMX", rendered)
+
+    def test_live_tuning_shows_live_price_overlay_for_focus_symbol(self) -> None:
+        script = _app_script(
+            workspace="Live Tuning",
+            latest_prices={"THB_FF": 1.05},
+            body=f"""
+            RANKING_PAYLOAD = {{"rows": [], "coverage": [], "errors": []}}
+            TUNING_ROWS = json.loads({_json_string(_tuning_rows())})
+            AUTO_ENTRY_REPORT = {{
+                "events": [],
+                "latest_context": {{}},
+                "rejection_summary": [],
+                "symbol_reject_summary": [],
+                "symbol_candidate_summary": [],
+                "top_candidates": [],
+            }}
+
+            pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
+            pages.build_live_rule_tuning_rows = lambda **kwargs: TUNING_ROWS
+            pages.fetch_open_execution_orders = lambda: []
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._build_auto_entry_review_report = lambda limit=40: AUTO_ENTRY_REPORT
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        rendered = "\n".join(str(caption.value) for caption in at.caption)
+        self.assertIn("Live price overlay: price=1.05000000", rendered)
+
+    def test_compare_shows_live_price_overlay_for_selected_symbol(self) -> None:
+        script = _app_script(
+            workspace="Compare",
+            latest_prices={"THB_TRX": 10.5},
+            body=f"""
+            COMPARE_ROWS = json.loads({_json_string(_compare_rows())})
+            COMPARE_VARIANTS = json.loads({_json_string([{"variant": row["variant"], "rule": row["rule"]} for row in _compare_rows()])})
+
+            pages.build_rule_seed = lambda config, symbol, market_price=None: dict(config["rules"][symbol])
+            pages.build_rule_compare_variants = lambda base_rule: COMPARE_VARIANTS
+            pages.annotate_strategy_compare_rows = lambda rows: rows
+            pages.run_strategy_compare_rows = lambda **kwargs: COMPARE_ROWS
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._latest_strategy_compare_selection_map = lambda limit=200: {{}}
+            pages._latest_strategy_compare_applied_map = lambda limit=200: {{}}
+
+            st.session_state["strategy_compare_symbol"] = "THB_TRX"
+            st.session_state["strategy_compare_source"] = "candles"
+            st.session_state["strategy_compare_resolution"] = "240"
+            st.session_state["strategy_compare_days"] = 14
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        rendered = "\n".join(str(caption.value) for caption in at.caption)
+        self.assertIn("Live price overlay: price=10.50000000", rendered)
 
 
 if __name__ == "__main__":
