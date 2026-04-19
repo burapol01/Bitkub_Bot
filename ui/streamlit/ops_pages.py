@@ -680,6 +680,25 @@ def render_live_ops_page(
         st.warning("Private API is required for live operations.")
         return
 
+    # Pre-widget state consume: Clear stale strategy workspace state before creating any
+    # selectbox/form widgets that would read from session state. This ensures queued
+    # Live Ops state (e.g., live_ops_focus_symbol) wins over stale Compare/Tuning state.
+    queued_live_ops_symbol = str(st.session_state.get("live_ops_focus_symbol", "") or "").strip()
+    if queued_live_ops_symbol:
+        # Clear Compare workspace state that could leak into Live Ops widgets.
+        st.session_state.pop("strategy_compare_symbol", None)
+        st.session_state.pop("strategy_compare_symbol__input", None)
+        st.session_state.pop("strategy_compare_payload", None)
+        st.session_state.pop("strategy_compare_symbol__input__signature", None)
+        st.session_state.pop("strategy_compare_source", None)
+        st.session_state.pop("strategy_compare_source__input", None)
+        st.session_state.pop("strategy_compare_resolution", None)
+        st.session_state.pop("strategy_compare_resolution__input", None)
+        st.session_state.pop("strategy_compare_days", None)
+        st.session_state.pop("strategy_compare_days__input", None)
+        # Clear Live Tuning workspace state.
+        st.session_state.pop("strategy_tuning_focus_symbol", None)
+
     available_balances = extract_available_balances(account_snapshot)
     thb_available = float(available_balances.get("THB", 0.0))
     symbols = sorted(config["rules"].keys())

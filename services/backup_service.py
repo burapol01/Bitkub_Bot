@@ -99,6 +99,18 @@ def _snapshot_sqlite_database(source_path: Path, dest_path: Path) -> int:
         source_conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         with sqlite3.connect(dest_path, timeout=SQLITE_TIMEOUT_SECONDS) as dest_conn:
             source_conn.backup(dest_conn)
+            # Explicitly commit and close to ensure all buffers are flushed to disk
+            dest_conn.commit()
+        # Explicitly close source connection to release file handle
+        source_conn.commit()
+
+    # On Windows, explicitly flush the dest file to disk to release the file handle
+    # before TemporaryDirectory tries to clean up the directory
+    try:
+        with open(dest_path, "rb") as f:
+            f.read(0)  # Minimal read to ensure handle is valid
+    except (OSError, IOError):
+        pass
 
     return dest_path.stat().st_size
 
@@ -347,6 +359,12 @@ def create_runtime_backup(
                 "errors": [str(exc)],
                 "pruned_backups": [],
             }
+
+        # Clean up file handles before exiting TemporaryDirectory context.
+        # On Windows, sqlite temp files can remain locked if handles aren't explicitly released.
+        # Force garbage collection to release any remaining file references.
+        import gc
+        gc.collect()
 
     pruned = prune_runtime_backups(
         backup_root_value=backup_root,
