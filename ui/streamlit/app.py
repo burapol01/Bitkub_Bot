@@ -68,8 +68,15 @@ def main() -> None:
     if default_page not in PAGE_ORDER:
         default_page = PAGE_ORDER[0]
 
+    page_autorun = st.session_state.pop("ui_page_autorun", None)
+    if page_autorun in PAGE_ORDER:
+        default_page = str(page_autorun)
+
     if st.session_state.get("ui_page") not in PAGE_ORDER:
         st.session_state["ui_page"] = default_page
+    if page_autorun in PAGE_ORDER:
+        st.session_state["ui_page"] = str(page_autorun)
+        st.session_state["sidebar_page"] = str(page_autorun)
     current_page = str(st.session_state.get("ui_page", default_page))
     today = today_key()
 

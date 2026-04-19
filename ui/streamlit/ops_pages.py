@@ -31,6 +31,7 @@ from ui.streamlit.actions import (
     submit_manual_order_from_ui,
 )
 from ui.streamlit.data import calc_daily_totals, capability_badge_tone
+from ui.streamlit.navigation import queue_strategy_workspace_navigation
 from ui.streamlit.refresh import render_refreshable_fragment
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro
 from ui.streamlit.strategy_support import evaluate_fee_guardrail, fetch_market_symbol_universe
@@ -124,16 +125,13 @@ def _open_strategy_workspace_for_symbol(
     symbol: str,
     workspace: str,
 ) -> None:
-    st.session_state["ui_page"] = "Strategy"
-    st.query_params["page"] = "Strategy"
-    st.session_state["strategy_workspace"] = str(workspace)
-
     if workspace == "Live Tuning":
-        st.session_state["strategy_tuning_focus_symbol"] = str(symbol)
+        queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=symbol)
     elif workspace == "Compare":
         compare_source = str(st.session_state.get("strategy_compare_source", "candles"))
         compare_resolution = str(st.session_state.get("strategy_compare_resolution", "240"))
         compare_days = int(st.session_state.get("strategy_compare_days", 14) or 14)
+        queue_strategy_workspace_navigation(workspace="Compare", symbol=symbol)
         st.session_state["strategy_compare_symbol"] = str(symbol)
         st.session_state["strategy_compare_symbol__input"] = str(symbol)
         st.session_state["strategy_compare_autorun"] = {
@@ -143,6 +141,7 @@ def _open_strategy_workspace_for_symbol(
             "days": compare_days,
         }
 
+    st.query_params["page"] = "Strategy"
     st.rerun()
 
 
@@ -696,11 +695,6 @@ def render_live_ops_page(
     thb_available = float(available_balances.get("THB", 0.0))
     symbols = sorted(config["rules"].keys())
     manual_defaults = dict(config.get("live_manual_order", {}))
-    focus_symbol = str(st.session_state.get("live_ops_focus_symbol", "") or "").strip()
-    default_symbol = str(manual_defaults.get("symbol", symbols[0]))
-    if focus_symbol in symbols:
-        default_symbol = focus_symbol
-
     manual_symbol_key = "live_ops_manual_symbol"
     manual_side_key = "live_ops_manual_side"
     manual_order_type_key = "live_ops_manual_order_type"
@@ -708,6 +702,11 @@ def render_live_ops_page(
     manual_amount_coin_key = "live_ops_manual_amount_coin"
     manual_rate_key = "live_ops_manual_rate"
     manual_confirm_key = "live_ops_manual_confirm"
+    focus_symbol = str(st.session_state.get("live_ops_focus_symbol", "") or "").strip()
+    default_symbol = str(manual_defaults.get("symbol", symbols[0]))
+    if focus_symbol in symbols:
+        default_symbol = focus_symbol
+        st.session_state[manual_symbol_key] = default_symbol
 
     pending_prefill = st.session_state.pop("live_ops_manual_order_prefill", None)
     if isinstance(pending_prefill, dict):
@@ -1066,6 +1065,8 @@ def render_live_ops_page(
                     )
                 else:
                     preferred_label = None
+                if preferred_label in ordered_labels:
+                    st.session_state["live_ops_selected_order"] = preferred_label
                 current_focus = st.selectbox(
                     "Selected Open Order",
                     ordered_labels,
