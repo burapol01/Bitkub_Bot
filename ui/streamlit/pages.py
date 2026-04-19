@@ -641,6 +641,7 @@ def render_strategy_page(
         and queued_compare_target in configured_symbols
     ):
         st.session_state["strategy_compare_symbol"] = queued_compare_target
+        st.session_state["strategy_compare_symbol__input"] = queued_compare_target
         st.session_state["strategy_compare_autorun"] = {
             "symbol": queued_compare_target,
             "source": str(st.session_state.get("strategy_compare_source", "candles")),
