@@ -171,6 +171,24 @@ def init_db():
                 exchange_balances_json TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS state_reconciliation_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                account_sync_status TEXT NOT NULL,
+                runtime_state_status TEXT NOT NULL,
+                local_open_orders_count INTEGER NOT NULL DEFAULT 0,
+                exchange_open_orders_count INTEGER NOT NULL DEFAULT 0,
+                corrected_order_count INTEGER NOT NULL DEFAULT 0,
+                unresolved_count INTEGER NOT NULL DEFAULT 0,
+                stale_pending_count INTEGER NOT NULL DEFAULT 0,
+                mismatch_summary_json TEXT,
+                mismatch_details_json TEXT,
+                correction_summary_json TEXT,
+                notes_json TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS retention_archive_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
@@ -437,6 +455,12 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_retention_archive_runs_completed_at
             ON retention_archive_runs(completed_at DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_state_reconciliation_runs_created_at
+            ON state_reconciliation_runs(created_at DESC, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_state_reconciliation_runs_status
+            ON state_reconciliation_runs(status, id DESC);
 
             CREATE INDEX IF NOT EXISTS idx_audit_events_created_at
             ON audit_events(created_at DESC, id DESC);
@@ -932,6 +956,63 @@ def insert_reconciliation_result(
                 _to_json(exchange_balances),
             ),
         )
+
+
+def insert_state_reconciliation_run(
+    *,
+    created_at: str,
+    source: str,
+    status: str,
+    account_sync_status: str,
+    runtime_state_status: str,
+    local_open_orders_count: int,
+    exchange_open_orders_count: int,
+    corrected_order_count: int,
+    unresolved_count: int,
+    stale_pending_count: int,
+    mismatch_summary: dict[str, Any] | None = None,
+    mismatch_details: dict[str, Any] | None = None,
+    correction_summary: dict[str, Any] | None = None,
+    notes: dict[str, Any] | None = None,
+) -> int:
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO state_reconciliation_runs (
+                created_at,
+                source,
+                status,
+                account_sync_status,
+                runtime_state_status,
+                local_open_orders_count,
+                exchange_open_orders_count,
+                corrected_order_count,
+                unresolved_count,
+                stale_pending_count,
+                mismatch_summary_json,
+                mismatch_details_json,
+                correction_summary_json,
+                notes_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _normalize_time_text(created_at),
+                str(source),
+                str(status),
+                str(account_sync_status),
+                str(runtime_state_status),
+                int(local_open_orders_count),
+                int(exchange_open_orders_count),
+                int(corrected_order_count),
+                int(unresolved_count),
+                int(stale_pending_count),
+                _to_json(mismatch_summary),
+                _to_json(mismatch_details),
+                _to_json(correction_summary),
+                _to_json(notes),
+            ),
+        )
+        return int(cursor.lastrowid)
 
 
 def insert_execution_order(
@@ -3347,6 +3428,52 @@ def fetch_dashboard_summary(
             LIMIT 1
             """
         ).fetchone()
+        latest_state_reconciliation = conn.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                source,
+                status,
+                account_sync_status,
+                runtime_state_status,
+                local_open_orders_count,
+                exchange_open_orders_count,
+                corrected_order_count,
+                unresolved_count,
+                stale_pending_count,
+                mismatch_summary_json,
+                mismatch_details_json,
+                correction_summary_json,
+                notes_json
+            FROM state_reconciliation_runs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        recent_state_reconciliation_rows = conn.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                source,
+                status,
+                account_sync_status,
+                runtime_state_status,
+                local_open_orders_count,
+                exchange_open_orders_count,
+                corrected_order_count,
+                unresolved_count,
+                stale_pending_count,
+                mismatch_summary_json,
+                mismatch_details_json,
+                correction_summary_json,
+                notes_json
+            FROM state_reconciliation_runs
+            ORDER BY id DESC
+            LIMIT 10
+            """
+        ).fetchall()
         latest_execution_order = conn.execute(
             """
             SELECT id, created_at, updated_at, symbol, side, order_type, state,
@@ -3437,6 +3564,47 @@ def fetch_dashboard_summary(
             if latest_reconciliation
             else None
         ),
+        "latest_state_reconciliation": (
+            {
+                "id": int(latest_state_reconciliation["id"]),
+                "created_at": latest_state_reconciliation["created_at"],
+                "source": latest_state_reconciliation["source"],
+                "status": latest_state_reconciliation["status"],
+                "account_sync_status": latest_state_reconciliation["account_sync_status"],
+                "runtime_state_status": latest_state_reconciliation["runtime_state_status"],
+                "local_open_orders_count": int(latest_state_reconciliation["local_open_orders_count"]),
+                "exchange_open_orders_count": int(latest_state_reconciliation["exchange_open_orders_count"]),
+                "corrected_order_count": int(latest_state_reconciliation["corrected_order_count"]),
+                "unresolved_count": int(latest_state_reconciliation["unresolved_count"]),
+                "stale_pending_count": int(latest_state_reconciliation["stale_pending_count"]),
+                "mismatch_summary": _load_json(latest_state_reconciliation["mismatch_summary_json"], {}),
+                "mismatch_details": _load_json(latest_state_reconciliation["mismatch_details_json"], {}),
+                "correction_summary": _load_json(latest_state_reconciliation["correction_summary_json"], {}),
+                "notes": _load_json(latest_state_reconciliation["notes_json"], {}),
+            }
+            if latest_state_reconciliation
+            else None
+        ),
+        "recent_state_reconciliation_runs": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "source": row["source"],
+                "status": row["status"],
+                "account_sync_status": row["account_sync_status"],
+                "runtime_state_status": row["runtime_state_status"],
+                "local_open_orders_count": int(row["local_open_orders_count"]),
+                "exchange_open_orders_count": int(row["exchange_open_orders_count"]),
+                "corrected_order_count": int(row["corrected_order_count"]),
+                "unresolved_count": int(row["unresolved_count"]),
+                "stale_pending_count": int(row["stale_pending_count"]),
+                "mismatch_summary": _load_json(row["mismatch_summary_json"], {}),
+                "mismatch_details": _load_json(row["mismatch_details_json"], {}),
+                "correction_summary": _load_json(row["correction_summary_json"], {}),
+                "notes": _load_json(row["notes_json"], {}),
+            }
+            for row in recent_state_reconciliation_rows
+        ],
         "latest_execution_order": (
             {
                 "id": int(latest_execution_order["id"]),
@@ -3505,6 +3673,52 @@ def fetch_diagnostics_page_dataset(
             LIMIT 1
             """
         ).fetchone()
+        latest_state_reconciliation = conn.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                source,
+                status,
+                account_sync_status,
+                runtime_state_status,
+                local_open_orders_count,
+                exchange_open_orders_count,
+                corrected_order_count,
+                unresolved_count,
+                stale_pending_count,
+                mismatch_summary_json,
+                mismatch_details_json,
+                correction_summary_json,
+                notes_json
+            FROM state_reconciliation_runs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        recent_state_reconciliation_rows = conn.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                source,
+                status,
+                account_sync_status,
+                runtime_state_status,
+                local_open_orders_count,
+                exchange_open_orders_count,
+                corrected_order_count,
+                unresolved_count,
+                stale_pending_count,
+                mismatch_summary_json,
+                mismatch_details_json,
+                correction_summary_json,
+                notes_json
+            FROM state_reconciliation_runs
+            ORDER BY id DESC
+            LIMIT 10
+            """
+        ).fetchall()
         latest_execution_order = conn.execute(
             """
             SELECT id, created_at, updated_at, symbol, side, order_type, state,
@@ -3639,6 +3853,47 @@ def fetch_diagnostics_page_dataset(
                 else None
             ),
         },
+        "latest_state_reconciliation": (
+            {
+                "id": int(latest_state_reconciliation["id"]),
+                "created_at": latest_state_reconciliation["created_at"],
+                "source": latest_state_reconciliation["source"],
+                "status": latest_state_reconciliation["status"],
+                "account_sync_status": latest_state_reconciliation["account_sync_status"],
+                "runtime_state_status": latest_state_reconciliation["runtime_state_status"],
+                "local_open_orders_count": int(latest_state_reconciliation["local_open_orders_count"]),
+                "exchange_open_orders_count": int(latest_state_reconciliation["exchange_open_orders_count"]),
+                "corrected_order_count": int(latest_state_reconciliation["corrected_order_count"]),
+                "unresolved_count": int(latest_state_reconciliation["unresolved_count"]),
+                "stale_pending_count": int(latest_state_reconciliation["stale_pending_count"]),
+                "mismatch_summary": _load_json(latest_state_reconciliation["mismatch_summary_json"], {}),
+                "mismatch_details": _load_json(latest_state_reconciliation["mismatch_details_json"], {}),
+                "correction_summary": _load_json(latest_state_reconciliation["correction_summary_json"], {}),
+                "notes": _load_json(latest_state_reconciliation["notes_json"], {}),
+            }
+            if latest_state_reconciliation
+            else None
+        ),
+        "recent_state_reconciliation_runs": [
+            {
+                "id": int(row["id"]),
+                "created_at": row["created_at"],
+                "source": row["source"],
+                "status": row["status"],
+                "account_sync_status": row["account_sync_status"],
+                "runtime_state_status": row["runtime_state_status"],
+                "local_open_orders_count": int(row["local_open_orders_count"]),
+                "exchange_open_orders_count": int(row["exchange_open_orders_count"]),
+                "corrected_order_count": int(row["corrected_order_count"]),
+                "unresolved_count": int(row["unresolved_count"]),
+                "stale_pending_count": int(row["stale_pending_count"]),
+                "mismatch_summary": _load_json(row["mismatch_summary_json"], {}),
+                "mismatch_details": _load_json(row["mismatch_details_json"], {}),
+                "correction_summary": _load_json(row["correction_summary_json"], {}),
+                "notes": _load_json(row["notes_json"], {}),
+            }
+            for row in recent_state_reconciliation_rows
+        ],
         "execution_console_counts": {
             "open_orders": len(open_execution_order_rows),
             "recent_orders": len(recent_order_rows),
@@ -4269,6 +4524,50 @@ def fetch_recent_audit_events(
         }
         for row in rows
     ]
+
+
+def fetch_recent_state_reconciliation_runs(*, limit: int = 20) -> list[dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                source,
+                status,
+                account_sync_status,
+                runtime_state_status,
+                local_open_orders_count,
+                exchange_open_orders_count,
+                corrected_order_count,
+                unresolved_count,
+                stale_pending_count,
+                mismatch_summary_json,
+                mismatch_details_json,
+                correction_summary_json,
+                notes_json
+            FROM state_reconciliation_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+
+    return [
+        {
+            **dict(row),
+            "mismatch_summary": _load_json(row["mismatch_summary_json"], {}),
+            "mismatch_details": _load_json(row["mismatch_details_json"], {}),
+            "correction_summary": _load_json(row["correction_summary_json"], {}),
+            "notes": _load_json(row["notes_json"], {}),
+        }
+        for row in rows
+    ]
+
+
+def fetch_latest_state_reconciliation_run() -> dict[str, Any] | None:
+    rows = fetch_recent_state_reconciliation_runs(limit=1)
+    return rows[0] if rows else None
 
 
 def fetch_recent_trade_journal(

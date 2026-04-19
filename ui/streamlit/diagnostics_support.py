@@ -133,7 +133,10 @@ def current_private_api_issues(private_ctx: dict[str, Any]) -> list[dict[str, An
 def render_reconciliation_block(live_reconciliation: dict[str, Any]) -> None:
     groups = (
         ("warnings", "warn"),
+        ("missing_locally", "bad"),
         ("partially_filled_orders", "warn"),
+        ("stale_pending_orders", "warn"),
+        ("orders_without_exchange_id", "bad"),
         ("reserved_without_open_order", "bad"),
         ("open_order_without_reserved", "warn"),
         ("triggered_exit_candidates", "info"),
@@ -846,6 +849,10 @@ def render_diagnostics_page(
     )
     latest_account_snapshot = dashboard_summary.get("latest_account_snapshot")
     latest_reconciliation = dashboard_summary.get("latest_reconciliation")
+    latest_state_reconciliation = diagnostics_dataset.get("latest_state_reconciliation") or {}
+    recent_state_reconciliation_runs = list(
+        diagnostics_dataset.get("recent_state_reconciliation_runs") or []
+    )
     latest_execution_order = dashboard_summary.get("latest_execution_order")
     retention_status = dict(diagnostics_dataset.get("retention_status") or {})
     retention_rows = _build_retention_rows(
@@ -947,6 +954,14 @@ def render_diagnostics_page(
                     "status": latest_reconciliation.get("status"),
                 }
             )
+        if latest_state_reconciliation:
+            latest_rows.append(
+                {
+                    "type": "state_reconciliation",
+                    "time": latest_state_reconciliation.get("created_at"),
+                    "status": latest_state_reconciliation.get("status"),
+                }
+            )
         if latest_execution_order:
             latest_rows.append(
                 {
@@ -1021,6 +1036,100 @@ def render_diagnostics_page(
             "then verify config and runtime state before resuming trades."
         )
     with col2:
+        st.markdown('<div class="panel-title">Reconciliation Health</div>', unsafe_allow_html=True)
+        if latest_state_reconciliation:
+            latest_run_source = str(latest_state_reconciliation.get("source") or "n/a")
+            latest_run_status = str(latest_state_reconciliation.get("status") or "n/a")
+            latest_account_sync = str(
+                latest_state_reconciliation.get("account_sync_status") or "n/a"
+            )
+            latest_runtime_state_status = str(
+                latest_state_reconciliation.get("runtime_state_status") or "n/a"
+            )
+            latest_notes = dict(latest_state_reconciliation.get("notes") or {})
+            latest_mismatch_summary = dict(
+                latest_state_reconciliation.get("mismatch_summary") or {}
+            )
+            latest_mismatch_details = dict(
+                latest_state_reconciliation.get("mismatch_details") or {}
+            )
+            latest_correction_summary = dict(
+                latest_state_reconciliation.get("correction_summary") or {}
+            )
+
+            health_cols = st.columns(4)
+            with health_cols[0]:
+                render_metric_card(
+                    "Last Run",
+                    str(latest_state_reconciliation.get("created_at") or "n/a"),
+                    latest_run_source,
+                )
+            with health_cols[1]:
+                render_metric_card(
+                    "Status",
+                    latest_run_status.upper(),
+                    f"account {latest_account_sync}",
+                )
+            with health_cols[2]:
+                render_metric_card(
+                    "Unresolved",
+                    str(int(latest_state_reconciliation.get("unresolved_count", 0) or 0)),
+                    f"stale pending {int(latest_state_reconciliation.get('stale_pending_count', 0) or 0)}",
+                )
+            with health_cols[3]:
+                render_metric_card(
+                    "Corrected",
+                    str(int(latest_state_reconciliation.get("corrected_order_count", 0) or 0)),
+                    str(latest_notes.get("exchange_snapshot_created_at") or "exchange sync n/a"),
+                )
+
+            st.caption(
+                f"Runtime state: {latest_runtime_state_status} | "
+                f"local open orders {int(latest_state_reconciliation.get('local_open_orders_count', 0) or 0)} | "
+                f"exchange open orders {int(latest_state_reconciliation.get('exchange_open_orders_count', 0) or 0)}"
+            )
+
+            mismatch_rows = [
+                {"category": key, "count": int(value or 0)}
+                for key, value in latest_mismatch_summary.items()
+            ]
+            if mismatch_rows:
+                st.dataframe(mismatch_rows, width="stretch", hide_index=True)
+
+            if recent_state_reconciliation_runs:
+                st.dataframe(
+                    [
+                        {
+                            "created_at": row.get("created_at"),
+                            "source": row.get("source"),
+                            "status": row.get("status"),
+                            "account_sync": row.get("account_sync_status"),
+                            "runtime_state": row.get("runtime_state_status"),
+                            "local_open": int(row.get("local_open_orders_count", 0) or 0),
+                            "exchange_open": int(row.get("exchange_open_orders_count", 0) or 0),
+                            "corrected": int(row.get("corrected_order_count", 0) or 0),
+                            "unresolved": int(row.get("unresolved_count", 0) or 0),
+                            "stale_pending": int(row.get("stale_pending_count", 0) or 0),
+                        }
+                        for row in recent_state_reconciliation_runs[:10]
+                    ],
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            with st.expander("Latest Reconciliation Details", expanded=False):
+                st.json(
+                    {
+                        "mismatch_summary": latest_mismatch_summary,
+                        "mismatch_details": latest_mismatch_details,
+                        "correction_summary": latest_correction_summary,
+                        "notes": latest_notes,
+                    },
+                    expanded=False,
+                )
+        else:
+            st.caption("No structured reconciliation runs have been recorded yet.")
+
         st.markdown('<div class="panel-title">Live Reconciliation</div>', unsafe_allow_html=True)
         st.caption(
             "Mode: deep exchange confirmation"

@@ -100,6 +100,40 @@ Redaction rules:
 - this includes keys such as `secret`, `token`, `password`, `api_key`, and `api_secret`
 - audit records keep the shape of config diffs, but sensitive values are not written in clear text
 
+## Reconciliation
+
+Runtime consistency is tracked in SQLite with a dedicated `state_reconciliation_runs` table alongside the older `reconciliation_results` summary rows.
+
+- Startup: the engine restores `runtime_state.json`, fetches a fresh exchange snapshot when private API access is available, refreshes tracked open execution orders, and records structured mismatch findings.
+- Periodic: every 5 minutes in `live` / `shadow-live`, the engine repeats the same detect-and-record pass and only applies safe corrections to already-tracked open execution orders.
+- Diagnostics: the `Diagnostics` page shows the latest structured reconciliation run, mismatch counts, unresolved items, and recent run history.
+
+Mismatch categories currently tracked:
+
+- `missing_locally`
+- `missing_on_exchange`
+- `orders_without_exchange_id`
+- `stale_pending`
+- `partially_filled`
+- `reserved_without_open_order`
+- `open_order_without_reserved`
+- `unmanaged_live_holdings`
+- `runtime_state_stale`
+
+Safe auto-corrections:
+
+- refresh and persist state transitions for existing open execution orders when `order_info` / exchange state makes the transition clear
+- update tracked order metadata and event history when the exchange confirms a newer status
+
+Flag-only cases:
+
+- exchange open orders that have no local execution row
+- exchange/account data unavailable or partial
+- unmanaged holdings without a tracked filled buy
+- stale runtime state snapshots or pending-file restores
+
+Details: [docs/runtime_reconciliation.md](/d:/Project/Bitkub/docs/runtime_reconciliation.md)
+
 ## VPS Deploy
 
 Recommended target:
@@ -169,6 +203,7 @@ Full steps and deploy notes:
 - SQLite health
 - retention summary
 - latest account / reconciliation / execution records
+- structured reconciliation health and recent runs
 - live reconciliation summary
 - execution console summary
 
