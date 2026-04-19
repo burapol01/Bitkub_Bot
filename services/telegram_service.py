@@ -7,6 +7,13 @@ from typing import Any
 
 import requests
 
+from services.api_retry_service import (
+    classify_retry_error,
+    get_retry_policy,
+    log_api_retry_event,
+    retry_delay_seconds,
+    should_retry,
+)
 from services.db_service import (
     fetch_recent_telegram_command_log,
     fetch_recent_telegram_outbox,
@@ -24,8 +31,6 @@ DEFAULT_TELEGRAM_NOTIFY_EVENTS = [
     "runtime_error",
 ]
 TELEGRAM_MESSAGE_CHUNK_LIMIT = 3500
-TELEGRAM_POLL_RETRIES = 3
-TELEGRAM_POLL_BACKOFF_SECONDS = 1.0
 
 
 
@@ -311,8 +316,10 @@ def fetch_telegram_command_updates(
     params = {"offset": last_update_id + 1, "timeout": 0, "limit": int(limit)}
 
     payload: dict[str, Any] | None = None
-    last_network_error: Exception | None = None
-    for attempt in range(TELEGRAM_POLL_RETRIES):
+    policy_name = "notification_poll"
+    policy = get_retry_policy(policy_name)
+    last_error: Exception | None = None
+    for attempt in range(1, int(policy.max_attempts) + 1):
         try:
             response = requests.get(
                 f"https://api.telegram.org/bot{token}/getUpdates",
@@ -321,22 +328,86 @@ def fetch_telegram_command_updates(
             )
             response.raise_for_status()
             payload = response.json()
-            last_network_error = None
+            last_error = None
+            if attempt > 1:
+                log_api_retry_event(
+                    endpoint="telegram/getUpdates",
+                    action="telegram_get_updates",
+                    attempt=attempt,
+                    policy_name=policy_name,
+                    classification={
+                        "category": "success_after_retry",
+                        "retryable": False,
+                        "ambiguous": False,
+                        "reason": "request succeeded after retry",
+                    },
+                    outcome="succeeded_after_retry",
+                    status_code=response.status_code,
+                )
             break
-        except (requests.Timeout, requests.ConnectionError) as e:
-            last_network_error = e
-            if attempt < TELEGRAM_POLL_RETRIES - 1:
-                time.sleep(TELEGRAM_POLL_BACKOFF_SECONDS + attempt)
-                continue
-            break
+        except requests.HTTPError as e:
+            last_error = e
+            status_code = e.response.status_code if e.response is not None else None
+            response_text = e.response.text if e.response is not None else None
+            classification = classify_retry_error(
+                error=e,
+                status_code=status_code,
+                response_text=response_text,
+            )
+        except ValueError as e:
+            last_error = e
+            status_code = None
+            classification = classify_retry_error(
+                error=e,
+                error_message="Telegram getUpdates returned invalid JSON",
+            )
+        except requests.RequestException as e:
+            last_error = e
+            status_code = None
+            classification = classify_retry_error(error=e)
         except Exception as e:
             result["error_type"] = "request"
             result["errors"].append(str(e))
             return result
 
-    if last_network_error is not None:
-        result["error_type"] = "network"
-        result["errors"].append(str(last_network_error))
+        if should_retry(
+            policy_name=policy_name,
+            classification=classification,
+            attempt=attempt,
+        ):
+            delay_seconds = retry_delay_seconds(
+                policy_name=policy_name,
+                attempt=attempt,
+            )
+            log_api_retry_event(
+                endpoint="telegram/getUpdates",
+                action="telegram_get_updates",
+                attempt=attempt,
+                policy_name=policy_name,
+                classification=classification,
+                outcome="retrying",
+                delay_seconds=delay_seconds,
+                status_code=status_code,
+            )
+            time.sleep(delay_seconds)
+            continue
+
+        log_api_retry_event(
+            endpoint="telegram/getUpdates",
+            action="telegram_get_updates",
+            attempt=attempt,
+            policy_name=policy_name,
+            classification=classification,
+            outcome="give_up",
+            status_code=status_code,
+        )
+        break
+
+    if last_error is not None:
+        result["error_type"] = str(
+            classify_retry_error(error=last_error).get("category") or "network"
+        )
+        result["errors"].append(str(last_error))
         return result
     if not isinstance(payload, dict):
         result["error_type"] = "response"
@@ -417,7 +488,9 @@ def _send_telegram_message(
                 "disable_web_page_preview": True,
             }
             last_error: Exception | None = None
-            for attempt in range(3):
+            policy_name = "notification_delivery"
+            policy = get_retry_policy(policy_name)
+            for attempt in range(1, int(policy.max_attempts) + 1):
                 try:
                     response = requests.post(url, json=payload, timeout=timeout_seconds)
                     response.raise_for_status()
@@ -427,13 +500,78 @@ def _send_telegram_message(
                             f"Telegram sendMessage rejected payload for chat_id={chat_id}"
                         )
                     last_error = None
+                    if attempt > 1:
+                        log_api_retry_event(
+                            endpoint="telegram/sendMessage",
+                            action="telegram_send_message",
+                            attempt=attempt,
+                            policy_name=policy_name,
+                            classification={
+                                "category": "success_after_retry",
+                                "retryable": False,
+                                "ambiguous": False,
+                                "reason": "request succeeded after retry",
+                            },
+                            outcome="succeeded_after_retry",
+                            status_code=response.status_code,
+                            metadata={"chat_id": chat_id},
+                        )
                     break
-                except (requests.Timeout, requests.ConnectionError) as e:
+                except requests.HTTPError as e:
                     last_error = e
-                    if attempt < 2:
-                        time.sleep(1.0 + attempt)
-                        continue
-                    break
+                    status_code = e.response.status_code if e.response is not None else None
+                    response_text = e.response.text if e.response is not None else None
+                    classification = classify_retry_error(
+                        error=e,
+                        status_code=status_code,
+                        response_text=response_text,
+                    )
+                except ValueError as e:
+                    last_error = e
+                    status_code = None
+                    classification = classify_retry_error(
+                        error=e,
+                        error_message="Telegram sendMessage returned invalid JSON",
+                    )
+                except requests.RequestException as e:
+                    last_error = e
+                    status_code = None
+                    classification = classify_retry_error(error=e)
+
+                if should_retry(
+                    policy_name=policy_name,
+                    classification=classification,
+                    attempt=attempt,
+                ):
+                    delay_seconds = retry_delay_seconds(
+                        policy_name=policy_name,
+                        attempt=attempt,
+                    )
+                    log_api_retry_event(
+                        endpoint="telegram/sendMessage",
+                        action="telegram_send_message",
+                        attempt=attempt,
+                        policy_name=policy_name,
+                        classification=classification,
+                        outcome="retrying",
+                        delay_seconds=delay_seconds,
+                        status_code=status_code,
+                        metadata={"chat_id": chat_id},
+                    )
+                    time.sleep(delay_seconds)
+                    continue
+
+                log_api_retry_event(
+                    endpoint="telegram/sendMessage",
+                    action="telegram_send_message",
+                    attempt=attempt,
+                    policy_name=policy_name,
+                    classification=classification,
+                    outcome="give_up",
+                    status_code=status_code,
+                    metadata={"chat_id": chat_id},
+                )
+                break
 
             if last_error is not None:
                 raise last_error

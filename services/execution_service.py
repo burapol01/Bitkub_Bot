@@ -1,6 +1,7 @@
 from typing import Any
 
 from clients.bitkub_private_client import BitkubPrivateClient, BitkubPrivateClientError
+from services.api_retry_service import classify_retry_error, log_api_retry_event
 from services.order_service import build_place_ask_payload, build_place_bid_payload
 from services.strategy_lab_service import build_coin_ranking
 
@@ -811,6 +812,88 @@ def _is_missing_order_error_message(error: str | None) -> bool:
     return any(marker in normalized for marker in markers)
 
 
+def _summarize_exchange_rows(payload: Any) -> list[dict[str, Any]]:
+    rows = _extract_exchange_order_rows(payload)
+    summary_rows: list[dict[str, Any]] = []
+    for row in rows[:10]:
+        summary_rows.append(
+            {
+                "id": row.get("id") or row.get("order_id"),
+                "sym": row.get("sym") or row.get("symbol"),
+                "status": row.get("status"),
+                "side": row.get("side"),
+                "rate": row.get("rate"),
+                "amount": row.get("amount") or row.get("total"),
+            }
+        )
+    return summary_rows
+
+
+def _probe_ambiguous_submission_state(
+    *,
+    client: BitkubPrivateClient,
+    symbol: str,
+) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "symbol": symbol,
+        "open_orders_ok": False,
+        "order_history_ok": False,
+        "open_orders_rows": [],
+        "order_history_rows": [],
+    }
+
+    try:
+        open_orders_payload = client.get_open_orders(symbol=symbol)
+        details["open_orders_ok"] = True
+        details["open_orders_rows"] = _summarize_exchange_rows(open_orders_payload)
+    except BitkubPrivateClientError as e:
+        details["open_orders_error"] = str(e)
+
+    try:
+        order_history_payload = client.get_order_history(symbol=symbol, limit=10)
+        details["order_history_ok"] = True
+        details["order_history_rows"] = _summarize_exchange_rows(order_history_payload)
+    except BitkubPrivateClientError as e:
+        details["order_history_error"] = str(e)
+
+    return details
+
+
+def _submit_order_with_safety_check(
+    *,
+    client: BitkubPrivateClient,
+    submitter,
+    request_payload: dict[str, Any],
+    symbol: str,
+    side: str,
+    correlation_id: str | None,
+) -> Any:
+    try:
+        return submitter(request_payload, correlation_id=correlation_id)
+    except BitkubPrivateClientError as e:
+        classification = classify_retry_error(error=e, error_message=str(e))
+        if not classification.get("ambiguous"):
+            raise
+
+        probe_details = _probe_ambiguous_submission_state(
+            client=client,
+            symbol=symbol,
+        )
+        log_api_retry_event(
+            endpoint=f"bitkub/place-{side}",
+            action=f"submit_{side}_order",
+            attempt=1,
+            policy_name="create_order",
+            classification=classification,
+            outcome="blocked_ambiguous",
+            correlation_id=correlation_id,
+            metadata=probe_details,
+        )
+        raise LiveExecutionGuardrailError(
+            f"Bitkub {side} order outcome is uncertain; reconciliation is required before retrying. root_error={e}"
+        ) from e
+
+
 def submit_manual_live_order(
     *,
     client: BitkubPrivateClient,
@@ -819,6 +902,7 @@ def submit_manual_live_order(
     guardrails: dict[str, Any],
     available_balances: dict[str, float],
     created_at: str,
+    correlation_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     request = build_manual_live_order_request(config=config, rules=rules)
     validation_errors = validate_manual_live_order_guardrails(
@@ -840,9 +924,23 @@ def submit_manual_live_order(
     events: list[dict[str, Any]] = []
 
     if request["side"] == "buy":
-        submit_response = client.place_bid(request["request_payload"])
+        submit_response = _submit_order_with_safety_check(
+            client=client,
+            submitter=client.place_bid,
+            request_payload=request["request_payload"],
+            symbol=request["symbol"],
+            side=request["side"],
+            correlation_id=correlation_id,
+        )
     else:
-        submit_response = client.place_ask(request["request_payload"])
+        submit_response = _submit_order_with_safety_check(
+            client=client,
+            submitter=client.place_ask,
+            request_payload=request["request_payload"],
+            symbol=request["symbol"],
+            side=request["side"],
+            correlation_id=correlation_id,
+        )
 
     submit_result = submit_response.get("result", {}) if isinstance(submit_response, dict) else {}
     exchange_order_id = str(submit_result.get("id", "")) or None
@@ -1012,6 +1110,7 @@ def cancel_live_order(
     client: BitkubPrivateClient,
     order_record: dict[str, Any],
     occurred_at: str,
+    correlation_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     exchange_order_id = order_record.get("exchange_order_id")
     if not exchange_order_id:
@@ -1024,7 +1123,74 @@ def cancel_live_order(
         "id": exchange_order_id,
         "sd": str(order_record["side"]),
     }
-    cancel_response = client.cancel_order(cancel_payload)
+    try:
+        cancel_response = client.cancel_order(
+            cancel_payload,
+            correlation_id=correlation_id,
+        )
+    except BitkubPrivateClientError as e:
+        classification = classify_retry_error(error=e, error_message=str(e))
+        if not classification.get("ambiguous"):
+            raise
+
+        log_api_retry_event(
+            endpoint="bitkub/cancel-order",
+            action="cancel_order",
+            attempt=1,
+            policy_name="cancel_order",
+            classification=classification,
+            outcome="blocked_ambiguous",
+            correlation_id=correlation_id,
+            metadata={
+                "exchange_order_id": str(exchange_order_id),
+                "symbol": str(order_record["symbol"]),
+                "side": str(order_record["side"]),
+            },
+        )
+        refreshed_record, refresh_events = refresh_live_order_from_exchange(
+            client=client,
+            order_record=order_record,
+            occurred_at=occurred_at,
+        )
+        events: list[dict[str, Any]] = []
+        _, recheck_event = transition_live_order_state(
+            order_record=order_record,
+            new_state=str(order_record["state"]),
+            occurred_at=occurred_at,
+            event_type="cancel_status_recheck",
+            message="cancel request outcome was ambiguous; refreshed order state before deciding on retry",
+            details={"classification": classification, "error": str(e)},
+            exchange_order_id=str(exchange_order_id),
+            exchange_client_id=order_record.get("exchange_client_id"),
+        )
+        events.append(recheck_event)
+        events.extend(refresh_events)
+
+        if refreshed_record["state"] in {ORDER_STATE_CANCELED, ORDER_STATE_FILLED}:
+            return refreshed_record, events
+
+        retry_response = client.cancel_order(
+            cancel_payload,
+            correlation_id=correlation_id,
+        )
+        interim_record, cancel_retry_event = transition_live_order_state(
+            order_record=refreshed_record,
+            new_state=str(refreshed_record["state"]),
+            occurred_at=occurred_at,
+            event_type="cancel_request_retry",
+            message="live order cancel retried after exchange status recheck",
+            response_payload=retry_response,
+            exchange_order_id=str(exchange_order_id),
+            exchange_client_id=order_record.get("exchange_client_id"),
+        )
+        events.append(cancel_retry_event)
+        refreshed_after_retry, retry_refresh_events = refresh_live_order_from_exchange(
+            client=client,
+            order_record=interim_record,
+            occurred_at=occurred_at,
+        )
+        events.extend(retry_refresh_events)
+        return refreshed_after_retry, events
     events: list[dict[str, Any]] = []
 
     interim_record, cancel_event = transition_live_order_state(
@@ -1059,6 +1225,7 @@ def submit_auto_live_entry_order(
     guardrails: dict[str, Any],
     available_balances: dict[str, float],
     created_at: str,
+    correlation_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     request = build_live_buy_request(
         symbol=symbol,
@@ -1085,7 +1252,14 @@ def submit_auto_live_entry_order(
     )
     events: list[dict[str, Any]] = []
 
-    submit_response = client.place_bid(request["request_payload"])
+    submit_response = _submit_order_with_safety_check(
+        client=client,
+        submitter=client.place_bid,
+        request_payload=request["request_payload"],
+        symbol=request["symbol"],
+        side=request["side"],
+        correlation_id=correlation_id,
+    )
     submit_result = submit_response.get("result", {}) if isinstance(submit_response, dict) else {}
     exchange_order_id = str(submit_result.get("id", "")) or None
     exchange_client_id = str(submit_result.get("ci", "")) or None
@@ -1140,6 +1314,7 @@ def submit_auto_live_exit_order(
     guardrails: dict[str, Any],
     available_balances: dict[str, float],
     created_at: str,
+    correlation_id: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     request = build_live_sell_request(
         symbol=symbol,
@@ -1166,7 +1341,14 @@ def submit_auto_live_exit_order(
     )
     events: list[dict[str, Any]] = []
 
-    submit_response = client.place_ask(request["request_payload"])
+    submit_response = _submit_order_with_safety_check(
+        client=client,
+        submitter=client.place_ask,
+        request_payload=request["request_payload"],
+        symbol=request["symbol"],
+        side=request["side"],
+        correlation_id=correlation_id,
+    )
     submit_result = submit_response.get("result", {}) if isinstance(submit_response, dict) else {}
     exchange_order_id = str(submit_result.get("id", "")) or None
     exchange_client_id = str(submit_result.get("ci", "")) or None

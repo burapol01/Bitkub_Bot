@@ -8,11 +8,31 @@ from urllib.parse import urlencode
 import requests
 
 from config import load_config
+from services.api_retry_service import (
+    classify_retry_error,
+    get_retry_policy,
+    log_api_retry_event,
+    retry_delay_seconds,
+    should_retry,
+)
 from services.env_service import get_bitkub_api_credentials
 
 
 class BitkubPrivateClientError(Exception):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: str | None = None,
+        status_code: int | None = None,
+        retryable: bool | None = None,
+        ambiguous: bool | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.status_code = status_code
+        self.retryable = retryable
+        self.ambiguous = ambiguous
 
 
 class BitkubMissingCredentialsError(BitkubPrivateClientError):
@@ -182,6 +202,9 @@ class BitkubPrivateClient:
         params: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
         auth_required: bool = True,
+        retry_policy: str = "open_order_status_read",
+        action: str | None = None,
+        correlation_id: str | None = None,
     ) -> Any:
         body = _json_body(payload)
         query_string = ""
@@ -191,13 +214,14 @@ class BitkubPrivateClient:
             )
 
         last_error: Exception | None = None
+        policy = get_retry_policy(retry_policy)
 
         for path in path_candidates:
             request_path = path
             if query_string:
                 request_path = f"{path}?{query_string}"
 
-            for attempt in range(self.max_retries):
+            for attempt in range(1, int(policy.max_attempts) + 1):
                 timestamp = self._timestamp_ms()
                 headers = {}
                 if auth_required:
@@ -219,41 +243,205 @@ class BitkubPrivateClient:
                         timeout=self.timeout,
                     )
                 except requests.RequestException as e:
-                    last_error = BitkubPrivateClientError(str(e))
-                    break
-
-                if response.status_code == 404:
+                    classification = classify_retry_error(error=e)
                     last_error = BitkubPrivateClientError(
-                        f"Endpoint not found for path {path}"
+                        str(e),
+                        category=classification.get("category"),
+                        retryable=classification.get("retryable"),
+                        ambiguous=classification.get("ambiguous"),
+                    )
+                    if should_retry(
+                        policy_name=retry_policy,
+                        classification=classification,
+                        attempt=attempt,
+                    ):
+                        delay_seconds = retry_delay_seconds(
+                            policy_name=retry_policy,
+                            attempt=attempt,
+                        )
+                        log_api_retry_event(
+                            endpoint=path,
+                            action=action or method.lower(),
+                            attempt=attempt,
+                            policy_name=retry_policy,
+                            classification=classification,
+                            outcome="retrying",
+                            correlation_id=correlation_id,
+                            delay_seconds=delay_seconds,
+                        )
+                        time.sleep(delay_seconds)
+                        continue
+                    log_api_retry_event(
+                        endpoint=path,
+                        action=action or method.lower(),
+                        attempt=attempt,
+                        policy_name=retry_policy,
+                        classification=classification,
+                        outcome="give_up",
+                        correlation_id=correlation_id,
                     )
                     break
 
-                if response.status_code == 429:
-                    if attempt == self.max_retries - 1:
-                        last_error = BitkubPrivateClientError(
-                            "Bitkub API rate limit hit after retries (HTTP 429)."
-                        )
-                        break
-                    time.sleep(2**attempt)
-                    continue
+                if response.status_code == 404:
+                    classification = classify_retry_error(
+                        status_code=response.status_code,
+                        response_text=response.text,
+                    )
+                    log_api_retry_event(
+                        endpoint=path,
+                        action=action or method.lower(),
+                        attempt=attempt,
+                        policy_name=retry_policy,
+                        classification=classification,
+                        outcome="path_fallback",
+                        correlation_id=correlation_id,
+                        status_code=response.status_code,
+                    )
+                    last_error = BitkubPrivateClientError(
+                        f"Endpoint not found for path {path}",
+                        category=classification.get("category"),
+                        status_code=response.status_code,
+                        retryable=classification.get("retryable"),
+                        ambiguous=classification.get("ambiguous"),
+                    )
+                    break
 
                 try:
                     response.raise_for_status()
                 except requests.HTTPError as e:
+                    classification = classify_retry_error(
+                        error=e,
+                        status_code=response.status_code,
+                        response_text=response.text,
+                    )
                     last_error = BitkubPrivateClientError(
-                        f"Bitkub API HTTP error {response.status_code}: {response.text}"
+                        f"Bitkub API HTTP error {response.status_code}: {response.text}",
+                        category=classification.get("category"),
+                        status_code=response.status_code,
+                        retryable=classification.get("retryable"),
+                        ambiguous=classification.get("ambiguous"),
+                    )
+                    if should_retry(
+                        policy_name=retry_policy,
+                        classification=classification,
+                        attempt=attempt,
+                    ):
+                        delay_seconds = retry_delay_seconds(
+                            policy_name=retry_policy,
+                            attempt=attempt,
+                        )
+                        log_api_retry_event(
+                            endpoint=path,
+                            action=action or method.lower(),
+                            attempt=attempt,
+                            policy_name=retry_policy,
+                            classification=classification,
+                            outcome="retrying",
+                            correlation_id=correlation_id,
+                            delay_seconds=delay_seconds,
+                            status_code=response.status_code,
+                        )
+                        time.sleep(delay_seconds)
+                        continue
+                    log_api_retry_event(
+                        endpoint=path,
+                        action=action or method.lower(),
+                        attempt=attempt,
+                        policy_name=retry_policy,
+                        classification=classification,
+                        outcome="give_up",
+                        correlation_id=correlation_id,
+                        status_code=response.status_code,
                     )
                     break
 
                 try:
                     data = response.json()
                 except ValueError as e:
-                    last_error = BitkubPrivateClientError("Bitkub API returned invalid JSON.")
+                    classification = classify_retry_error(
+                        error=e,
+                        status_code=response.status_code,
+                        error_message="Bitkub API returned invalid JSON.",
+                    )
+                    last_error = BitkubPrivateClientError(
+                        "Bitkub API returned invalid JSON.",
+                        category=classification.get("category"),
+                        status_code=response.status_code,
+                        retryable=classification.get("retryable"),
+                        ambiguous=classification.get("ambiguous"),
+                    )
+                    if should_retry(
+                        policy_name=retry_policy,
+                        classification=classification,
+                        attempt=attempt,
+                    ):
+                        delay_seconds = retry_delay_seconds(
+                            policy_name=retry_policy,
+                            attempt=attempt,
+                        )
+                        log_api_retry_event(
+                            endpoint=path,
+                            action=action or method.lower(),
+                            attempt=attempt,
+                            policy_name=retry_policy,
+                            classification=classification,
+                            outcome="retrying",
+                            correlation_id=correlation_id,
+                            delay_seconds=delay_seconds,
+                            status_code=response.status_code,
+                        )
+                        time.sleep(delay_seconds)
+                        continue
+                    log_api_retry_event(
+                        endpoint=path,
+                        action=action or method.lower(),
+                        attempt=attempt,
+                        policy_name=retry_policy,
+                        classification=classification,
+                        outcome="give_up",
+                        correlation_id=correlation_id,
+                        status_code=response.status_code,
+                    )
                     break
 
                 if isinstance(data, dict) and data.get("error") not in (None, 0):
-                    raise BitkubAPIResponseError(
+                    api_message = (
                         f"Bitkub API error={data.get('error')} message={data.get('message') or data.get('result')}"
+                    )
+                    classification = classify_retry_error(error_message=api_message)
+                    log_api_retry_event(
+                        endpoint=path,
+                        action=action or method.lower(),
+                        attempt=attempt,
+                        policy_name=retry_policy,
+                        classification=classification,
+                        outcome="give_up",
+                        correlation_id=correlation_id,
+                        status_code=response.status_code,
+                    )
+                    raise BitkubAPIResponseError(
+                        api_message,
+                        category=classification.get("category"),
+                        status_code=response.status_code,
+                        retryable=classification.get("retryable"),
+                        ambiguous=classification.get("ambiguous"),
+                    )
+
+                if attempt > 1:
+                    log_api_retry_event(
+                        endpoint=path,
+                        action=action or method.lower(),
+                        attempt=attempt,
+                        policy_name=retry_policy,
+                        classification={
+                            "category": "success_after_retry",
+                            "retryable": False,
+                            "ambiguous": False,
+                            "reason": "request succeeded after retry",
+                        },
+                        outcome="succeeded_after_retry",
+                        correlation_id=correlation_id,
+                        status_code=response.status_code,
                     )
 
                 return data
@@ -271,6 +459,9 @@ class BitkubPrivateClient:
         params: dict[str, Any] | None = None,
         payload: dict[str, Any] | None = None,
         auth_required: bool = True,
+        retry_policy: str = "open_order_status_read",
+        action: str | None = None,
+        correlation_id: str | None = None,
     ) -> Any:
         last_error: Exception | None = None
 
@@ -282,6 +473,9 @@ class BitkubPrivateClient:
                     params=params,
                     payload=payload,
                     auth_required=auth_required,
+                    retry_policy=retry_policy,
+                    action=action,
+                    correlation_id=correlation_id,
                 )
             except BitkubPrivateClientError as e:
                 last_error = e
@@ -292,13 +486,29 @@ class BitkubPrivateClient:
         raise BitkubPrivateClientError("Bitkub API request failed.")
 
     def get_server_time(self) -> Any:
-        return self._request("GET", self.SERVER_TIME_PATHS, auth_required=False)
+        return self._request(
+            "GET",
+            self.SERVER_TIME_PATHS,
+            auth_required=False,
+            retry_policy="market_public_read",
+            action="get_server_time",
+        )
 
     def get_wallet(self) -> Any:
-        return self._request_methods(("POST", "GET"), self.WALLET_PATHS)
+        return self._request_methods(
+            ("POST", "GET"),
+            self.WALLET_PATHS,
+            retry_policy="balance_account_read",
+            action="get_wallet",
+        )
 
     def get_balances(self) -> Any:
-        return self._request_methods(("POST", "GET"), self.BALANCES_PATHS)
+        return self._request_methods(
+            ("POST", "GET"),
+            self.BALANCES_PATHS,
+            retry_policy="balance_account_read",
+            action="get_balances",
+        )
 
     def prepare_place_bid_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         normalized_payload = dict(payload)
@@ -308,11 +518,14 @@ class BitkubPrivateClient:
             )
         return normalized_payload
 
-    def place_bid(self, payload: dict[str, Any]) -> Any:
+    def place_bid(self, payload: dict[str, Any], *, correlation_id: str | None = None) -> Any:
         return self._request(
             "POST",
             self.PLACE_BID_PATHS,
             payload=self.prepare_place_bid_payload(payload),
+            retry_policy="create_order",
+            action="place_bid",
+            correlation_id=correlation_id,
         )
 
     def prepare_place_ask_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -323,11 +536,14 @@ class BitkubPrivateClient:
             )
         return normalized_payload
 
-    def place_ask(self, payload: dict[str, Any]) -> Any:
+    def place_ask(self, payload: dict[str, Any], *, correlation_id: str | None = None) -> Any:
         return self._request(
             "POST",
             self.PLACE_ASK_PATHS,
             payload=self.prepare_place_ask_payload(payload),
+            retry_policy="create_order",
+            action="place_ask",
+            correlation_id=correlation_id,
         )
 
     def prepare_cancel_order_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -336,7 +552,7 @@ class BitkubPrivateClient:
             normalized_payload["sym"] = str(normalized_payload["sym"]).lower()
         return normalized_payload
 
-    def cancel_order(self, payload: dict[str, Any]) -> Any:
+    def cancel_order(self, payload: dict[str, Any], *, correlation_id: str | None = None) -> Any:
         normalized_payload = dict(payload)
         symbol = normalized_payload.get("sym")
         if symbol is None:
@@ -344,6 +560,9 @@ class BitkubPrivateClient:
                 "POST",
                 self.CANCEL_ORDER_PATHS,
                 payload=self.prepare_cancel_order_payload(normalized_payload),
+                retry_policy="cancel_order",
+                action="cancel_order",
+                correlation_id=correlation_id,
             )
 
         last_error: Exception | None = None
@@ -355,6 +574,9 @@ class BitkubPrivateClient:
                     "POST",
                     self.CANCEL_ORDER_PATHS,
                     payload=attempt_payload,
+                    retry_policy="cancel_order",
+                    action="cancel_order",
+                    correlation_id=correlation_id,
                 )
             except BitkubPrivateClientError as e:
                 last_error = e
@@ -366,7 +588,12 @@ class BitkubPrivateClient:
     def get_open_orders(self, symbol: str | None = None) -> Any:
         if symbol is None:
             try:
-                return self._request("GET", self.OPEN_ORDERS_PATHS)
+                return self._request(
+                    "GET",
+                    self.OPEN_ORDERS_PATHS,
+                    retry_policy="open_order_status_read",
+                    action="get_open_orders",
+                )
             except BitkubPrivateClientError as e:
                 if is_symbol_required_error_message(str(e)):
                     raise BitkubPrivateClientError(
@@ -386,6 +613,8 @@ class BitkubPrivateClient:
                     "GET",
                     self.OPEN_ORDERS_PATHS,
                     params={"sym": sym_value},
+                    retry_policy="open_order_status_read",
+                    action="get_open_orders",
                 )
             except BitkubPrivateClientError as e:
                 last_error = e
@@ -404,7 +633,13 @@ class BitkubPrivateClient:
         base_params = {"id": order_id, "sd": side}
 
         if symbol is None:
-            return self._request("GET", self.ORDER_INFO_PATHS, params=base_params)
+            return self._request(
+                "GET",
+                self.ORDER_INFO_PATHS,
+                params=base_params,
+                retry_policy="open_order_status_read",
+                action="get_order_info",
+            )
 
         symbol_variants = (
             _quote_base_lower_symbol(symbol),
@@ -418,6 +653,8 @@ class BitkubPrivateClient:
                     "GET",
                     self.ORDER_INFO_PATHS,
                     params={**base_params, "sym": sym_value},
+                    retry_policy="open_order_status_read",
+                    action="get_order_info",
                 )
             except BitkubPrivateClientError as e:
                 last_error = e
@@ -437,7 +674,13 @@ class BitkubPrivateClient:
 
         if symbol is None:
             try:
-                return self._request("GET", self.ORDER_HISTORY_PATHS, params=base_params)
+                return self._request(
+                    "GET",
+                    self.ORDER_HISTORY_PATHS,
+                    params=base_params,
+                    retry_policy="open_order_status_read",
+                    action="get_order_history",
+                )
             except BitkubPrivateClientError as e:
                 if is_symbol_required_error_message(str(e)):
                     raise BitkubPrivateClientError(
@@ -457,6 +700,8 @@ class BitkubPrivateClient:
                     "GET",
                     self.ORDER_HISTORY_PATHS,
                     params={**base_params, "sym": sym_value},
+                    retry_policy="open_order_status_read",
+                    action="get_order_history",
                 )
             except BitkubPrivateClientError as e:
                 last_error = e
