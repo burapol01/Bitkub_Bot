@@ -712,6 +712,24 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertEqual(at.session_state["strategy_workspace"], "Compare")
         self.assertEqual(at.session_state["strategy_compare_symbol"], "THB_FF")
 
+    def test_live_tuning_open_live_ops_sets_focus_symbol(self) -> None:
+        script = _app_main_script(
+            start_page="Strategy",
+            body=_navigation_strategy_body(workspace="Live Tuning", symbol="THB_FF"),
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        next(button for button in at.button if button.label == "Open Live Ops").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertEqual(at.session_state["ui_page"], "Live Ops")
+        self.assertEqual(at.session_state["sidebar_page"], "Live Ops")
+        self.assertEqual(at.session_state["live_ops_focus_symbol"], "THB_FF")
+        self.assertEqual(at.session_state["live_ops_manual_symbol"], "THB_FF")
+
     def test_live_ops_open_compare_switches_to_strategy_compare(self) -> None:
         script = _app_main_script(
             start_page="Live Ops",
@@ -829,6 +847,103 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertIn("Prune rule only", list(prune_action.options))
         self.assertIn("Cancel linked orders and prune", list(prune_action.options))
         self.assertIn("Review in Live Ops", list(prune_action.options))
+
+    def test_live_tuning_prune_routes_to_live_ops_when_state_is_unclear(self) -> None:
+        script = _app_script(
+            workspace="Live Tuning",
+            body=f"""
+            RANKING_PAYLOAD = {{"rows": [], "coverage": [], "errors": []}}
+            TUNING_ROWS = json.loads({_json_string(_tuning_rows())})
+            AUTO_ENTRY_REPORT = {{
+                "events": [],
+                "latest_context": {{}},
+                "rejection_summary": [],
+                "symbol_reject_summary": [],
+                "symbol_candidate_summary": [],
+                "top_candidates": [],
+            }}
+
+            pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
+            pages.build_live_rule_tuning_rows = lambda **kwargs: TUNING_ROWS
+            pages.fetch_open_execution_orders = lambda: [{{"id": 9, "symbol": "THB_SUMX", "side": "buy", "state": "open", "request_payload": {{"amt": 100.0}}}}]
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._build_auto_entry_review_report = lambda limit=40: AUTO_ENTRY_REPORT
+
+            def save_capture(*args, **kwargs):
+                st.session_state["prune_saved"] = True
+                return True
+
+            pages.save_config_with_feedback = save_capture
+            pages.build_symbol_operational_state = lambda **kwargs: (
+                {{
+                    "symbol": "THB_SUMX",
+                    "state_summary": "open buy 1 | open sell 0 | reserved THB 100.00 | reserved coin 0.00000000",
+                    "risk_summary": "entry blocked | exit clear",
+                    "available_coin": 0.0,
+                    "reserved_coin": 0.0,
+                    "reserved_thb": 100.0,
+                    "open_buy_count": 1,
+                    "open_sell_count": 0,
+                    "partial_fill": False,
+                    "entry_blocked": True,
+                    "exit_blocked": False,
+                    "entry_block_reasons": ["1 open buy order(s) exist"],
+                    "exit_block_reasons": [],
+                    "review_required": True,
+                    "review_reasons": ["exchange open-orders coverage is partial"],
+                    "recent_guardrail_block": None,
+                    "holdings_row": {{}},
+                    "exchange_open_order_count": 0,
+                    "exchange_open_orders": [],
+                    "local_open_orders": [{{"symbol": "THB_SUMX"}}],
+                    "findings": {{}},
+                    "symbol_findings": {{}},
+                }}
+                if str(kwargs["symbol"]) == "THB_SUMX"
+                else {{
+                    "symbol": str(kwargs["symbol"]),
+                    "state_summary": "open buy 0 | open sell 0 | reserved THB 0.00 | reserved coin 0.00000000",
+                    "risk_summary": "entry clear | exit clear",
+                    "available_coin": 0.0,
+                    "reserved_coin": 0.0,
+                    "reserved_thb": 0.0,
+                    "open_buy_count": 0,
+                    "open_sell_count": 0,
+                    "partial_fill": False,
+                    "entry_blocked": False,
+                    "exit_blocked": False,
+                    "entry_block_reasons": [],
+                    "exit_block_reasons": [],
+                    "review_required": False,
+                    "review_reasons": [],
+                    "recent_guardrail_block": None,
+                    "holdings_row": {{}},
+                    "exchange_open_order_count": 0,
+                    "exchange_open_orders": [],
+                    "local_open_orders": [],
+                    "findings": {{}},
+                    "symbol_findings": {{}},
+                }}
+            )
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        at.multiselect(key="strategy_prune_live_rules_selection").set_value(["THB_SUMX"])
+        at.run(timeout=20)
+
+        prune_action = at.radio(key="strategy_prune_live_rules_action")
+        self.assertEqual(list(prune_action.options), ["Review in Live Ops"])
+
+        next(button for button in at.button if button.label == "Continue").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        self.assertNotIn("prune_saved", at.session_state)
+        self.assertEqual(at.session_state["ui_page_autorun"], "Live Ops")
+        self.assertEqual(at.session_state["live_ops_focus_symbol"], "THB_SUMX")
 
 
 if __name__ == "__main__":
