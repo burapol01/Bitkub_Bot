@@ -50,6 +50,7 @@ from services.db_service import (
     insert_execution_order_event,
     insert_market_snapshot,
     insert_reconciliation_result,
+    insert_state_reconciliation_run,
     insert_trade_journal,
     insert_telegram_command_log,
     insert_runtime_event,
@@ -91,6 +92,7 @@ from services.market_symbol_service import (
 from services.order_service import get_order_foundation_status, probe_order_foundation
 from services.reconciliation_service import (
     extract_available_balances,
+    collect_runtime_reconciliation_findings,
     extract_open_orders_by_symbol,
     reconcile_execution_orders_with_exchange,
     reconcile_positions_with_balances,
@@ -467,7 +469,7 @@ def main():
         details=version_snapshot,
     )
 
-    manual_pause, restore_messages = load_runtime_state(
+    manual_pause, restore_messages, runtime_state_metadata = load_runtime_state(
         last_zones, positions, daily_stats, cooldowns
     )
     runtime_run_id = new_correlation_id("engine_run")
@@ -484,6 +486,8 @@ def main():
     private_api_status = "not configured"
     private_api_capabilities: list[str] | None = None
     selected_execution_order_id: int | None = None
+    last_state_reconciliation_at = 0.0
+    state_reconciliation_interval_seconds = 300
     telegram_confirm_ttl_seconds = 120
     telegram_poll_error_cooldown_seconds = 180
     unsupported_live_entry_symbols: dict[str, str] = {}
@@ -778,11 +782,13 @@ def main():
             "manual_pause": manual_pause,
             "safety_pause": safety_pause,
             "private_api_status": private_api_status,
+            "runtime_state": runtime_state_metadata,
             "version": version_snapshot,
         },
     )
 
     def persist_state():
+        nonlocal runtime_state_metadata
         save_runtime_state(
             last_zones,
             positions,
@@ -790,6 +796,14 @@ def main():
             cooldowns,
             manual_pause=manual_pause,
         )
+        runtime_state_metadata = {
+            "source_path": str(STATE_FILE_PATH),
+            "loaded_from_pending": False,
+            "saved_at": now_text(),
+            "open_positions": len(positions),
+            "cooldowns": len(cooldowns),
+            "tracked_days": len(daily_stats),
+        }
 
     def notify_telegram(event_type: str, title: str, lines: list[str] | None = None, *, payload: dict | None = None):
         queue_telegram_notification(
@@ -2231,7 +2245,254 @@ def main():
             selected_execution_order_id = int(open_execution_orders[0]["id"])
         return open_execution_orders
 
+    def persist_execution_order_changes(
+        execution_order_id: int,
+        order_record: dict,
+        order_events: list[dict],
+    ):
+        update_execution_order(
+            execution_order_id=execution_order_id,
+            updated_at=order_record["updated_at"],
+            state=order_record["state"],
+            response_payload=order_record.get("response_payload"),
+            exchange_order_id=order_record.get("exchange_order_id"),
+            exchange_client_id=order_record.get("exchange_client_id"),
+            message=order_record["message"],
+        )
+        for event in order_events:
+            insert_execution_order_event(
+                execution_order_id=execution_order_id,
+                created_at=event["created_at"],
+                from_state=event["from_state"],
+                to_state=event["to_state"],
+                event_type=event["event_type"],
+                message=event["message"],
+                details=event.get("details"),
+            )
+
+    def run_state_reconciliation(*, source: str, force: bool):
+        nonlocal account_snapshot
+        nonlocal private_api_capabilities
+        nonlocal private_api_status
+        nonlocal last_state_reconciliation_at
+
+        current_time = time.time()
+        if (
+            not force
+            and current_time - last_state_reconciliation_at
+            < float(state_reconciliation_interval_seconds)
+        ):
+            return None
+
+        correlation_id = new_correlation_id("state_reconciliation")
+        started_at = now_text()
+        refresh_errors: list[str] = []
+        corrected_orders: list[dict[str, Any]] = []
+        snapshot_errors: list[str] = []
+        exchange_snapshot_created_at: str | None = None
+        snapshot_for_reconciliation: dict[str, Any] | None = None
+        account_sync_status = "unavailable" if private_client is None else "failed"
+
+        tracked_open_orders = fetch_open_execution_orders()
+
+        if private_client is not None:
+            try:
+                snapshot_for_reconciliation = fetch_account_snapshot(private_client)
+                exchange_snapshot_created_at = now_text()
+                account_snapshot = snapshot_for_reconciliation
+                track_unsupported_live_entry_symbols_from_snapshot(account_snapshot)
+                snapshot_errors = account_snapshot_errors(account_snapshot)
+                private_api_capabilities = summarize_account_capabilities(account_snapshot)
+                private_api_status = (
+                    "wallet/balance ready, some order endpoints unavailable"
+                    if snapshot_errors
+                    else "wallet/balance/open-orders ready"
+                )
+                account_sync_status = "partial" if snapshot_errors else "ready"
+                insert_account_snapshot(
+                    created_at=exchange_snapshot_created_at,
+                    source=f"state_reconciliation_{source}",
+                    private_api_status=private_api_status,
+                    capabilities=private_api_capabilities,
+                    snapshot=account_snapshot,
+                )
+            except BitkubPrivateClientError as e:
+                refresh_errors.append(f"account snapshot refresh failed: {e}")
+                private_api_status = "private API error"
+                account_sync_status = "failed"
+
+            for open_order in tracked_open_orders:
+                execution_order_id = int(open_order["id"])
+                try:
+                    refreshed_record, refresh_events = refresh_live_order_from_exchange(
+                        client=private_client,
+                        order_record=open_order,
+                        occurred_at=now_text(),
+                    )
+                except Exception as e:
+                    refresh_errors.append(
+                        f"id={execution_order_id} symbol={open_order['symbol']} refresh failed: {e}"
+                    )
+                    continue
+
+                if (
+                    refreshed_record["state"] != open_order["state"]
+                    or refreshed_record["updated_at"] != open_order["updated_at"]
+                    or refreshed_record.get("exchange_order_id")
+                    != open_order.get("exchange_order_id")
+                    or refreshed_record.get("message") != open_order.get("message")
+                ):
+                    persist_execution_order_changes(
+                        execution_order_id=execution_order_id,
+                        order_record=refreshed_record,
+                        order_events=refresh_events,
+                    )
+                    corrected_orders.append(
+                        {
+                            "execution_order_id": execution_order_id,
+                            "symbol": refreshed_record["symbol"],
+                            "side": refreshed_record["side"],
+                            "from_state": open_order["state"],
+                            "to_state": refreshed_record["state"],
+                            "exchange_order_id": refreshed_record.get("exchange_order_id"),
+                        }
+                    )
+
+        current_open_execution_orders = fetch_open_execution_orders()
+        latest_filled_orders = fetch_latest_filled_execution_orders_by_symbol()
+        live_holdings_rows = build_live_holdings_snapshot(
+            account_snapshot=snapshot_for_reconciliation,
+            latest_prices=latest_prices,
+            latest_filled_execution_orders=latest_filled_orders,
+        )
+        findings = collect_runtime_reconciliation_findings(
+            execution_orders=current_open_execution_orders,
+            live_holdings_rows=live_holdings_rows,
+            account_snapshot=snapshot_for_reconciliation,
+            runtime_state_metadata=runtime_state_metadata,
+        )
+        mismatch_summary = dict(findings.get("mismatch_counts") or {})
+        stale_pending_count = int(mismatch_summary.get("stale_pending", 0) or 0)
+        unresolved_count = int(findings.get("unresolved_count", 0) or 0)
+        if snapshot_errors:
+            unresolved_count += len(snapshot_errors)
+        if refresh_errors:
+            unresolved_count += len(refresh_errors)
+
+        if account_sync_status == "failed":
+            status = "error"
+        elif unresolved_count > 0 or account_sync_status == "partial":
+            status = "warning"
+        elif account_sync_status == "unavailable":
+            status = "unavailable"
+        else:
+            status = "ok"
+
+        warning_messages = list(findings.get("messages") or [])
+        if snapshot_errors:
+            warning_messages.extend(snapshot_errors)
+        if refresh_errors:
+            warning_messages.extend(refresh_errors)
+
+        insert_reconciliation_result(
+            created_at=started_at,
+            phase=f"state_{source}",
+            status=status,
+            warnings=warning_messages,
+            positions_count=len(positions),
+            exchange_balances=extract_available_balances(snapshot_for_reconciliation),
+        )
+        insert_state_reconciliation_run(
+            created_at=started_at,
+            source=source,
+            status=status,
+            account_sync_status=account_sync_status,
+            runtime_state_status=str(findings.get("runtime_state_status") or "unknown"),
+            local_open_orders_count=int(findings.get("local_open_orders_count", 0) or 0),
+            exchange_open_orders_count=int(
+                findings.get("exchange_open_orders_count", 0) or 0
+            ),
+            corrected_order_count=len(corrected_orders),
+            unresolved_count=unresolved_count,
+            stale_pending_count=stale_pending_count,
+            mismatch_summary=mismatch_summary,
+            mismatch_details=dict(findings.get("mismatches") or {}),
+            correction_summary={
+                "corrected_orders": corrected_orders[:50],
+                "corrected_order_count": len(corrected_orders),
+            },
+            notes={
+                "correlation_id": correlation_id,
+                "force": bool(force),
+                "exchange_snapshot_created_at": exchange_snapshot_created_at,
+                "snapshot_errors": snapshot_errors[:20],
+                "refresh_errors": refresh_errors[:50],
+                "runtime_state_saved_at": findings.get("runtime_state_saved_at"),
+            },
+        )
+
+        if force or status != "ok" or corrected_orders:
+            insert_runtime_event(
+                created_at=started_at,
+                event_type="state_reconciliation",
+                severity=(
+                    "error"
+                    if status == "error"
+                    else "warning"
+                    if status in {"warning", "unavailable"}
+                    else "info"
+                ),
+                message=(
+                    "State reconciliation completed"
+                    if status == "ok"
+                    else "State reconciliation requires review"
+                ),
+                details={
+                    "source": source,
+                    "status": status,
+                    "account_sync_status": account_sync_status,
+                    "runtime_state_status": findings.get("runtime_state_status"),
+                    "mismatch_summary": mismatch_summary,
+                    "corrections": corrected_orders[:50],
+                    "snapshot_errors": snapshot_errors[:20],
+                    "refresh_errors": refresh_errors[:50],
+                },
+            )
+
+        audit_event(
+            action_type="state_reconciliation",
+            actor_type="system",
+            source=source,
+            target_type="runtime_state",
+            target_id="engine",
+            status=status,
+            message=(
+                "Structured state reconciliation completed"
+                if status == "ok"
+                else "Structured state reconciliation recorded mismatches"
+            ),
+            correlation_id=correlation_id,
+            metadata={
+                "account_sync_status": account_sync_status,
+                "runtime_state_status": findings.get("runtime_state_status"),
+                "mismatch_summary": mismatch_summary,
+                "corrected_order_count": len(corrected_orders),
+                "unresolved_count": unresolved_count,
+                "exchange_snapshot_created_at": exchange_snapshot_created_at,
+            },
+        )
+
+        last_state_reconciliation_at = current_time
+        sync_selected_execution_order()
+        return {
+            "status": status,
+            "account_sync_status": account_sync_status,
+            "unresolved_count": unresolved_count,
+            "corrected_order_count": len(corrected_orders),
+        }
+
     sync_selected_execution_order()
+    run_state_reconciliation(source="startup", force=True)
 
     while True:
         try:
@@ -3458,31 +3719,6 @@ def main():
                 )
                 sync_selected_execution_order()
                 return True
-
-            def persist_execution_order_changes(
-                execution_order_id: int,
-                order_record: dict,
-                order_events: list[dict],
-            ):
-                update_execution_order(
-                    execution_order_id=execution_order_id,
-                    updated_at=order_record["updated_at"],
-                    state=order_record["state"],
-                    response_payload=order_record.get("response_payload"),
-                    exchange_order_id=order_record.get("exchange_order_id"),
-                    exchange_client_id=order_record.get("exchange_client_id"),
-                    message=order_record["message"],
-                )
-                for event in order_events:
-                    insert_execution_order_event(
-                        execution_order_id=execution_order_id,
-                        created_at=event["created_at"],
-                        from_state=event["from_state"],
-                        to_state=event["to_state"],
-                        event_type=event["event_type"],
-                        message=event["message"],
-                        details=event.get("details"),
-                    )
 
             def submit_auto_live_exit_action(candidate: dict) -> bool:
                 nonlocal account_snapshot, notice, notice_lines
@@ -4846,6 +5082,9 @@ def main():
                             [str(e)],
                             payload={"exception": str(e)},
                         )
+
+            if trading_mode in {"live", "shadow-live"}:
+                run_state_reconciliation(source="periodic", force=False)
 
             flush_telegram_notifications()
             process_telegram_commands()

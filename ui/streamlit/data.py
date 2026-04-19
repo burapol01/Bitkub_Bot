@@ -25,7 +25,7 @@ def _cached_runtime_snapshot() -> dict[str, Any]:
     runtime_positions: dict[str, Any] = {}
     runtime_daily_stats: dict[str, Any] = {}
     runtime_cooldowns: dict[str, Any] = {}
-    manual_pause, messages = load_runtime_state(
+    manual_pause, messages, metadata = load_runtime_state(
         runtime_last_zones,
         runtime_positions,
         runtime_daily_stats,
@@ -38,6 +38,7 @@ def _cached_runtime_snapshot() -> dict[str, Any]:
         "positions": runtime_positions,
         "daily_stats": runtime_daily_stats,
         "cooldowns": runtime_cooldowns,
+        "metadata": metadata,
     }
 
 

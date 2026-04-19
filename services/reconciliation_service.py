@@ -1,6 +1,7 @@
 from typing import Any
 
 from clients.bitkub_private_client import BitkubPrivateClient, BitkubPrivateClientError
+from utils.time_utils import now_dt, parse_time_text
 
 
 def _unwrap_result(payload):
@@ -108,6 +109,19 @@ def reconcile_execution_orders_with_exchange(
     account_snapshot: dict | None,
     private_client: BitkubPrivateClient | None = None,
 ) -> list[str]:
+    findings = collect_runtime_reconciliation_findings(
+        execution_orders=execution_orders,
+        live_holdings_rows=[],
+        account_snapshot=account_snapshot,
+    )
+    warning_messages = [
+        item["message"]
+        for item in findings["mismatches"]["orders_without_exchange_id"]
+        + findings["mismatches"]["missing_on_exchange"]
+    ]
+    if warning_messages:
+        return warning_messages
+
     if not execution_orders:
         return []
 
@@ -162,33 +176,126 @@ def reconcile_execution_orders_with_exchange(
     return warnings
 
 
-def summarize_live_reconciliation(
+def _order_age_seconds(order: dict[str, Any], *, reference_dt=None) -> float | None:
+    reference = reference_dt or now_dt()
+    timestamp_text = str(order.get("updated_at") or order.get("created_at") or "").strip()
+    if not timestamp_text:
+        return None
+    try:
+        return max(0.0, (reference - parse_time_text(timestamp_text)).total_seconds())
+    except ValueError:
+        return None
+
+
+def collect_runtime_reconciliation_findings(
     *,
     execution_orders: list[dict[str, Any]],
     live_holdings_rows: list[dict[str, Any]],
     account_snapshot: dict | None,
-    private_client: BitkubPrivateClient | None = None,
+    runtime_state_metadata: dict[str, Any] | None = None,
+    stale_order_seconds: int = 1800,
+    stale_runtime_state_seconds: int = 86400,
 ) -> dict[str, Any]:
-    warnings = reconcile_execution_orders_with_exchange(
-        execution_orders,
-        account_snapshot,
-        private_client,
-    )
     open_orders_by_symbol = extract_open_orders_by_symbol(account_snapshot)
+    exchange_open_orders_count = sum(
+        len(rows) for rows in open_orders_by_symbol.values()
+    )
+    account_sync_status = "ready" if account_snapshot else "unavailable"
+    mismatches: dict[str, list[dict[str, Any]]] = {
+        "missing_locally": [],
+        "missing_on_exchange": [],
+        "orders_without_exchange_id": [],
+        "stale_pending": [],
+        "partially_filled": [],
+        "reserved_without_open_order": [],
+        "open_order_without_reserved": [],
+        "unmanaged_live_holdings": [],
+        "runtime_state_stale": [],
+    }
 
-    partially_filled_orders: list[str] = []
-    reserved_without_open_order: list[str] = []
-    open_order_without_reserved: list[str] = []
-    triggered_exit_candidates: list[str] = []
-    unmanaged_live_holdings: list[str] = []
+    local_order_ids: set[str] = set()
+    exchange_open_order_ids: set[str] = set()
 
     for order in execution_orders:
         symbol = str(order.get("symbol", ""))
         state = str(order.get("state", ""))
-        if state == "partially_filled":
-            partially_filled_orders.append(
-                f"{symbol}: execution order id={order.get('id')} is partially_filled"
+        exchange_order_id = str(order.get("exchange_order_id") or "").strip()
+        age_seconds = _order_age_seconds(order)
+
+        if exchange_order_id:
+            local_order_ids.add(exchange_order_id)
+        else:
+            mismatches["orders_without_exchange_id"].append(
+                {
+                    "symbol": symbol,
+                    "state": state,
+                    "execution_order_id": int(order.get("id", 0) or 0),
+                    "message": (
+                        f"{symbol}: execution order in state={state} has no exchange_order_id recorded"
+                    ),
+                }
             )
+
+        if age_seconds is not None and age_seconds >= float(stale_order_seconds):
+            mismatches["stale_pending"].append(
+                {
+                    "symbol": symbol,
+                    "state": state,
+                    "execution_order_id": int(order.get("id", 0) or 0),
+                    "age_seconds": age_seconds,
+                    "message": (
+                        f"{symbol}: execution order id={order.get('id')} is stale in state={state} "
+                        f"for {int(age_seconds)}s"
+                    ),
+                }
+            )
+
+        if state == "partially_filled":
+            mismatches["partially_filled"].append(
+                {
+                    "symbol": symbol,
+                    "execution_order_id": int(order.get("id", 0) or 0),
+                    "message": (
+                        f"{symbol}: execution order id={order.get('id')} is partially_filled"
+                    ),
+                }
+            )
+
+    for symbol, symbol_open_orders in open_orders_by_symbol.items():
+        for item in symbol_open_orders:
+            exchange_order_id = str(item.get("id") or "").strip()
+            if exchange_order_id:
+                exchange_open_order_ids.add(exchange_order_id)
+            if exchange_order_id and exchange_order_id not in local_order_ids:
+                mismatches["missing_locally"].append(
+                    {
+                        "symbol": symbol,
+                        "exchange_order_id": exchange_order_id,
+                        "side": item.get("side"),
+                        "message": (
+                            f"{symbol}: exchange open order {exchange_order_id} exists without a local execution_order"
+                        ),
+                    }
+                )
+
+    if account_snapshot:
+        for order in execution_orders:
+            exchange_order_id = str(order.get("exchange_order_id") or "").strip()
+            symbol = str(order.get("symbol", ""))
+            state = str(order.get("state", ""))
+            if exchange_order_id and exchange_order_id not in exchange_open_order_ids:
+                mismatches["missing_on_exchange"].append(
+                    {
+                        "symbol": symbol,
+                        "state": state,
+                        "execution_order_id": int(order.get("id", 0) or 0),
+                        "exchange_order_id": exchange_order_id,
+                        "message": (
+                            f"{symbol}: local execution order id={order.get('id')} exchange_order_id={exchange_order_id} "
+                            "is not visible in the current exchange open-orders snapshot"
+                        ),
+                    }
+                )
 
     execution_symbols = {
         str(order.get("symbol", "")) for order in execution_orders if order.get("symbol")
@@ -198,20 +305,126 @@ def summarize_live_reconciliation(
         symbol = str(row.get("symbol", ""))
         available_qty = float(row.get("available_qty", 0.0) or 0.0)
         reserved_qty = float(row.get("reserved_qty", 0.0) or 0.0)
-        auto_exit_status = str(row.get("auto_exit_status") or "")
         last_execution_side = str(row.get("last_execution_side") or "")
         exchange_open_orders = open_orders_by_symbol.get(symbol, [])
 
         if reserved_qty > 0 and not exchange_open_orders:
-            reserved_without_open_order.append(
-                f"{symbol}: reserved balance={reserved_qty:,.8f} but exchange open_orders is empty"
+            mismatches["reserved_without_open_order"].append(
+                {
+                    "symbol": symbol,
+                    "reserved_qty": reserved_qty,
+                    "message": (
+                        f"{symbol}: reserved balance={reserved_qty:,.8f} but exchange open_orders is empty"
+                    ),
+                }
             )
 
         if exchange_open_orders and reserved_qty <= 0:
-            open_order_without_reserved.append(
-                f"{symbol}: exchange open_orders exists but reserved balance is 0"
+            mismatches["open_order_without_reserved"].append(
+                {
+                    "symbol": symbol,
+                    "open_orders": len(exchange_open_orders),
+                    "message": (
+                        f"{symbol}: exchange open_orders exists but reserved balance is 0"
+                    ),
+                }
             )
 
+        if (
+            symbol not in execution_symbols
+            and last_execution_side != "buy"
+            and available_qty + reserved_qty > 0
+        ):
+            mismatches["unmanaged_live_holdings"].append(
+                {
+                    "symbol": symbol,
+                    "available_qty": available_qty,
+                    "reserved_qty": reserved_qty,
+                    "message": (
+                        f"{symbol}: live holding exists without a tracked filled buy execution order"
+                    ),
+                }
+            )
+
+    runtime_state_status = "fresh"
+    runtime_state_saved_at = None
+    if isinstance(runtime_state_metadata, dict):
+        runtime_state_saved_at = runtime_state_metadata.get("saved_at")
+        if runtime_state_metadata.get("loaded_from_pending"):
+            runtime_state_status = "warning"
+            mismatches["runtime_state_stale"].append(
+                {
+                    "message": "runtime state was restored from runtime_state.pending.json",
+                }
+            )
+        if isinstance(runtime_state_saved_at, str) and runtime_state_saved_at.strip():
+            try:
+                age_seconds = max(
+                    0.0,
+                    (now_dt() - parse_time_text(runtime_state_saved_at)).total_seconds(),
+                )
+                if age_seconds >= float(stale_runtime_state_seconds):
+                    runtime_state_status = "warning"
+                    mismatches["runtime_state_stale"].append(
+                        {
+                            "saved_at": runtime_state_saved_at,
+                            "age_seconds": age_seconds,
+                            "message": (
+                                f"runtime state snapshot is stale; saved_at={runtime_state_saved_at}"
+                            ),
+                        }
+                    )
+            except ValueError:
+                runtime_state_status = "warning"
+                mismatches["runtime_state_stale"].append(
+                    {
+                        "saved_at": runtime_state_saved_at,
+                        "message": (
+                            f"runtime state saved_at is invalid: {runtime_state_saved_at}"
+                        ),
+                    }
+                )
+
+    mismatch_counts = {
+        name: len(items) for name, items in mismatches.items()
+    }
+    unresolved_count = sum(mismatch_counts.values())
+    messages = [
+        item["message"]
+        for items in mismatches.values()
+        for item in items
+        if item.get("message")
+    ]
+
+    return {
+        "account_sync_status": account_sync_status,
+        "runtime_state_status": runtime_state_status,
+        "runtime_state_saved_at": runtime_state_saved_at,
+        "local_open_orders_count": len(execution_orders),
+        "exchange_open_orders_count": exchange_open_orders_count,
+        "mismatches": mismatches,
+        "mismatch_counts": mismatch_counts,
+        "unresolved_count": unresolved_count,
+        "messages": messages,
+    }
+
+
+def summarize_live_reconciliation(
+    *,
+    execution_orders: list[dict[str, Any]],
+    live_holdings_rows: list[dict[str, Any]],
+    account_snapshot: dict | None,
+    private_client: BitkubPrivateClient | None = None,
+) -> dict[str, Any]:
+    findings = collect_runtime_reconciliation_findings(
+        execution_orders=execution_orders,
+        live_holdings_rows=live_holdings_rows,
+        account_snapshot=account_snapshot,
+    )
+    triggered_exit_candidates: list[str] = []
+    for row in live_holdings_rows:
+        symbol = str(row.get("symbol", ""))
+        auto_exit_status = str(row.get("auto_exit_status") or "")
         if auto_exit_status in {
             "STOP_LOSS_TRIGGER",
             "TAKE_PROFIT_TRIGGER",
@@ -219,20 +432,17 @@ def summarize_live_reconciliation(
         }:
             triggered_exit_candidates.append(f"{symbol}: {auto_exit_status}")
 
-        if (
-            symbol not in execution_symbols
-            and last_execution_side != "buy"
-            and available_qty + reserved_qty > 0
-        ):
-            unmanaged_live_holdings.append(
-                f"{symbol}: live holding exists without a tracked filled buy execution order"
-            )
-
     return {
-        "warnings": warnings,
-        "partially_filled_orders": partially_filled_orders,
-        "reserved_without_open_order": reserved_without_open_order,
-        "open_order_without_reserved": open_order_without_reserved,
+        "warnings": [item["message"] for item in findings["mismatches"]["missing_on_exchange"]],
+        "missing_locally": [item["message"] for item in findings["mismatches"]["missing_locally"]],
+        "partially_filled_orders": [item["message"] for item in findings["mismatches"]["partially_filled"]],
+        "reserved_without_open_order": [item["message"] for item in findings["mismatches"]["reserved_without_open_order"]],
+        "open_order_without_reserved": [item["message"] for item in findings["mismatches"]["open_order_without_reserved"]],
         "triggered_exit_candidates": triggered_exit_candidates,
-        "unmanaged_live_holdings": unmanaged_live_holdings,
+        "unmanaged_live_holdings": [item["message"] for item in findings["mismatches"]["unmanaged_live_holdings"]],
+        "stale_pending_orders": [item["message"] for item in findings["mismatches"]["stale_pending"]],
+        "orders_without_exchange_id": [item["message"] for item in findings["mismatches"]["orders_without_exchange_id"]],
+        "mismatch_counts": findings["mismatch_counts"],
+        "account_sync_status": findings["account_sync_status"],
+        "unresolved_count": findings["unresolved_count"],
     }

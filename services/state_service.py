@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from services.env_service import get_env_path
-from utils.time_utils import business_dt, parse_time_text
+from utils.time_utils import business_dt, now_text, parse_time_text
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parent.parent / "runtime_state.json"
 STATE_FILE_PATH = get_env_path("BITKUB_RUNTIME_STATE_PATH", DEFAULT_STATE_PATH)
@@ -62,10 +62,17 @@ def load_runtime_state(
     positions: dict,
     daily_stats: dict,
     cooldowns: dict,
-) -> tuple[bool, list[str]]:
+) -> tuple[bool, list[str], dict[str, Any]]:
     state_paths = _candidate_state_paths()
     if not state_paths:
-        return False, []
+        return False, [], {
+            "source_path": None,
+            "loaded_from_pending": False,
+            "saved_at": None,
+            "open_positions": 0,
+            "cooldowns": 0,
+            "tracked_days": 0,
+        }
 
     payload: dict[str, Any] | None = None
     source_path: Path | None = None
@@ -81,13 +88,21 @@ def load_runtime_state(
 
     if payload is None or source_path is None:
         messages.append("Starting with empty runtime state.")
-        return False, messages
+        return False, messages, {
+            "source_path": None,
+            "loaded_from_pending": False,
+            "saved_at": None,
+            "open_positions": 0,
+            "cooldowns": 0,
+            "tracked_days": 0,
+        }
 
     raw_last_zones = payload.get("last_zones", {})
     raw_positions = payload.get("positions", {})
     raw_daily_stats = payload.get("daily_stats", {})
     raw_cooldowns = payload.get("cooldowns", {})
     manual_pause = bool(payload.get("manual_pause", False))
+    saved_at = payload.get("saved_at")
 
     if not isinstance(raw_last_zones, dict):
         raw_last_zones = {}
@@ -110,10 +125,19 @@ def load_runtime_state(
     messages.append(
         f"open_positions={len(positions)} cooldowns={len(cooldowns)} tracked_days={len(daily_stats)}"
     )
+    if isinstance(saved_at, str) and saved_at.strip():
+        messages.append(f"saved_at={saved_at}")
     if manual_pause:
         messages.append("manual pause flag was restored")
 
-    return manual_pause, messages
+    return manual_pause, messages, {
+        "source_path": str(source_path),
+        "loaded_from_pending": source_path == STATE_PENDING_PATH,
+        "saved_at": str(saved_at).strip() if isinstance(saved_at, str) and saved_at.strip() else None,
+        "open_positions": len(positions),
+        "cooldowns": len(cooldowns),
+        "tracked_days": len(daily_stats),
+    }
 
 
 def save_runtime_state(
@@ -128,6 +152,7 @@ def save_runtime_state(
 
     payload = {
         "version": 1,
+        "saved_at": now_text(),
         "manual_pause": manual_pause,
         "last_zones": last_zones,
         "positions": positions,
