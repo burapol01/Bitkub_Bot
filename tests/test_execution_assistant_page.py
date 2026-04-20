@@ -275,5 +275,46 @@ class ExecutionAssistantPageTests(unittest.TestCase):
         self.assertEqual(at.session_state["live_ops_focus_symbol"], "THB_TRX")
 
 
+    def test_snap_sell_uses_draft_resolution_not_current_rule(self) -> None:
+        # rule: sell_above=10.5, latest_price=10.0, tolerance=1% → band [9.9, 10.1]
+        # user edits draft sell to 10.05 (inside band)
+        # snap_sell must keep 10.05, not revert to a suggestion built from the stale rule value 10.5
+        script = _page_script(
+            body=f"""
+            execution_assistant.fetch_open_execution_orders = lambda: []
+            execution_assistant.build_symbol_operational_state = lambda **kwargs: json.loads({_json_string(_operational_state())})
+            execution_assistant.insert_runtime_event = lambda **kwargs: None
+            execution_assistant.save_config_with_feedback = lambda *args, **kwargs: True
+            execution_assistant.now_text = lambda: "2026-04-19 10:00:20"
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+        self.assertEqual(len(at.exception), 0)
+
+        # edit draft sell above to an inside-band value; snap should keep it unchanged
+        at.number_input(key="execution_assistant_draft_sell_above").set_value(10.05)
+        at.button(key="execution_assistant_snap_sell").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        # suggested_safe_rate for 10.05 inside [9.9, 10.1] is 10.05 itself — not 10.1 (old rule's suggestion)
+        self.assertAlmostEqual(
+            float(at.number_input(key="execution_assistant_draft_sell_above").value), 10.05, places=5
+        )
+        # buy side must be untouched
+        self.assertAlmostEqual(
+            float(at.number_input(key="execution_assistant_draft_buy_below").value), 9.5, places=8
+        )
+
+        # extra rerun must not revert the snapped draft back to the rule value
+        at.run(timeout=20)
+        self.assertEqual(len(at.exception), 0)
+        self.assertAlmostEqual(
+            float(at.number_input(key="execution_assistant_draft_sell_above").value), 10.05, places=5
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
