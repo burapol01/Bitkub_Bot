@@ -9,8 +9,9 @@ def queue_page_autorun(*, page: str) -> None:
 
 def queue_live_ops_navigation(*, symbol: str) -> None:
     queue_page_autorun(page="Live Ops")
-    st.session_state["live_ops_focus_symbol"] = str(symbol)
-    st.session_state["live_ops_manual_symbol"] = str(symbol)
+    normalized_symbol = str(symbol)
+    st.session_state["live_ops_focus_symbol"] = normalized_symbol
+    st.session_state["live_ops_focus_symbol_autorun"] = normalized_symbol
 
 
 def queue_strategy_workspace_navigation(*, workspace: str, symbol: str | None = None) -> None:

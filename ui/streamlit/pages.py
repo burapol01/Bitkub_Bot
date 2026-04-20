@@ -102,6 +102,24 @@ def _sync_select_state(*, key: str, options: list[str], default: str) -> None:
         st.session_state[key] = normalized_default
 
 
+def _clear_strategy_compare_state() -> None:
+    for key in (
+        "strategy_compare_payload",
+        "strategy_compare_symbol",
+        "strategy_compare_symbol__input",
+        "strategy_compare_symbol__input__signature",
+        "strategy_compare_source",
+        "strategy_compare_source__input",
+        "strategy_compare_source__input__signature",
+        "strategy_compare_resolution",
+        "strategy_compare_resolution__input",
+        "strategy_compare_resolution__input__signature",
+        "strategy_compare_days",
+        "strategy_compare_days__input",
+    ):
+        st.session_state.pop(key, None)
+
+
 def _blocked_execution_order_symbols(
     *,
     symbols: list[str],
@@ -176,7 +194,6 @@ def _revalidate_prune_blocked_symbols(
 
 def _open_live_ops_for_symbol(*, symbol: str) -> None:
     queue_live_ops_navigation(symbol=symbol)
-    st.query_params["page"] = "Live Ops"
     st.rerun()
 
 
@@ -634,42 +651,18 @@ def render_strategy_page(
     if workspace_autorun in strategy_workspace_options:
         default_strategy_workspace = str(workspace_autorun)
         st.session_state["strategy_workspace"] = default_strategy_workspace
-    
-    # Clear stale Compare state immediately if Compare navigation is queued
-    # This ensures queued navigation overrides any pre-seeded stale state, regardless of conditions
-    if queued_compare_symbol:
-        st.session_state.pop("strategy_compare_payload", None)
-        st.session_state.pop("strategy_compare_symbol", None)
-        st.session_state.pop("strategy_compare_symbol__input", None)
-        st.session_state.pop("strategy_compare_symbol__input__signature", None)
-        st.session_state.pop("strategy_compare_source", None)
-        st.session_state.pop("strategy_compare_source__input", None)
-        st.session_state.pop("strategy_compare_resolution", None)
-        st.session_state.pop("strategy_compare_resolution__input", None)
-        st.session_state.pop("strategy_compare_days", None)
-        st.session_state.pop("strategy_compare_days__input", None)
-    
+
     queued_compare_target = str(queued_compare_symbol or workspace_focus_symbol or "").strip()
     if (
         default_strategy_workspace == "Compare"
         and queued_compare_target
         and queued_compare_target in configured_symbols
     ):
-        # Set up autorun dict that will be consumed in the Compare section.
-        # Stale Compare keys have already been cleared above, so queued values will take precedence.
         st.session_state["strategy_compare_autorun"] = {
             "symbol": queued_compare_target,
-            "source": str(st.session_state.get("strategy_compare_source", "candles")),
-            "resolution": str(
-                st.session_state.get(
-                    "strategy_compare_resolution",
-                    ranking_resolution,
-                )
-            ),
-            "days": int(
-                st.session_state.get("strategy_compare_days", ranking_days)
-                or ranking_days
-            ),
+            "source": "candles",
+            "resolution": ranking_resolution,
+            "days": ranking_days,
         }
     queued_tuning_target = str(queued_tuning_symbol or workspace_focus_symbol or "").strip()
     if default_strategy_workspace == "Live Tuning" and queued_tuning_target:
@@ -705,6 +698,7 @@ def render_strategy_page(
     should_show_tuning = strategy_workspace == "Live Tuning"
     should_show_compare = strategy_workspace == "Compare"
     should_show_replay = strategy_workspace == "Replay"
+    should_defer_tuning_ranking = should_show_tuning and bool(queued_tuning_target)
 
     market_universe = fetch_market_symbol_universe() if (should_show_ranking or should_show_replay) else {"symbols": [], "error": None}
     market_symbols = list(market_universe.get("symbols", []))
@@ -751,7 +745,7 @@ def render_strategy_page(
             else:
                 st.caption("No recent paper trades available.")
 
-    if should_show_ranking or should_show_tuning:
+    if should_show_ranking or (should_show_tuning and not should_defer_tuning_ranking):
         ranking_symbol_pool = list(symbols if should_show_ranking else (configured_symbols or watchlist_symbols or symbols))
         ranking = _cached_coin_ranking(
             symbols=tuple(ranking_symbol_pool),
@@ -1318,16 +1312,14 @@ def render_strategy_page(
                 )
                 if default_focus_symbol not in tuning_focus_options:
                     default_focus_symbol = tuning_focus_options[0]
-                if default_focus_symbol in tuning_focus_options:
-                    st.session_state["strategy_tuning_focus_symbol"] = default_focus_symbol
-                current_focus_symbol = st.session_state.get("strategy_tuning_focus_symbol", default_focus_symbol)
-                if current_focus_symbol not in tuning_focus_options:
-                    current_focus_symbol = default_focus_symbol
-                focus_index = tuning_focus_options.index(current_focus_symbol)
+                _sync_select_state(
+                    key="strategy_tuning_focus_symbol",
+                    options=tuning_focus_options,
+                    default=str(default_focus_symbol),
+                )
                 focus_symbol = st.selectbox(
                     "Rule Focus",
                     tuning_focus_options,
-                    index=focus_index,
                     key="strategy_tuning_focus_symbol",
                 )
                 focus_row = next(row for row in tuning_rows if row["symbol"] == focus_symbol)
@@ -1423,41 +1415,8 @@ def render_strategy_page(
         compare_days_input_key = f"{compare_days_key}__input"
         compare_autorun = st.session_state.pop("strategy_compare_autorun", None)
 
-        # Defensively check for stale Compare state and clean it up
-        # This handles cases where navigation state persists across reruns
-        current_symbol = st.session_state.get(compare_symbol_key)
-        current_input = st.session_state.get(compare_symbol_input_key)
-        if current_symbol and current_symbol not in compare_symbol_options:
-            st.session_state.pop(compare_symbol_key, None)
-        if current_input and current_input not in compare_symbol_options:
-            st.session_state.pop(compare_symbol_input_key, None)
-
-        # If autorun dict wasn't created at top level, check for direct queued symbol
-        if not compare_autorun:
-            queued_symbol_direct = st.session_state.get("strategy_compare_symbol_autorun")
-            if queued_symbol_direct and queued_symbol_direct in compare_symbol_options:
-                # Clear stale Compare keys before creating autorun dict
-                st.session_state.pop("strategy_compare_payload", None)
-                st.session_state.pop("strategy_compare_symbol", None)
-                st.session_state.pop("strategy_compare_symbol__input", None)
-                st.session_state.pop("strategy_compare_symbol__input__signature", None)
-                st.session_state.pop("strategy_compare_source", None)
-                st.session_state.pop("strategy_compare_source__input", None)
-                st.session_state.pop("strategy_compare_resolution", None)
-                st.session_state.pop("strategy_compare_resolution__input", None)
-                st.session_state.pop("strategy_compare_days", None)
-                st.session_state.pop("strategy_compare_days__input", None)
-                
-                compare_autorun = {
-                    "symbol": str(queued_symbol_direct),
-                    "source": "candles",
-                    "resolution": ranking_resolution,
-                    "days": ranking_days,
-                }
-                # Consume the queued key after creating dict
-                st.session_state.pop("strategy_compare_symbol_autorun", None)
-
         if compare_autorun:
+            _clear_strategy_compare_state()
             autorun_symbol = str(compare_autorun.get("symbol", compare_symbol_options[0]))
             autorun_source = str(compare_autorun.get("source", "candles"))
             autorun_resolution = str(compare_autorun.get("resolution", ranking_resolution))
@@ -1473,6 +1432,13 @@ def render_strategy_page(
                 st.session_state[compare_resolution_input_key] = autorun_resolution
             st.session_state[compare_days_key] = min(max(int(autorun_days), 1), 90)
             st.session_state[compare_days_input_key] = st.session_state[compare_days_key]
+
+        current_symbol = st.session_state.get(compare_symbol_key)
+        current_input = st.session_state.get(compare_symbol_input_key)
+        if current_symbol and current_symbol not in compare_symbol_options:
+            st.session_state.pop(compare_symbol_key, None)
+        if current_input and current_input not in compare_symbol_options:
+            st.session_state.pop(compare_symbol_input_key, None)
 
         compare_default_symbol = str(st.session_state.get(compare_symbol_key, compare_symbol_options[0]))
         if compare_default_symbol not in compare_symbol_options:

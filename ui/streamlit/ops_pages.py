@@ -120,6 +120,22 @@ def _queue_manual_one_time_sell_prefill(
     }
 
 
+def _sync_live_ops_select_state(*, key: str, options: list[str], default: str) -> None:
+    normalized_options = [str(option) for option in options]
+    if not normalized_options:
+        st.session_state.pop(key, None)
+        return
+
+    normalized_default = (
+        str(default)
+        if str(default) in normalized_options
+        else normalized_options[0]
+    )
+    current_value = str(st.session_state.get(key, "") or "")
+    if current_value not in normalized_options:
+        st.session_state[key] = normalized_default
+
+
 def _open_strategy_workspace_for_symbol(
     *,
     symbol: str,
@@ -130,7 +146,6 @@ def _open_strategy_workspace_for_symbol(
     elif workspace == "Compare":
         queue_strategy_workspace_navigation(workspace="Compare", symbol=symbol)
 
-    st.query_params["page"] = "Strategy"
     st.rerun()
 
 
@@ -682,8 +697,11 @@ def render_live_ops_page(
 
     # Pre-widget state consume: Clear stale strategy workspace state before creating any
     # selectbox/form widgets that would read from session state. This ensures queued
-    # Live Ops state (e.g., live_ops_focus_symbol) wins over stale Compare/Tuning state.
-    queued_live_ops_symbol = str(st.session_state.get("live_ops_focus_symbol", "") or "").strip()
+    # Live Ops state wins over stale Compare/Tuning state without mutating widget
+    # state after the widgets have been created.
+    queued_live_ops_symbol = str(
+        st.session_state.pop("live_ops_focus_symbol_autorun", "") or ""
+    ).strip()
     if queued_live_ops_symbol:
         # Clear Compare workspace state that could leak into Live Ops widgets.
         st.session_state.pop("strategy_compare_symbol", None)
@@ -712,46 +730,59 @@ def render_live_ops_page(
     manual_confirm_key = "live_ops_manual_confirm"
     focus_symbol = str(st.session_state.get("live_ops_focus_symbol", "") or "").strip()
     default_symbol = str(manual_defaults.get("symbol", symbols[0]))
-    if focus_symbol in symbols:
-        default_symbol = focus_symbol
-        st.session_state[manual_symbol_key] = default_symbol
+    if default_symbol not in symbols:
+        default_symbol = symbols[0]
 
     pending_prefill = st.session_state.pop("live_ops_manual_order_prefill", None)
+    queued_manual_state: dict[str, Any] = {}
+    if queued_live_ops_symbol in symbols:
+        default_symbol = queued_live_ops_symbol
+        queued_manual_state[manual_symbol_key] = default_symbol
     if isinstance(pending_prefill, dict):
         prefill_symbol = str(pending_prefill.get("symbol", ""))
         if prefill_symbol in symbols:
-            st.session_state[manual_symbol_key] = prefill_symbol
+            queued_manual_state[manual_symbol_key] = prefill_symbol
             prefill_side = str(pending_prefill.get("side", "sell")).lower()
             if prefill_side in {"buy", "sell"}:
-                st.session_state[manual_side_key] = prefill_side
+                queued_manual_state[manual_side_key] = prefill_side
             prefill_order_type = str(pending_prefill.get("order_type", "limit")).lower()
             if prefill_order_type in {"limit"}:
-                st.session_state[manual_order_type_key] = prefill_order_type
+                queued_manual_state[manual_order_type_key] = prefill_order_type
             if "amount_thb" in pending_prefill:
-                st.session_state[manual_amount_thb_key] = _safe_float(
+                queued_manual_state[manual_amount_thb_key] = _safe_float(
                     pending_prefill.get("amount_thb"),
                     _safe_float(manual_defaults.get("amount_thb", 100.0), 100.0),
                 )
             if "amount_coin" in pending_prefill:
-                st.session_state[manual_amount_coin_key] = _safe_float(
+                queued_manual_state[manual_amount_coin_key] = _safe_float(
                     pending_prefill.get("amount_coin"),
                     _safe_float(manual_defaults.get("amount_coin", 0.0), 0.0),
                 )
             if "rate" in pending_prefill:
-                st.session_state[manual_rate_key] = _safe_float(
+                queued_manual_state[manual_rate_key] = _safe_float(
                     pending_prefill.get("rate"),
                     _safe_float(manual_defaults.get("rate", 1.0), 1.0),
                 )
-            st.session_state[manual_confirm_key] = False
+            queued_manual_state[manual_confirm_key] = False
 
-    if st.session_state.get(manual_symbol_key) not in symbols:
-        st.session_state[manual_symbol_key] = (
-            default_symbol if default_symbol in symbols else symbols[0]
-        )
-    if st.session_state.get(manual_side_key) not in {"buy", "sell"}:
-        st.session_state[manual_side_key] = str(manual_defaults.get("side", "buy"))
-    if st.session_state.get(manual_order_type_key) not in {"limit"}:
-        st.session_state[manual_order_type_key] = "limit"
+    for key, value in queued_manual_state.items():
+        st.session_state[key] = value
+
+    _sync_live_ops_select_state(
+        key=manual_symbol_key,
+        options=symbols,
+        default=default_symbol,
+    )
+    _sync_live_ops_select_state(
+        key=manual_side_key,
+        options=["buy", "sell"],
+        default=str(manual_defaults.get("side", "buy")),
+    )
+    _sync_live_ops_select_state(
+        key=manual_order_type_key,
+        options=["limit"],
+        default="limit",
+    )
     if manual_amount_thb_key not in st.session_state:
         st.session_state[manual_amount_thb_key] = _safe_float(
             manual_defaults.get("amount_thb", 100.0),
@@ -763,12 +794,17 @@ def render_live_ops_page(
             0.0,
         )
     if manual_rate_key not in st.session_state:
+        current_manual_symbol = str(
+            st.session_state.get(manual_symbol_key, default_symbol) or default_symbol
+        )
         st.session_state[manual_rate_key] = _safe_float(
-            latest_prices.get(st.session_state[manual_symbol_key], manual_defaults.get("rate", 1.0)),
+            latest_prices.get(current_manual_symbol, manual_defaults.get("rate", 1.0)),
             _safe_float(manual_defaults.get("rate", 1.0), 1.0),
         )
     if manual_confirm_key not in st.session_state:
         st.session_state[manual_confirm_key] = False
+
+    live_ops_dynamic_cache: dict[str, Any] | None = None
 
     def _load_live_ops_dynamic() -> dict[str, Any]:
         _, _, _, total_pnl = calc_daily_totals(runtime["daily_stats"])
@@ -793,8 +829,14 @@ def render_live_ops_page(
             "latest_auto_exit_slippage_block": _latest_auto_exit_slippage_block_row(),
         }
 
+    def _get_live_ops_dynamic() -> dict[str, Any]:
+        nonlocal live_ops_dynamic_cache
+        if live_ops_dynamic_cache is None:
+            live_ops_dynamic_cache = _load_live_ops_dynamic()
+        return live_ops_dynamic_cache
+
     def _render_live_ops_dynamic_top() -> None:
-        dynamic = _load_live_ops_dynamic()
+        dynamic = _get_live_ops_dynamic()
         guardrails = dynamic["guardrails"]
         open_execution_orders = dynamic["open_execution_orders"]
         recent_execution_orders = dynamic["recent_execution_orders"]
@@ -976,14 +1018,14 @@ def render_live_ops_page(
                 )
             with action_tune:
                 open_tuning = st.button(
-                    "Open Live Tuning",
+                    "Tune This Symbol",
                     disabled=not bool(symbol),
                     key=f"exit_guardrail_open_tuning_{symbol}",
                     width='stretch',
                 )
             with action_compare:
                 open_compare = st.button(
-                    "Open Compare",
+                    "Compare This Symbol",
                     disabled=not bool(symbol),
                     key=f"exit_guardrail_open_compare_{symbol}",
                     width='stretch',
@@ -1073,12 +1115,14 @@ def render_live_ops_page(
                     )
                 else:
                     preferred_label = None
-                if preferred_label in ordered_labels:
-                    st.session_state["live_ops_selected_order"] = preferred_label
+                _sync_live_ops_select_state(
+                    key="live_ops_selected_order",
+                    options=ordered_labels,
+                    default=preferred_label or ordered_labels[0],
+                )
                 current_focus = st.selectbox(
                     "Selected Open Order",
                     ordered_labels,
-                    index=ordered_labels.index(preferred_label) if preferred_label in ordered_labels else 0,
                     key="live_ops_selected_order",
                 )
                 focus_order = focus_options[current_focus]
@@ -1128,26 +1172,19 @@ def render_live_ops_page(
     with left:
         render_section_intro("Manual Live Order", "Submit a real order only after the pre-flight checks look clean.", "Action Form")
         with st.form("manual_live_order_form"):
-            current_manual_symbol = str(st.session_state.get(manual_symbol_key, default_symbol))
-            if current_manual_symbol not in symbols:
-                current_manual_symbol = default_symbol if default_symbol in symbols else symbols[0]
-                st.session_state[manual_symbol_key] = current_manual_symbol
             symbol = st.selectbox(
                 "Symbol",
                 symbols,
-                index=max(0, symbols.index(current_manual_symbol)),
                 key=manual_symbol_key,
             )
             side = st.selectbox(
                 "Side",
                 ["buy", "sell"],
-                index=0 if str(st.session_state.get(manual_side_key, "buy")) == "buy" else 1,
                 key=manual_side_key,
             )
             order_type = st.selectbox(
                 "Order Type",
                 ["limit"],
-                index=0,
                 key=manual_order_type_key,
             )
             amount_thb = st.number_input(
@@ -1251,7 +1288,7 @@ def render_live_ops_page(
 
     with right:
         def _render_live_controls() -> None:
-            dynamic = _load_live_ops_dynamic()
+            dynamic = _get_live_ops_dynamic()
             guardrails = dynamic["guardrails"]
             open_execution_orders = dynamic["open_execution_orders"]
 
@@ -1343,7 +1380,7 @@ def render_live_ops_page(
         render_refreshable_fragment(auto_refresh_run_every, _render_live_controls)
 
     def _render_live_ops_history() -> None:
-        dynamic = _load_live_ops_dynamic()
+        dynamic = _get_live_ops_dynamic()
         recent_execution_orders = dynamic["recent_execution_orders"]
         recent_execution_events = dynamic["recent_execution_events"]
 
