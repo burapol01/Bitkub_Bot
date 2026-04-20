@@ -658,6 +658,182 @@ class StrategyPageAppTests(unittest.TestCase):
         rendered = "\n".join(str(caption.value) for caption in at.caption)
         self.assertIn("Live price overlay: price=10.50000000", rendered)
 
+    def test_compare_shows_freshness_source_and_last_candle_timestamp(self) -> None:
+        fresh_rows = json.loads(json.dumps(_compare_rows()))
+        for row in fresh_rows:
+            row["coverage_last_seen"] = "2026-04-20 00:00:00"
+            row["note"] = "Fresh compare payload."
+
+        script = _app_script(
+            workspace="Compare",
+            body=f"""
+            from utils.time_utils import parse_time_text
+
+            COMPARE_ROWS = json.loads({_json_string(fresh_rows)})
+            COMPARE_VARIANTS = json.loads({_json_string([{"variant": row["variant"], "rule": row["rule"]} for row in fresh_rows])})
+
+            pages.now_dt = lambda: parse_time_text("2026-04-20 04:00:00")
+            pages.fetch_latest_market_candle_timestamp = lambda symbol, resolution: "2026-04-20 00:00:00"
+            pages.build_rule_seed = lambda config, symbol, market_price=None: dict(config["rules"][symbol])
+            pages.build_rule_compare_variants = lambda base_rule: COMPARE_VARIANTS
+            pages.annotate_strategy_compare_rows = lambda rows: rows
+            pages.run_strategy_compare_rows = lambda **kwargs: COMPARE_ROWS
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._latest_strategy_compare_selection_map = lambda limit=200: {{}}
+            pages._latest_strategy_compare_applied_map = lambda limit=200: {{}}
+
+            st.session_state["strategy_compare_symbol"] = "THB_TRX"
+            st.session_state["strategy_compare_source"] = "candles"
+            st.session_state["strategy_compare_resolution"] = "240"
+            st.session_state["strategy_compare_days"] = 14
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        rendered = "\n".join(str(markdown.value) for markdown in at.markdown)
+        self.assertIn("source Candles", rendered)
+        self.assertIn("last candle timestamp 2026-04-20 00:00:00", rendered)
+        self.assertIn("freshness Fresh", rendered)
+
+    def test_sync_success_invalidates_compare_payload_and_reruns_compare(self) -> None:
+        stale_rows = json.loads(json.dumps(_compare_rows()))
+        fresh_rows = json.loads(json.dumps(_compare_rows()))
+        for row in stale_rows:
+            row["coverage_last_seen"] = "2026-04-18 00:00:00"
+            row["note"] = "Stale compare payload before sync."
+        for row in fresh_rows:
+            row["coverage_last_seen"] = "2026-04-20 00:00:00"
+            row["note"] = "Fresh compare payload after sync."
+
+        ranking_payload = {
+            "rows": [
+                {
+                    "symbol": "THB_TRX",
+                    "score": 72.0,
+                    "trend_bias": "bullish",
+                    "candles": 120,
+                    "momentum_pct": 4.0,
+                    "volatility_pct": 1.0,
+                    "range_percent": 8.0,
+                    "position_in_range": 70.0,
+                    "avg_volume": 1000.0,
+                    "last_close": 10.5,
+                    "first_seen": "2026-04-01 00:00:00",
+                    "last_seen": "2026-04-20 00:00:00",
+                    "rank": 1,
+                }
+            ],
+            "coverage": [],
+            "errors": [],
+        }
+
+        script = "\n".join(
+            [
+                "import sys",
+                "import os",
+                "import tempfile",
+                "from pathlib import Path",
+                "",
+                "os.environ['BITKUB_DB_PATH'] = str(Path(tempfile.gettempdir()) / 'bitkub_streamlit_strategy_page_tests.db')",
+                "sys.path.insert(0, str(Path.cwd()))",
+                "",
+                "import json",
+                "import streamlit as st",
+                "from services.db_service import init_db",
+                "from ui.streamlit import pages",
+                "",
+                f"CONFIG = json.loads({_json_string(_base_config())})",
+                "LATEST_PRICES = {}",
+                "init_db()",
+                "",
+                textwrap.dedent(
+                    f"""
+            COMPARE_STALE_ROWS = json.loads({_json_string(stale_rows)})
+            COMPARE_FRESH_ROWS = json.loads({_json_string(fresh_rows)})
+            COMPARE_VARIANTS = json.loads({_json_string([{"variant": row["variant"], "rule": row["rule"]} for row in fresh_rows])})
+            RANKING_PAYLOAD = json.loads({_json_string(ranking_payload)})
+
+            pages.fetch_latest_market_candle_timestamp = lambda symbol, resolution: "2026-04-20 00:00:00"
+            pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
+            pages.build_rule_seed = lambda config, symbol, market_price=None: dict(config["rules"][symbol])
+            pages.build_rule_compare_variants = lambda base_rule: COMPARE_VARIANTS
+            pages.annotate_strategy_compare_rows = lambda rows: rows
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages.fetch_open_execution_orders = lambda: []
+            pages._latest_strategy_compare_selection_map = lambda limit=200: {{}}
+            pages._latest_strategy_compare_applied_map = lambda limit=200: {{}}
+
+            pages.sync_candles_for_symbols = lambda **kwargs: {{
+                "resolution": "240",
+                "days": 14,
+                "synced": [{{
+                    "symbol": "THB_TRX",
+                    "resolution": "240",
+                    "candles": 120,
+                    "first_seen": "2026-04-01 00:00:00",
+                    "last_seen": "2026-04-20 00:00:00",
+                }}],
+                "errors": [],
+            }}
+
+            def build_compare_rows(**kwargs):
+                st.session_state["compare_cache_token_seen"] = kwargs.get("cache_token")
+                return COMPARE_FRESH_ROWS
+
+            pages.run_strategy_compare_rows = build_compare_rows
+
+            if st.session_state.get("strategy_candle_sync_result") and not st.session_state.get("_test_compare_sync_switched"):
+                st.session_state["_test_compare_sync_switched"] = True
+                st.session_state["strategy_workspace"] = "Compare"
+                st.session_state["strategy_compare_symbol"] = "THB_TRX"
+                st.session_state["strategy_compare_symbol__input"] = "THB_TRX"
+                st.session_state["strategy_compare_source"] = "candles"
+                st.session_state["strategy_compare_source__input"] = "candles"
+                st.session_state["strategy_compare_resolution"] = "240"
+                st.session_state["strategy_compare_resolution__input"] = "240"
+                st.session_state["strategy_compare_days"] = 14
+                st.session_state["strategy_compare_days__input"] = 14
+
+            if not st.session_state.get("strategy_candle_sync_result"):
+                st.session_state.setdefault(
+                    "strategy_compare_payload",
+                    {{
+                        "symbol": "THB_TRX",
+                        "source": "candles",
+                        "resolution": "240",
+                        "days": 14,
+                        "last_timestamp": "2026-04-18 00:00:00",
+                        "rows": COMPARE_STALE_ROWS,
+                        "variant_rules": {{row["variant"]: row["rule"] for row in COMPARE_STALE_ROWS}},
+                    }},
+                )
+            """
+                ).strip(),
+                "",
+                "if st.session_state.get('strategy_candle_sync_result'):",
+                "    st.session_state['strategy_workspace'] = 'Compare'",
+                "else:",
+                "    st.session_state['strategy_workspace'] = 'Sync & Rank'",
+                "pages.render_strategy_page(config=CONFIG, latest_prices=LATEST_PRICES, quote_fetched_at='2026-04-20 04:00:00')",
+                "",
+            ]
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        next(button for button in at.button if button.label == "Sync Candles").click()
+        at.run(timeout=20)
+
+        self.assertEqual(len(at.exception), 0)
+        rendered = "\n".join(str(caption.value) for caption in at.caption)
+        self.assertIn("Variant note: Fresh compare payload after sync.", rendered)
+        self.assertNotIn("Variant note: Stale compare payload before sync.", rendered)
+        self.assertTrue(str(at.session_state["compare_cache_token_seen"]).strip())
+
     def test_compare_open_live_ops_sets_focus_symbol(self) -> None:
         script = _app_main_script(
             start_page="Strategy",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from typing import Any, MutableMapping
 
 import streamlit as st
 
@@ -10,6 +10,8 @@ from config import CONFIG_PATH, ordered_unique_symbols
 
 from services.db_service import (
     DB_PATH,
+    fetch_latest_market_candle_timestamp,
+    fetch_latest_market_snapshot_timestamp,
     fetch_open_execution_orders,
     fetch_reports_page_dataset,
     fetch_runtime_event_log,
@@ -295,6 +297,212 @@ def _strategy_compare_scope_key(
             str(int(days)),
         ]
     )
+
+
+def _strategy_compare_candle_revision_key(*, symbol: str, resolution: str) -> str:
+    return f"strategy_compare_candle_revision::{str(symbol).strip()}::{str(resolution).strip()}"
+
+
+def _strategy_compare_cache_token(
+    *,
+    session_state: MutableMapping[str, Any] | None,
+    symbol: str,
+    source: str,
+    resolution: str,
+) -> str:
+    if str(source) != "candles":
+        return ""
+    state = session_state if session_state is not None else st.session_state
+    return str(
+        state.get(
+            _strategy_compare_candle_revision_key(
+                symbol=str(symbol),
+                resolution=str(resolution),
+            ),
+            "",
+        )
+        or ""
+    )
+
+
+def _invalidate_strategy_compare_state_for_candle_sync(
+    *,
+    sync_result: dict[str, Any],
+    session_state: MutableMapping[str, Any] | None = None,
+    revision_value: str | None = None,
+) -> list[str]:
+    state = session_state if session_state is not None else st.session_state
+    synced_rows = [
+        dict(row)
+        for row in list(sync_result.get("synced") or [])
+        if isinstance(row, dict)
+    ]
+    resolution = str(sync_result.get("resolution") or "").strip()
+    if not synced_rows or not resolution:
+        return []
+
+    invalidated_scopes: list[str] = []
+    revision = str(revision_value or now_text())
+    current_payload = state.get("strategy_compare_payload")
+    payload_matches = isinstance(current_payload, dict)
+
+    for row in synced_rows:
+        symbol = str(row.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        state[
+            _strategy_compare_candle_revision_key(
+                symbol=symbol,
+                resolution=resolution,
+            )
+        ] = revision
+        if (
+            payload_matches
+            and str(current_payload.get("source") or "") == "candles"
+            and str(current_payload.get("symbol") or "") == symbol
+            and str(current_payload.get("resolution") or "") == resolution
+        ):
+            invalidated_scopes.append(
+                _strategy_compare_scope_key(
+                    symbol=symbol,
+                    source="candles",
+                    resolution=resolution,
+                    days=int(current_payload.get("days", 0) or 0),
+                )
+            )
+
+    if invalidated_scopes:
+        state.pop("strategy_compare_payload", None)
+
+    return invalidated_scopes
+
+
+def _compare_source_label(source: str) -> str:
+    return "Candles" if str(source) == "candles" else "Snapshots"
+
+
+def _compare_timestamp_label(source: str) -> str:
+    return "Last Candle Timestamp" if str(source) == "candles" else "Last Snapshot Timestamp"
+
+
+def _compare_resolution_seconds(resolution: str) -> int:
+    resolution_key = str(resolution or "").strip().upper()
+    mapping = {
+        "1": 60,
+        "5": 300,
+        "15": 900,
+        "60": 3600,
+        "240": 14400,
+        "1D": 86400,
+    }
+    return int(mapping.get(resolution_key, 0) or 0)
+
+
+def _load_compare_data_last_timestamp(
+    *,
+    symbol: str,
+    source: str,
+    resolution: str,
+) -> str | None:
+    if str(source) == "candles":
+        return fetch_latest_market_candle_timestamp(
+            symbol=str(symbol),
+            resolution=str(resolution),
+        )
+    if str(source) == "snapshots":
+        return fetch_latest_market_snapshot_timestamp(symbol=str(symbol))
+    return None
+
+
+def _build_compare_data_freshness(
+    *,
+    source: str,
+    resolution: str,
+    last_timestamp: str | None,
+    checked_at: Any | None = None,
+) -> dict[str, Any]:
+    source_label = _compare_source_label(str(source))
+    timestamp_label = _compare_timestamp_label(str(source))
+    normalized_timestamp = str(last_timestamp or "").strip()
+    payload: dict[str, Any] = {
+        "source": str(source),
+        "source_label": source_label,
+        "timestamp_label": timestamp_label,
+        "last_timestamp": normalized_timestamp or None,
+        "last_timestamp_text": normalized_timestamp or "Missing",
+        "status": "Missing",
+        "age_seconds": None,
+        "tone": "bad",
+        "warning": (
+            f"No stored {source_label.lower()} data is available for this compare selection. "
+            "Sync fresh data before running Compare or applying a variant."
+        ),
+    }
+    if not normalized_timestamp or normalized_timestamp.lower() == "n/a":
+        return payload
+
+    try:
+        checked_dt = checked_at if checked_at is not None else now_dt()
+        observed_dt = parse_time_text(normalized_timestamp)
+        age_seconds = max(0.0, (checked_dt - observed_dt).total_seconds())
+    except Exception:
+        return payload
+
+    payload["age_seconds"] = age_seconds
+    if str(source) == "candles":
+        resolution_seconds = max(60, _compare_resolution_seconds(str(resolution)))
+        fresh_cutoff = resolution_seconds * 2
+        aging_cutoff = resolution_seconds * 6
+    else:
+        fresh_cutoff = 6 * 3600
+        aging_cutoff = 24 * 3600
+
+    if age_seconds <= fresh_cutoff:
+        payload["status"] = "Fresh"
+        payload["tone"] = "good"
+        payload["warning"] = None
+    elif age_seconds <= aging_cutoff:
+        payload["status"] = "Aging"
+        payload["tone"] = "warn"
+        payload["warning"] = None
+    else:
+        payload["status"] = "Stale"
+        payload["tone"] = "bad"
+        payload["warning"] = (
+            f"{source_label} data is stale for this compare selection. "
+            "Sync fresh data before running Compare or applying a variant."
+        )
+    return payload
+
+
+def _compare_payload_last_timestamp(rows: list[dict[str, Any]]) -> str | None:
+    timestamps = [
+        str(row.get("coverage_last_seen") or "").strip()
+        for row in rows
+        if str(row.get("coverage_last_seen") or "").strip()
+        and str(row.get("coverage_last_seen") or "").strip().lower() != "n/a"
+    ]
+    if not timestamps:
+        return None
+    return max(timestamps)
+
+
+def _render_compare_data_freshness(
+    *,
+    freshness: dict[str, Any],
+) -> None:
+    badges = [
+        badge(f"source {freshness.get('source_label', 'n/a')}", "info"),
+        badge(
+            f"{str(freshness.get('timestamp_label') or 'Last Timestamp').lower()} {freshness.get('last_timestamp_text', 'Missing')}",
+            "info",
+        ),
+        badge(f"freshness {freshness.get('status', 'Missing')}", str(freshness.get("tone") or "info")),
+    ]
+    st.markdown(" ".join(badges), unsafe_allow_html=True)
+    warning = str(freshness.get("warning") or "").strip()
+    if warning:
+        st.warning(warning)
 
 
 def _render_live_rule_price_overlay(
@@ -805,6 +1013,12 @@ def render_strategy_page(
                 resolution=str(ranking_resolution),
                 days=int(ranking_days),
             )
+            invalidated_compare_scopes = _invalidate_strategy_compare_state_for_candle_sync(
+                sync_result=sync_result,
+            )
+            if invalidated_compare_scopes:
+                sync_result = dict(sync_result)
+                sync_result["invalidated_compare_scopes"] = invalidated_compare_scopes
             st.session_state["strategy_candle_sync_result"] = sync_result
             st.session_state["strategy_rank_resolution"] = str(ranking_resolution)
             st.session_state["strategy_rank_days"] = int(ranking_days)
@@ -818,6 +1032,11 @@ def render_strategy_page(
                 )
                 with st.expander("Sync Result Details", expanded=False):
                     st.dataframe(sync_feedback["synced"], width='stretch', hide_index=True)
+                invalidated_compare_scopes = list(sync_feedback.get("invalidated_compare_scopes") or [])
+                if invalidated_compare_scopes:
+                    st.caption(
+                        f"Invalidated compare cache for {len(invalidated_compare_scopes)} matching candle compare scope(s)."
+                    )
             if sync_feedback.get("errors"):
                 summarized_sync_errors = _summarize_text_lines(list(sync_feedback["errors"]))
                 no_data_count = sum(row["count"] for row in summarized_sync_errors if "history status=no_data" in str(row["message"]))
@@ -1501,6 +1720,17 @@ def render_strategy_page(
                 )
             run_compare = st.form_submit_button("Run Compare", type="primary", width='stretch')
 
+        compare_selection_freshness = _build_compare_data_freshness(
+            source=str(compare_source),
+            resolution=str(compare_resolution),
+            last_timestamp=_load_compare_data_last_timestamp(
+                symbol=str(compare_symbol),
+                source=str(compare_source),
+                resolution=str(compare_resolution),
+            ),
+        )
+        _render_compare_data_freshness(freshness=compare_selection_freshness)
+
         if configured_symbols:
             should_run_compare = run_compare or "strategy_compare_payload" not in st.session_state or bool(compare_autorun)
             if should_run_compare:
@@ -1522,6 +1752,12 @@ def render_strategy_page(
                     fee_rate=float(config["fee_rate"]),
                     cooldown_seconds=int(config["cooldown_seconds"]),
                     variants=compare_variants,
+                    cache_token=_strategy_compare_cache_token(
+                        session_state=st.session_state,
+                        symbol=compare_symbol,
+                        source=compare_source,
+                        resolution=str(compare_resolution),
+                    ),
                 )
                 compare_rows = annotate_strategy_compare_rows(compare_rows)
                 st.session_state["strategy_compare_payload"] = {
@@ -1529,6 +1765,7 @@ def render_strategy_page(
                     "source": compare_source,
                     "resolution": str(compare_resolution),
                     "days": int(compare_days),
+                    "last_timestamp": _compare_payload_last_timestamp(compare_rows),
                     "rows": compare_rows,
                     "variant_rules": {row["variant"]: dict(row["rule"]) for row in compare_rows},
                 }
@@ -1536,6 +1773,11 @@ def render_strategy_page(
             compare_payload = st.session_state.get("strategy_compare_payload")
             if compare_payload:
                 compare_rows = list(compare_payload.get("rows") or [])
+                compare_payload_freshness = _build_compare_data_freshness(
+                    source=str(compare_payload.get("source") or ""),
+                    resolution=str(compare_payload.get("resolution") or ""),
+                    last_timestamp=str(compare_payload.get("last_timestamp") or "") or None,
+                )
                 profitable_variants = sum(1 for row in compare_rows if float(row.get("total_pnl_thb", 0.0) or 0.0) > 0)
                 best_variant = next((row for row in compare_rows if str(row.get("decision")) in {"Clearly better", "Marginally better"}), compare_rows[0] if compare_rows else None)
                 compare_cards = st.columns(4)
@@ -1628,6 +1870,7 @@ def render_strategy_page(
                         ),
                         unsafe_allow_html=True,
                     )
+                    _render_compare_data_freshness(freshness=compare_payload_freshness)
                     st.caption(
                         f"Rule: buy_below={focus_variant_row['buy_below']:,.8f} sell_above={focus_variant_row['sell_above']:,.8f} stop={focus_variant_row['stop_loss_percent']:.2f}% take={focus_variant_row['take_profit_percent']:.2f}%"
                     )
@@ -1694,6 +1937,10 @@ def render_strategy_page(
                             focus_variant_options,
                             key=apply_variant_key,
                         )
+                        if str(compare_payload_freshness.get("status") or "") in {"Stale", "Missing"}:
+                            st.warning(
+                                "Compare result is using stale or missing source data. Sync candles and rerun Compare before applying a variant."
+                            )
                         apply_submitted = st.form_submit_button(
                             "Apply Compared Variant",
                             width='stretch',

@@ -413,6 +413,7 @@ def run_strategy_compare_rows(
     fee_rate: float,
     cooldown_seconds: int,
     variants: list[dict[str, Any]],
+    cache_token: str = "",
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for item in variants:
