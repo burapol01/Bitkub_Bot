@@ -200,16 +200,6 @@ def render_execution_assistant_page(
         quote_observed_at=quote_fetched_at,
         quote_checked_at=checked_at,
     )
-    sell_resolution = build_live_price_band_resolution(
-        symbol=symbol,
-        side="sell",
-        requested_rate=sell_above,
-        latest_price=latest_price,
-        live_slippage_tolerance_percent=tolerance_percent,
-        quote_observed_at=quote_fetched_at,
-        quote_checked_at=checked_at,
-    )
-
     _sync_rule_draft_state(
         symbol=symbol,
         buy_below=buy_below,
@@ -234,6 +224,25 @@ def render_execution_assistant_page(
         )
     )
 
+    draft_buy_resolution = build_live_price_band_resolution(
+        symbol=symbol,
+        side="buy",
+        requested_rate=draft_buy_below,
+        latest_price=latest_price,
+        live_slippage_tolerance_percent=tolerance_percent,
+        quote_observed_at=quote_fetched_at,
+        quote_checked_at=checked_at,
+    )
+    draft_sell_resolution = build_live_price_band_resolution(
+        symbol=symbol,
+        side="sell",
+        requested_rate=draft_sell_above,
+        latest_price=latest_price,
+        live_slippage_tolerance_percent=tolerance_percent,
+        quote_observed_at=quote_fetched_at,
+        quote_checked_at=checked_at,
+    )
+
     buy_gap_percent = _gap_percent(rate=buy_below, latest_price=latest_price)
     sell_gap_percent = _gap_percent(rate=sell_above, latest_price=latest_price)
     draft_buy_gap_percent = _gap_percent(rate=draft_buy_below, latest_price=latest_price)
@@ -241,8 +250,8 @@ def render_execution_assistant_page(
     allowed_band_low = buy_resolution.get("allowed_band_low")
     allowed_band_high = buy_resolution.get("allowed_band_high")
     quote_safe = bool(
-        buy_resolution.get("quote_safe_for_suggestion")
-        and sell_resolution.get("quote_safe_for_suggestion")
+        draft_buy_resolution.get("quote_safe_for_suggestion")
+        and draft_sell_resolution.get("quote_safe_for_suggestion")
     )
 
     status_badges = [
@@ -338,11 +347,11 @@ def render_execution_assistant_page(
                 else "n/a"
             ),
             "suggested_safe": (
-                f"{float(buy_resolution['suggested_safe_rate']):,.8f}"
-                if buy_resolution.get("suggested_safe_rate") is not None
+                f"{float(draft_buy_resolution['suggested_safe_rate']):,.8f}"
+                if draft_buy_resolution.get("suggested_safe_rate") is not None
                 else "n/a"
             ),
-            "guardrail_status": _resolution_status_label(buy_resolution),
+            "guardrail_status": _resolution_status_label(draft_buy_resolution),
         },
         {
             "target": "sell_above",
@@ -356,11 +365,11 @@ def render_execution_assistant_page(
                 else "n/a"
             ),
             "suggested_safe": (
-                f"{float(sell_resolution['suggested_safe_rate']):,.8f}"
-                if sell_resolution.get("suggested_safe_rate") is not None
+                f"{float(draft_sell_resolution['suggested_safe_rate']):,.8f}"
+                if draft_sell_resolution.get("suggested_safe_rate") is not None
                 else "n/a"
             ),
-            "guardrail_status": _resolution_status_label(sell_resolution),
+            "guardrail_status": _resolution_status_label(draft_sell_resolution),
         },
     ]
     st.dataframe(pricing_rows, width="stretch", hide_index=True)
@@ -391,22 +400,22 @@ def render_execution_assistant_page(
         if st.button(
             "Snap Buy To Safe Band",
             key="execution_assistant_snap_buy",
-            disabled=(not quote_safe) or buy_resolution.get("suggested_safe_rate") is None,
+            disabled=(not quote_safe) or draft_buy_resolution.get("suggested_safe_rate") is None,
             width="stretch",
         ):
             st.session_state["execution_assistant_draft_autorun"] = {
-                "buy_below": float(buy_resolution["suggested_safe_rate"]),
+                "buy_below": float(draft_buy_resolution["suggested_safe_rate"]),
             }
             st.rerun()
     with snap_cols[1]:
         if st.button(
             "Snap Sell To Safe Band",
             key="execution_assistant_snap_sell",
-            disabled=(not quote_safe) or sell_resolution.get("suggested_safe_rate") is None,
+            disabled=(not quote_safe) or draft_sell_resolution.get("suggested_safe_rate") is None,
             width="stretch",
         ):
             st.session_state["execution_assistant_draft_autorun"] = {
-                "sell_above": float(sell_resolution["suggested_safe_rate"]),
+                "sell_above": float(draft_sell_resolution["suggested_safe_rate"]),
             }
             st.rerun()
     with snap_cols[2]:
@@ -415,14 +424,14 @@ def render_execution_assistant_page(
             key="execution_assistant_snap_both",
             disabled=(
                 (not quote_safe)
-                or buy_resolution.get("suggested_safe_rate") is None
-                or sell_resolution.get("suggested_safe_rate") is None
+                or draft_buy_resolution.get("suggested_safe_rate") is None
+                or draft_sell_resolution.get("suggested_safe_rate") is None
             ),
             width="stretch",
         ):
             st.session_state["execution_assistant_draft_autorun"] = {
-                "buy_below": float(buy_resolution["suggested_safe_rate"]),
-                "sell_above": float(sell_resolution["suggested_safe_rate"]),
+                "buy_below": float(draft_buy_resolution["suggested_safe_rate"]),
+                "sell_above": float(draft_sell_resolution["suggested_safe_rate"]),
             }
             st.rerun()
 
