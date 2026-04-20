@@ -670,6 +670,133 @@ def _summarize_strategy_decision_counts(
     return counts
 
 
+def _classify_prune_strength(row: dict[str, Any]) -> str:
+    """Returns 'Strong prune' when two or more signals align, otherwise 'Review prune'."""
+    is_high_prune = str(row.get("strength") or "") == "HIGH_PRUNE"
+    is_tuning_prune = str(row.get("tuning_recommendation") or "") == "PRUNE"
+    both_pnl_negative = (
+        float(row.get("best_pnl_thb", 0.0) or 0.0) <= 0.0
+        and float(row.get("baseline_pnl_thb", 0.0) or 0.0) <= 0.0
+    )
+    has_blocking_warning = str(row.get("blocking_warning") or "") == "YES"
+    signal_count = sum([is_high_prune, is_tuning_prune, both_pnl_negative, has_blocking_warning])
+    return "Strong prune" if signal_count >= 2 else "Review prune"
+
+
+def _build_strategy_action_preview(row: dict[str, Any]) -> dict[str, Any]:
+    action = str(row.get("recommended_action") or "")
+    prune_grade: str | None = None
+    if action == "Prune candidate":
+        prune_grade = _classify_prune_strength(row)
+    suggested_page = {
+        "Promote": "Compare",
+        "Prune candidate": "Live Tuning",
+        "Sync first": "Sync & Rank",
+        "Keep": "Compare",
+    }.get(action, "Compare")
+    return {
+        "type": "single",
+        "symbol": str(row.get("symbol") or ""),
+        "recommended_action": action,
+        "prune_grade": prune_grade,
+        "freshness": str(row.get("freshness_status") or ""),
+        "last_candle_used": str(row.get("last_candle_used") or "n/a"),
+        "in_live_rules": str(row.get("in_live_rules") or "NO"),
+        "best_candidate": str(row.get("best_candidate") or "n/a"),
+        "compare_verdict": str(row.get("compare_verdict") or ""),
+        "strength": str(row.get("strength") or "n/a"),
+        "reason": str(row.get("action_reason") or ""),
+        "baseline_pnl_thb": float(row.get("baseline_pnl_thb", 0.0) or 0.0),
+        "best_pnl_thb": float(row.get("best_pnl_thb", 0.0) or 0.0),
+        "edge_vs_baseline_thb": float(row.get("edge_vs_baseline_thb", 0.0) or 0.0),
+        "suggested_next_page": suggested_page,
+    }
+
+
+def _build_strategy_batch_sync_preview(
+    sync_rows: list[dict[str, Any]],
+    *,
+    resolution: str,
+    days: int,
+) -> dict[str, Any]:
+    symbols = [str(r.get("symbol") or "") for r in sync_rows if r.get("symbol")]
+    freshness_counts: dict[str, int] = {}
+    for row in sync_rows:
+        status = str(row.get("freshness_status") or "Missing")
+        freshness_counts[status] = freshness_counts.get(status, 0) + 1
+    parts: list[str] = []
+    if freshness_counts.get("Missing", 0):
+        parts.append(f"{freshness_counts['Missing']} missing")
+    if freshness_counts.get("Stale", 0):
+        parts.append(f"{freshness_counts['Stale']} stale")
+    sync_reason = (
+        f"{', '.join(parts)} — Compare results are blocked until refreshed."
+        if parts
+        else "Candle data needs a refresh before Compare or classification can run."
+    )
+    return {
+        "type": "batch_sync",
+        "symbol_count": len(symbols),
+        "symbols": symbols,
+        "resolution": str(resolution),
+        "days": int(days),
+        "sync_reason": sync_reason,
+        "freshness_counts": dict(freshness_counts),
+        "suggested_next_page": "Sync & Rank",
+    }
+
+
+def _render_strategy_action_preview(preview: dict[str, Any]) -> None:
+    ptype = str(preview.get("type") or "single")
+
+    if ptype == "batch_sync":
+        symbol_count = int(preview.get("symbol_count") or 0)
+        symbols = list(preview.get("symbols") or [])
+        resolution = str(preview.get("resolution") or "")
+        days = int(preview.get("days") or 0)
+        sync_reason = str(preview.get("sync_reason") or "")
+        render_callout(
+            f"Batch sync  ·  {symbol_count} symbol(s)  →  Sync & Rank",
+            f"{sync_reason}  Resolution: {resolution}, lookback {days}d.  Symbols: {', '.join(symbols)}",
+            "warn",
+        )
+        return
+
+    action = str(preview.get("recommended_action") or "")
+    symbol = str(preview.get("symbol") or "")
+    prune_grade = str(preview.get("prune_grade") or "")
+    label_action = prune_grade if prune_grade else action
+    freshness = str(preview.get("freshness") or "")
+    next_page = str(preview.get("suggested_next_page") or "")
+    last_candle = str(preview.get("last_candle_used") or "n/a")
+    in_live_rules = str(preview.get("in_live_rules") or "NO")
+    best_candidate = str(preview.get("best_candidate") or "n/a")
+    compare_verdict = str(preview.get("compare_verdict") or "")
+    strength = str(preview.get("strength") or "n/a")
+    reason = str(preview.get("reason") or "")
+    edge = float(preview.get("edge_vs_baseline_thb") or 0.0)
+    base_pnl = float(preview.get("baseline_pnl_thb") or 0.0)
+    best_pnl = float(preview.get("best_pnl_thb") or 0.0)
+
+    tone = {"Promote": "good", "Prune candidate": "warn", "Sync first": "bad", "Keep": "info"}.get(action, "info")
+    render_callout(
+        f"Preview  ·  {symbol}  →  {next_page}",
+        f"{label_action}  ·  {freshness}",
+        tone,
+    )
+    pcol1, pcol2, pcol3 = st.columns(3)
+    with pcol1:
+        render_metric_card("Last candle", last_candle, f"Live rule: {in_live_rules}")
+    with pcol2:
+        render_metric_card("Best candidate", best_candidate, compare_verdict)
+    with pcol3:
+        render_metric_card("Strength", strength, f"Edge {edge:+.2f} THB")
+    if reason:
+        st.caption(f"Reason: {reason}")
+    if base_pnl != 0.0 or best_pnl != 0.0:
+        st.caption(f"PnL: baseline {base_pnl:+.2f} THB → best {best_pnl:+.2f} THB")
+
+
 def _group_strategy_decision_queue(
     rows: list[dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
@@ -686,7 +813,12 @@ def _group_strategy_decision_queue(
     return groups
 
 
-def _render_strategy_decision_queue(decision_rows: list[dict[str, Any]]) -> None:
+def _render_strategy_decision_queue(
+    decision_rows: list[dict[str, Any]],
+    *,
+    decision_resolution: str,
+    decision_days: int,
+) -> None:
     render_section_intro(
         "Decision Queue",
         "Symbols grouped by verdict — act on each bucket without opening them one at a time. Highest-priority groups appear first.",
@@ -707,12 +839,32 @@ def _render_strategy_decision_queue(decision_rows: list[dict[str, Any]]) -> None
             for row in rows
         ]
 
+    def _compact_prune_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "symbol": row.get("symbol", ""),
+                "grade": _classify_prune_strength(row),
+                "freshness": row.get("freshness_status", ""),
+                "best_candidate": row.get("best_candidate", ""),
+                "verdict": row.get("compare_verdict", ""),
+                "reason": row.get("action_reason", ""),
+                "last_candle": row.get("last_candle_used", ""),
+            }
+            for row in rows
+        ]
+
+    # --- Sync first ---
     sync_rows = groups["Sync first"]
     with st.expander(f"Sync First  ·  {len(sync_rows)}", expanded=bool(sync_rows)):
         st.caption("Missing or stale candle data — sync before running Compare or deciding.")
         if sync_rows:
             st.dataframe(_compact_rows(sync_rows), hide_index=True, width="stretch")
             stale_symbols = [str(r.get("symbol") or "") for r in sync_rows if r.get("symbol")]
+            _render_strategy_action_preview(
+                _build_strategy_batch_sync_preview(
+                    sync_rows, resolution=decision_resolution, days=decision_days
+                )
+            )
             if st.button(
                 f"Sync all stale / missing  ({len(stale_symbols)})",
                 key="decision_queue_sync_all_btn",
@@ -724,12 +876,23 @@ def _render_strategy_decision_queue(decision_rows: list[dict[str, Any]]) -> None
         else:
             st.caption("All symbols have usable data.")
 
+    # --- Promote ---
     promote_rows = groups["Promote"]
+    promote_symbols = [str(r.get("symbol") or "") for r in promote_rows if r.get("symbol")]
+    cached_promote = str(st.session_state.get("decision_queue_promote_select") or "")
+    if promote_symbols and cached_promote not in promote_symbols:
+        st.session_state["decision_queue_promote_select"] = promote_symbols[0]
+        cached_promote = promote_symbols[0]
+
     with st.expander(f"Promote  ·  {len(promote_rows)}", expanded=bool(promote_rows)):
         st.caption("Fresh data, variant clearly beats CURRENT. Ready to add to live rules.")
         if promote_rows:
             st.dataframe(_compact_rows(promote_rows), hide_index=True, width="stretch")
-            promote_symbols = [str(r.get("symbol") or "") for r in promote_rows if r.get("symbol")]
+            promote_by_symbol = {str(r.get("symbol") or ""): r for r in promote_rows}
+            if cached_promote and cached_promote in promote_by_symbol:
+                _render_strategy_action_preview(
+                    _build_strategy_action_preview(promote_by_symbol[cached_promote])
+                )
             qcol1, qcol2 = st.columns([1, 1])
             with qcol1:
                 if st.button("Open next promote-ready", key="decision_queue_open_promote_btn", type="primary"):
@@ -748,12 +911,35 @@ def _render_strategy_decision_queue(decision_rows: list[dict[str, Any]]) -> None
         else:
             st.caption("No promote-ready symbols yet.")
 
+    # --- Prune candidate ---
     prune_rows = groups["Prune candidate"]
-    with st.expander(f"Prune Candidate  ·  {len(prune_rows)}", expanded=bool(prune_rows)):
+    prune_symbols = [str(r.get("symbol") or "") for r in prune_rows if r.get("symbol")]
+    cached_prune = str(st.session_state.get("decision_queue_prune_select") or "")
+    if prune_symbols and cached_prune not in prune_symbols:
+        st.session_state["decision_queue_prune_select"] = prune_symbols[0]
+        cached_prune = prune_symbols[0]
+
+    prune_grade_counts: dict[str, int] = {}
+    for r in prune_rows:
+        grade = _classify_prune_strength(r)
+        prune_grade_counts[grade] = prune_grade_counts.get(grade, 0) + 1
+    strong_count = prune_grade_counts.get("Strong prune", 0)
+    review_count = prune_grade_counts.get("Review prune", 0)
+    prune_label = f"Prune Candidate  ·  {len(prune_rows)}"
+    if strong_count > 0 and review_count > 0:
+        prune_label += f"  ({strong_count} strong / {review_count} review)"
+    elif strong_count > 0:
+        prune_label += f"  ({strong_count} strong)"
+
+    with st.expander(prune_label, expanded=bool(prune_rows)):
         st.caption("Weak or negative edge on live rules. Review in Live Tuning before removing.")
         if prune_rows:
-            st.dataframe(_compact_rows(prune_rows), hide_index=True, width="stretch")
-            prune_symbols = [str(r.get("symbol") or "") for r in prune_rows if r.get("symbol")]
+            st.dataframe(_compact_prune_rows(prune_rows), hide_index=True, width="stretch")
+            prune_by_symbol = {str(r.get("symbol") or ""): r for r in prune_rows}
+            if cached_prune and cached_prune in prune_by_symbol:
+                _render_strategy_action_preview(
+                    _build_strategy_action_preview(prune_by_symbol[cached_prune])
+                )
             qcol3, qcol4 = st.columns([1, 1])
             with qcol3:
                 if st.button("Open next prune candidate", key="decision_queue_open_prune_btn"):
@@ -772,6 +958,7 @@ def _render_strategy_decision_queue(decision_rows: list[dict[str, Any]]) -> None
         else:
             st.caption("No prune candidates right now.")
 
+    # --- Keep ---
     keep_rows = groups["Keep"]
     with st.expander(f"Keep  ·  {len(keep_rows)}", expanded=False):
         st.caption("Baseline acceptable. No immediate action needed.")
@@ -1455,7 +1642,11 @@ def render_strategy_page(
             st.caption("No Strategy Decision Summary rows are available yet. Sync candles or add live rules first.")
 
         st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
-        _render_strategy_decision_queue(sorted_decision_rows)
+        _render_strategy_decision_queue(
+            sorted_decision_rows,
+            decision_resolution=decision_summary_resolution,
+            decision_days=decision_summary_days,
+        )
 
     if should_show_ranking:
         st.markdown('<div class="panel-title">Candle Sync & Coin Ranking</div>', unsafe_allow_html=True)
