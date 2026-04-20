@@ -9,10 +9,11 @@ from services.db_service import insert_audit_event
 from services.env_service import APP_ROOT, get_env_path
 from utils.time_utils import now_text
 
-AUDIT_FALLBACK_PATH = get_env_path(
+DEFAULT_AUDIT_FALLBACK_PATH = get_env_path(
     "BITKUB_AUDIT_LOG_PATH",
     APP_ROOT / "data" / "audit_events.jsonl",
 )
+AUDIT_FALLBACK_PATH = DEFAULT_AUDIT_FALLBACK_PATH
 REDACTED_VALUE = "***REDACTED***"
 SENSITIVE_KEY_PARTS = {
     "secret",
@@ -103,7 +104,8 @@ def build_config_change_maps(
 def _append_fallback_line(record: dict[str, Any]) -> None:
     fallback_path: Path = AUDIT_FALLBACK_PATH
     fallback_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(fallback_path, "a", encoding="utf-8") as handle:
+    open_mode = "a" if fallback_path == DEFAULT_AUDIT_FALLBACK_PATH else "w"
+    with open(fallback_path, open_mode, encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=True))
         handle.write("\n")
 

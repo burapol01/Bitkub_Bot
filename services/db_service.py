@@ -1,10 +1,12 @@
 import csv
 import gzip
 import json
+import shutil
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 
 from services.env_service import get_env_path
@@ -13,8 +15,10 @@ from utils.time_utils import coerce_time_text, format_date_text, format_time_tex
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
 DEFAULT_ARCHIVE_DIR = PROJECT_ROOT / "data" / "archive"
-DB_PATH = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_DIR / "bitkub.db")
+DEFAULT_DB_PATH = DEFAULT_DB_DIR / "bitkub.db"
+DB_PATH = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_PATH)
 DB_DIR = DB_PATH.parent
+_LAST_ENV_DB_PATH = DB_PATH
 SQLITE_TIMEOUT_SECONDS = 30.0
 SQLITE_BUSY_TIMEOUT_MS = int(SQLITE_TIMEOUT_SECONDS * 1000)
 
@@ -68,19 +72,80 @@ RETENTION_RUNTIME_TABLES: dict[str, dict[str, str]] = {
 }
 
 
-def configure_sqlite_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
+def use_memory_journal_for_path(path: Path) -> bool:
+    try:
+        resolved_path = Path(path).resolve()
+        if resolved_path.is_relative_to(Path(tempfile.gettempdir()).resolve()):
+            return True
+        return (
+            resolved_path.is_relative_to(PROJECT_ROOT.resolve())
+            and resolved_path != DEFAULT_DB_PATH.resolve()
+        )
+    except OSError:
+        return False
+
+
+def _refresh_db_path_from_env() -> None:
+    global DB_PATH, DB_DIR, _LAST_ENV_DB_PATH
+
+    current_env_db_path = get_env_path("BITKUB_DB_PATH", DEFAULT_DB_PATH)
+    should_sync_to_env = (
+        DB_PATH == DEFAULT_DB_PATH and current_env_db_path != DEFAULT_DB_PATH
+    ) or (
+        current_env_db_path != _LAST_ENV_DB_PATH
+        and DB_PATH in {_LAST_ENV_DB_PATH, DEFAULT_DB_PATH}
+    )
+    if should_sync_to_env:
+        DB_PATH = current_env_db_path
+        DB_DIR = DB_PATH.parent
+    _LAST_ENV_DB_PATH = current_env_db_path
+
+
+def get_active_db_path() -> Path:
+    _refresh_db_path_from_env()
+    return DB_PATH
+
+
+def configure_sqlite_connection(
+    conn: sqlite3.Connection,
+    *,
+    prefer_memory_journal: bool = False,
+) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
+    if prefer_memory_journal:
+        try:
+            conn.execute("PRAGMA journal_mode = MEMORY")
+        except sqlite3.OperationalError as exc:
+            if "database is locked" not in str(exc).lower():
+                raise
+        conn.execute("PRAGMA synchronous = OFF")
+    else:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def _connect() -> sqlite3.Connection:
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
-    return configure_sqlite_connection(conn)
+    db_path = get_active_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS)
+    prefer_memory_journal = use_memory_journal_for_path(db_path)
+    try:
+        return configure_sqlite_connection(
+            conn,
+            prefer_memory_journal=prefer_memory_journal,
+        )
+    except sqlite3.OperationalError as exc:
+        conn.close()
+        if prefer_memory_journal or "disk I/O error" not in str(exc):
+            raise
+        retry_conn = sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS)
+        return configure_sqlite_connection(
+            retry_conn,
+            prefer_memory_journal=True,
+        )
 
 
 def init_db():
@@ -1527,10 +1592,25 @@ def _write_csv_archive_file(
             writer.writeheader()
             for row in rows:
                 writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
-        tmp_path.replace(path)
+        last_error: OSError | None = None
+        for _ in range(10):
+            try:
+                tmp_path.replace(path)
+                break
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.05)
+        else:
+            if last_error is not None:
+                shutil.copy2(tmp_path, path)
     finally:
         if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+            for _ in range(10):
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    time.sleep(0.05)
 
 
 def _serialize_archive_run(row: sqlite3.Row | None) -> dict[str, Any] | None:
