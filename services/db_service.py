@@ -903,6 +903,40 @@ def fetch_market_candle_coverage(*, resolution: str | None = None) -> list[dict[
     return [dict(row) for row in rows]
 
 
+def fetch_latest_market_candle_timestamp(
+    *,
+    symbol: str,
+    resolution: str,
+) -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(open_at) AS last_seen
+            FROM market_candles
+            WHERE symbol = ? AND resolution = ?
+            """,
+            (symbol, resolution),
+        ).fetchone()
+    if row is None:
+        return None
+    return str(row["last_seen"]) if row["last_seen"] else None
+
+
+def fetch_latest_market_snapshot_timestamp(*, symbol: str) -> str | None:
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(created_at) AS last_seen
+            FROM market_snapshots
+            WHERE symbol = ?
+            """,
+            (symbol,),
+        ).fetchone()
+    if row is None:
+        return None
+    return str(row["last_seen"]) if row["last_seen"] else None
+
+
 def insert_paper_trade_log(
     *,
     buy_time: str,
