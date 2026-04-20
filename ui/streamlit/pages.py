@@ -505,6 +505,277 @@ def _render_compare_data_freshness(
         st.warning(warning)
 
 
+def _strategy_decision_action_rank(action: str) -> int:
+    return {
+        "Sync first": 0,
+        "Promote": 1,
+        "Prune candidate": 2,
+        "Keep": 3,
+    }.get(str(action), 9)
+
+
+def _strategy_decision_freshness_rank(status: str) -> int:
+    return {
+        "Fresh": 0,
+        "Aging": 1,
+        "Stale": 2,
+        "Missing": 3,
+    }.get(str(status), 9)
+
+
+def _strategy_decision_strength_rank(strength: str) -> int:
+    return {
+        "HIGH_PRUNE": 0,
+        "REVIEW_SOON": 1,
+        "REVIEW": 2,
+        "STRONG_KEEP": 3,
+        "BORDERLINE_KEEP": 4,
+        "MONITOR_ONLY": 5,
+        "Clearly better": 6,
+        "Marginally better": 7,
+        "Tied with baseline": 8,
+        "Needs more samples": 9,
+        "Worse due to faster exit": 10,
+        "Worse": 11,
+    }.get(str(strength or "").strip(), 12)
+
+
+def _select_strategy_best_candidate(
+    compare_rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if not compare_rows:
+        return None, None
+    baseline = next(
+        (dict(row) for row in compare_rows if str(row.get("variant") or "") == "CURRENT"),
+        dict(compare_rows[0]),
+    )
+    best_candidate = next(
+        (dict(row) for row in compare_rows if str(row.get("variant") or "") != "CURRENT"),
+        None,
+    )
+    return baseline, best_candidate
+
+
+def _classify_strategy_decision_row(
+    *,
+    symbol: str,
+    in_live_rules: bool,
+    freshness: dict[str, Any],
+    compare_rows: list[dict[str, Any]],
+    tuning_row: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_symbol = str(symbol).strip()
+    freshness_status = str(freshness.get("status") or "Missing")
+    tuning_payload = dict(tuning_row or {})
+    baseline_row, best_candidate_row = _select_strategy_best_candidate(compare_rows)
+
+    baseline_pnl = (
+        float(baseline_row.get("total_pnl_thb", 0.0) or 0.0)
+        if baseline_row
+        else 0.0
+    )
+    best_candidate = best_candidate_row or baseline_row or {}
+    best_variant = str(best_candidate.get("variant") or "n/a")
+    compare_verdict = (
+        str(best_candidate.get("decision") or "No compare result")
+        if best_candidate_row
+        else "No compare result"
+    )
+    best_pnl = float(best_candidate.get("total_pnl_thb", 0.0) or 0.0)
+    best_edge_vs_baseline = best_pnl - baseline_pnl
+    fee_guardrail = str(best_candidate.get("fee_guardrail") or "")
+    blocking_warning = (
+        freshness_status in {"Missing", "Stale"}
+        or compare_verdict == "Needs more samples"
+        or fee_guardrail in {"THIN_EDGE", "LOSS_AFTER_FEES"}
+    )
+    tuning_recommendation = str(tuning_payload.get("recommendation") or "")
+    strength = (
+        str(tuning_payload.get("confidence") or "").strip()
+        or str(best_candidate.get("decision") or "").strip()
+        or "n/a"
+    )
+
+    if freshness_status in {"Missing", "Stale"}:
+        recommended_action = "Sync first"
+        action_reason = f"{freshness_status} candle data for the selected compare window."
+    elif (
+        not in_live_rules
+        and compare_verdict == "Clearly better"
+        and not blocking_warning
+    ):
+        recommended_action = "Promote"
+        action_reason = f"{best_variant} clearly beats CURRENT without a blocking compare warning."
+    elif (
+        tuning_recommendation == "PRUNE"
+        or str(tuning_payload.get("confidence") or "") == "HIGH_PRUNE"
+        or fee_guardrail == "LOSS_AFTER_FEES"
+        or (
+            compare_verdict in {"Worse", "Worse due to faster exit"}
+            and baseline_pnl <= 0.0
+        )
+        or (best_pnl <= 0.0 and baseline_pnl <= 0.0)
+    ):
+        recommended_action = "Prune candidate"
+        if tuning_recommendation == "PRUNE":
+            action_reason = "Live tuning already flags this symbol as PRUNE."
+        elif fee_guardrail == "LOSS_AFTER_FEES":
+            action_reason = "Compare edge is non-profitable after fees."
+        else:
+            action_reason = "Compare outcome is weak enough that keeping this symbol active is hard to justify."
+    else:
+        recommended_action = "Keep"
+        if compare_verdict == "Clearly better":
+            action_reason = "Candidate looks better, but existing warnings make promotion premature."
+        elif compare_verdict in {"Tied with baseline", "Marginally better", "No compare result"}:
+            action_reason = "Baseline still looks acceptable relative to the current evidence."
+        else:
+            action_reason = "Current symbol setup is acceptable enough to keep watching."
+
+    return {
+        "symbol": normalized_symbol,
+        "in_live_rules": "YES" if in_live_rules else "NO",
+        "freshness_status": freshness_status,
+        "last_candle_used": str(freshness.get("last_timestamp_text") or "Missing"),
+        "best_candidate": best_variant,
+        "compare_verdict": compare_verdict,
+        "strength": strength,
+        "recommended_action": recommended_action,
+        "action_reason": action_reason,
+        "tuning_recommendation": tuning_recommendation or "n/a",
+        "best_pnl_thb": best_pnl,
+        "baseline_pnl_thb": baseline_pnl,
+        "edge_vs_baseline_thb": best_edge_vs_baseline,
+        "blocking_warning": "YES" if blocking_warning else "NO",
+        "freshness_warning": str(freshness.get("warning") or "").strip() or "n/a",
+        "action_rank": _strategy_decision_action_rank(recommended_action),
+        "freshness_rank": _strategy_decision_freshness_rank(freshness_status),
+        "strength_rank": _strategy_decision_strength_rank(strength),
+    }
+
+
+def _summarize_strategy_decision_counts(
+    rows: list[dict[str, Any]],
+) -> dict[str, int]:
+    counts = {
+        "Promote": 0,
+        "Keep": 0,
+        "Prune candidate": 0,
+        "Sync first": 0,
+    }
+    for row in rows:
+        action = str(row.get("recommended_action") or "")
+        if action in counts:
+            counts[action] += 1
+    return counts
+
+
+def _sort_strategy_decision_rows(
+    rows: list[dict[str, Any]],
+    *,
+    sort_mode: str,
+) -> list[dict[str, Any]]:
+    normalized_mode = str(sort_mode or "Recommended Action")
+    if normalized_mode == "Symbol":
+        return sorted(rows, key=lambda row: str(row.get("symbol") or ""))
+    if normalized_mode == "Freshness":
+        return sorted(
+            rows,
+            key=lambda row: (
+                int(row.get("freshness_rank", 9)),
+                int(row.get("action_rank", 9)),
+                str(row.get("symbol") or ""),
+            ),
+        )
+    if normalized_mode == "Best Edge":
+        return sorted(
+            rows,
+            key=lambda row: (
+                -float(row.get("edge_vs_baseline_thb", 0.0) or 0.0),
+                int(row.get("action_rank", 9)),
+                str(row.get("symbol") or ""),
+            ),
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            int(row.get("action_rank", 9)),
+            int(row.get("freshness_rank", 9)),
+            int(row.get("strength_rank", 99)),
+            -float(row.get("edge_vs_baseline_thb", 0.0) or 0.0),
+            str(row.get("symbol") or ""),
+        ),
+    )
+
+
+def _build_strategy_decision_summary_rows(
+    *,
+    config: dict[str, Any],
+    candidate_symbols: list[str],
+    decision_resolution: str,
+    decision_days: int,
+    tuning_rows: list[dict[str, Any]],
+    ranking_last_close_by_symbol: dict[str, float],
+    session_state: MutableMapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    state = session_state if session_state is not None else st.session_state
+    tuning_by_symbol = {
+        str(row.get("symbol") or ""): dict(row)
+        for row in tuning_rows
+        if str(row.get("symbol") or "").strip()
+    }
+
+    summary_rows: list[dict[str, Any]] = []
+    for symbol in candidate_symbols:
+        normalized_symbol = str(symbol).strip()
+        if not normalized_symbol:
+            continue
+        freshness = _build_compare_data_freshness(
+            source="candles",
+            resolution=str(decision_resolution),
+            last_timestamp=_load_compare_data_last_timestamp(
+                symbol=normalized_symbol,
+                source="candles",
+                resolution=str(decision_resolution),
+            ),
+        )
+        compare_rows: list[dict[str, Any]] = []
+        if str(freshness.get("status") or "") not in {"Missing", "Stale"}:
+            base_rule = build_rule_seed(
+                config,
+                normalized_symbol,
+                market_price=ranking_last_close_by_symbol.get(normalized_symbol),
+            )
+            compare_variants = build_rule_compare_variants(base_rule=base_rule)
+            compare_rows = annotate_strategy_compare_rows(
+                run_strategy_compare_rows(
+                    symbol=normalized_symbol,
+                    replay_source="candles",
+                    replay_resolution=str(decision_resolution),
+                    lookback_days=int(decision_days),
+                    fee_rate=float(config["fee_rate"]),
+                    cooldown_seconds=int(config["cooldown_seconds"]),
+                    variants=compare_variants,
+                    cache_token=_strategy_compare_cache_token(
+                        session_state=state,
+                        symbol=normalized_symbol,
+                        source="candles",
+                        resolution=str(decision_resolution),
+                    ),
+                )
+            )
+        summary_rows.append(
+            _classify_strategy_decision_row(
+                symbol=normalized_symbol,
+                in_live_rules=normalized_symbol in config.get("rules", {}),
+                freshness=freshness,
+                compare_rows=compare_rows,
+                tuning_row=tuning_by_symbol.get(normalized_symbol),
+            )
+        )
+    return summary_rows
+
+
 def _render_live_rule_price_overlay(
     *,
     symbol: str,
@@ -906,15 +1177,35 @@ def render_strategy_page(
     should_show_tuning = strategy_workspace == "Live Tuning"
     should_show_compare = strategy_workspace == "Compare"
     should_show_replay = strategy_workspace == "Replay"
+    should_show_decision_summary = strategy_workspace in {
+        "Sync & Rank",
+        "Live Tuning",
+        "Compare",
+    }
     should_defer_tuning_ranking = should_show_tuning and bool(queued_tuning_target)
+    decision_summary_resolution = str(
+        st.session_state.get("strategy_compare_resolution", ranking_resolution)
+    )
+    if decision_summary_resolution not in rank_resolution_options:
+        decision_summary_resolution = ranking_resolution
+    decision_summary_days = int(
+        st.session_state.get("strategy_compare_days", ranking_days)
+    )
+    decision_summary_days = min(max(decision_summary_days, 1), 90)
 
-    market_universe = fetch_market_symbol_universe() if (should_show_ranking or should_show_replay) else {"symbols": [], "error": None}
+    market_universe = (
+        fetch_market_symbol_universe()
+        if (should_show_ranking or should_show_replay or should_show_decision_summary)
+        else {"symbols": [], "error": None}
+    )
     market_symbols = list(market_universe.get("symbols", []))
     symbols = market_symbols or watchlist_symbols or configured_symbols or ["THB_BTC"]
 
     ranking: dict[str, Any] = {"rows": [], "coverage": [], "errors": []}
     ranking_last_close_by_symbol: dict[str, float] = {}
     coverage_rows = _cached_market_snapshot_coverage(days=coverage_days) if should_show_replay else []
+    decision_tuning_rows: list[dict[str, Any]] = []
+    strategy_decision_rows: list[dict[str, Any]] = []
 
     if should_show_overview:
         analytics = _cached_trade_analytics()
@@ -953,7 +1244,7 @@ def render_strategy_page(
             else:
                 st.caption("No recent paper trades available.")
 
-    if should_show_ranking or (should_show_tuning and not should_defer_tuning_ranking):
+    if should_show_ranking or should_show_decision_summary or (should_show_tuning and not should_defer_tuning_ranking):
         ranking_symbol_pool = list(symbols if should_show_ranking else (configured_symbols or watchlist_symbols or symbols))
         ranking = _cached_coin_ranking(
             symbols=tuple(ranking_symbol_pool),
@@ -964,6 +1255,93 @@ def render_strategy_page(
             str(row["symbol"]): float(row.get("last_close", 0.0) or 0.0)
             for row in ranking["rows"]
         }
+
+    if should_show_decision_summary:
+        decision_tuning_rows = build_live_rule_tuning_rows(
+            config=config,
+            ranking_rows=ranking["rows"],
+            ranking_resolution=ranking_resolution,
+            ranking_days=ranking_days,
+        )
+        promote_candidates = [
+            str(row.get("symbol") or "")
+            for row in ranking["rows"]
+            if str(row.get("symbol") or "")
+            and str(row.get("symbol") or "") not in config.get("rules", {})
+            and float(row.get("score", 0.0) or 0.0) >= auto_entry_min_score
+            and str(row.get("trend_bias") or "").strip().lower() in auto_entry_allowed_biases
+        ][:5]
+        decision_symbol_pool = ordered_unique_symbols(configured_symbols, promote_candidates)
+        strategy_decision_rows = _build_strategy_decision_summary_rows(
+            config=config,
+            candidate_symbols=decision_symbol_pool,
+            decision_resolution=decision_summary_resolution,
+            decision_days=decision_summary_days,
+            tuning_rows=decision_tuning_rows,
+            ranking_last_close_by_symbol=ranking_last_close_by_symbol,
+            session_state=st.session_state,
+        )
+
+        render_section_intro(
+            "Decision Summary",
+            "Use this layer to decide which symbols need fresh data first, which ones are strong enough to promote, and which live rules look weak enough to cut back.",
+            "Priority",
+        )
+        st.caption(
+            f"Decision Summary uses candle compare at {decision_summary_resolution} over {decision_summary_days} day(s) for live rules plus the top promotable shortlist."
+        )
+        decision_counts = _summarize_strategy_decision_counts(strategy_decision_rows)
+        decision_cards = st.columns(4)
+        with decision_cards[0]:
+            render_metric_card("Promote", str(decision_counts["Promote"]), "Fresh and clearly better than CURRENT")
+        with decision_cards[1]:
+            render_metric_card("Keep", str(decision_counts["Keep"]), "Baseline still acceptable")
+        with decision_cards[2]:
+            render_metric_card("Prune Candidate", str(decision_counts["Prune candidate"]), "Weak edge or repeated underperformance")
+        with decision_cards[3]:
+            render_metric_card("Sync First", str(decision_counts["Sync first"]), "Missing or stale candle compare data")
+
+        decision_sort_options = [
+            "Recommended Action",
+            "Freshness",
+            "Best Edge",
+            "Symbol",
+        ]
+        _sync_select_state(
+            key="strategy_decision_summary_sort",
+            options=decision_sort_options,
+            default="Recommended Action",
+        )
+        selected_decision_sort = st.selectbox(
+            "Decision Summary Sort",
+            decision_sort_options,
+            key="strategy_decision_summary_sort",
+        )
+        sorted_decision_rows = _sort_strategy_decision_rows(
+            strategy_decision_rows,
+            sort_mode=str(selected_decision_sort),
+        )
+        if sorted_decision_rows:
+            st.dataframe(
+                [
+                    {
+                        "symbol": row["symbol"],
+                        "live_rule": row["in_live_rules"],
+                        "freshness": row["freshness_status"],
+                        "last_candle_used": row["last_candle_used"],
+                        "best_candidate": row["best_candidate"],
+                        "compare_verdict": row["compare_verdict"],
+                        "strength": row["strength"],
+                        "recommended_action": row["recommended_action"],
+                        "action_reason": row["action_reason"],
+                    }
+                    for row in sorted_decision_rows
+                ],
+                width='stretch',
+                hide_index=True,
+            )
+        else:
+            st.caption("No Strategy Decision Summary rows are available yet. Sync candles or add live rules first.")
 
     if should_show_ranking:
         st.markdown('<div class="panel-title">Candle Sync & Coin Ranking</div>', unsafe_allow_html=True)
@@ -1181,11 +1559,15 @@ def render_strategy_page(
             "Use it to decide which symbols to keep, review, or prune before widening live automation."
         )
 
-        tuning_rows = build_live_rule_tuning_rows(
-            config=config,
-            ranking_rows=ranking["rows"],
-            ranking_resolution=ranking_resolution,
-            ranking_days=ranking_days,
+        tuning_rows = (
+            list(decision_tuning_rows)
+            if decision_tuning_rows
+            else build_live_rule_tuning_rows(
+                config=config,
+                ranking_rows=ranking["rows"],
+                ranking_resolution=ranking_resolution,
+                ranking_days=ranking_days,
+            )
         )
         keep_rows = [row for row in tuning_rows if row["recommendation"] == "KEEP"]
         monitor_rows = [row for row in tuning_rows if row["recommendation"] == "MONITOR"]
