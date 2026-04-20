@@ -20,6 +20,7 @@ from services.db_service import (
     insert_validation_run,
     insert_validation_run_slice,
     update_validation_run,
+    use_memory_journal_for_path,
     upsert_market_candles,
 )
 from utils.time_utils import format_time_text, from_timestamp, now_text, now_dt, parse_time_text
@@ -42,8 +43,12 @@ class ReplayPosition:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(db_service_module.DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
-    return configure_sqlite_connection(conn)
+    db_path = db_service_module.get_active_db_path()
+    conn = sqlite3.connect(db_path, timeout=SQLITE_TIMEOUT_SECONDS)
+    return configure_sqlite_connection(
+        conn,
+        prefer_memory_journal=use_memory_journal_for_path(db_path),
+    )
 
 
 def _parse_time(value: str) -> datetime:

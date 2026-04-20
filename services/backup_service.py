@@ -14,7 +14,13 @@ from typing import Any
 from config import CONFIG_BASE_PATH, CONFIG_PATH
 from services.env_service import get_loaded_env_path
 from services.state_service import STATE_FILE_PATH, STATE_PENDING_PATH
-from services.db_service import DB_PATH, SQLITE_BUSY_TIMEOUT_MS, SQLITE_TIMEOUT_SECONDS
+from services.db_service import (
+    DB_PATH,
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_TIMEOUT_SECONDS,
+    configure_sqlite_connection,
+    use_memory_journal_for_path,
+)
 from utils.time_utils import now_dt
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -95,14 +101,46 @@ def _snapshot_sqlite_database(source_path: Path, dest_path: Path) -> int:
         raise FileNotFoundError(f"SQLite database not found: {source_path}")
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(source_path, timeout=SQLITE_TIMEOUT_SECONDS) as source_conn:
-        source_conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-        with sqlite3.connect(dest_path, timeout=SQLITE_TIMEOUT_SECONDS) as dest_conn:
-            source_conn.backup(dest_conn)
-            # Explicitly commit and close to ensure all buffers are flushed to disk
-            dest_conn.commit()
-        # Explicitly close source connection to release file handle
-        source_conn.commit()
+    source_prefer_memory_journal = use_memory_journal_for_path(source_path)
+    dest_prefer_memory_journal = use_memory_journal_for_path(dest_path)
+
+    def run_snapshot(
+        *,
+        source_memory_journal: bool,
+        dest_memory_journal: bool,
+    ) -> None:
+        with sqlite3.connect(source_path, timeout=SQLITE_TIMEOUT_SECONDS) as source_conn:
+            source_conn = configure_sqlite_connection(
+                source_conn,
+                prefer_memory_journal=source_memory_journal,
+            )
+            with sqlite3.connect(dest_path, timeout=SQLITE_TIMEOUT_SECONDS) as dest_conn:
+                dest_conn = configure_sqlite_connection(
+                    dest_conn,
+                    prefer_memory_journal=dest_memory_journal,
+                )
+                source_conn.backup(dest_conn)
+                # Explicitly commit and close to ensure all buffers are flushed to disk.
+                dest_conn.commit()
+            # Explicitly close source connection to release file handle.
+            source_conn.commit()
+
+    try:
+        run_snapshot(
+            source_memory_journal=source_prefer_memory_journal,
+            dest_memory_journal=dest_prefer_memory_journal,
+        )
+    except sqlite3.OperationalError as exc:
+        if "disk i/o error" not in str(exc).lower():
+            raise
+        try:
+            dest_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        run_snapshot(
+            source_memory_journal=True,
+            dest_memory_journal=True,
+        )
 
     # On Windows, explicitly flush the dest file to disk to release the file handle
     # before TemporaryDirectory tries to clean up the directory
@@ -272,8 +310,8 @@ def create_runtime_backup(
     errors: list[str] = []
     warnings: list[str] = []
 
-    with tempfile.TemporaryDirectory(prefix="runtime_backup_", dir=date_dir) as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
+    temp_dir = Path(tempfile.mkdtemp(prefix="runtime_backup_", dir=date_dir))
+    try:
         for entry in sources:
             source_path = Path(entry["source_path"])
             bundle_path = str(entry["bundle_path"])
@@ -315,7 +353,7 @@ def create_runtime_backup(
 
         bundle_name = _build_bundle_name(created_at)
         bundle_path = date_dir / bundle_name
-        temp_bundle_path = bundle_path.with_name(f"{bundle_path.name}.tmp")
+        temp_bundle_path = temp_dir / f"{bundle_name}.tmp"
         manifest = {
             "version": 1,
             "created_at": created_at.isoformat(timespec="seconds"),
@@ -345,7 +383,35 @@ def create_runtime_backup(
             }
         try:
             _zip_bundle_path(temp_bundle_path, temp_dir, assets)
-            os.replace(temp_bundle_path, bundle_path)
+            import gc
+
+            gc.collect()
+            last_error: Exception | None = None
+            for _ in range(20):
+                try:
+                    os.replace(temp_bundle_path, bundle_path)
+                    last_error = None
+                    break
+                except (PermissionError, OSError) as exc:
+                    last_error = exc
+                    gc.collect()
+                    time.sleep(0.05)
+            if last_error is not None:
+                for _ in range(20):
+                    try:
+                        shutil.copy2(temp_bundle_path, bundle_path)
+                        last_error = None
+                        break
+                    except (PermissionError, OSError) as exc:
+                        last_error = exc
+                        gc.collect()
+                        time.sleep(0.05)
+            if last_error is not None:
+                raise last_error
+            try:
+                temp_bundle_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         except Exception as exc:
             return {
                 "success": False,
@@ -360,11 +426,11 @@ def create_runtime_backup(
                 "pruned_backups": [],
             }
 
-        # Clean up file handles before exiting TemporaryDirectory context.
-        # On Windows, sqlite temp files can remain locked if handles aren't explicitly released.
-        # Force garbage collection to release any remaining file references.
+        # Clean up file handles before temp-dir cleanup on Windows.
         import gc
         gc.collect()
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     pruned = prune_runtime_backups(
         backup_root_value=backup_root,
@@ -399,21 +465,39 @@ def _restore_file(source_path: Path, target_path: Path) -> None:
     temp_target = target_path.with_name(f"{target_path.name}.restore.tmp")
     shutil.copy2(source_path, temp_target)
     last_error: Exception | None = None
+    import gc
+
     try:
-        for _ in range(10):
+        gc.collect()
+        for _ in range(20):
             try:
                 os.replace(temp_target, target_path)
                 return
             except PermissionError as exc:
                 last_error = exc
+                gc.collect()
                 time.sleep(0.1)
             except OSError as exc:
                 last_error = exc
+                gc.collect()
+                time.sleep(0.1)
+
+        for _ in range(20):
+            try:
+                shutil.copy2(temp_target, target_path)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                gc.collect()
+                time.sleep(0.1)
+            except OSError as exc:
+                last_error = exc
+                gc.collect()
                 time.sleep(0.1)
 
         if last_error is not None:
             raise last_error
-        os.replace(temp_target, target_path)
+        shutil.copy2(temp_target, target_path)
     finally:
         if temp_target.exists():
             try:
@@ -456,63 +540,64 @@ def restore_runtime_backup(
     warnings: list[str] = []
     restored_assets: list[dict[str, Any]] = []
 
+    temp_dir = Path(tempfile.mkdtemp(prefix="runtime_restore_"))
     try:
-        with tempfile.TemporaryDirectory(prefix="runtime_restore_") as temp_dir_name:
-            temp_dir = Path(temp_dir_name)
-            with zipfile.ZipFile(bundle_path, "r") as archive:
-                for asset in assets:
-                    status = str(asset.get("status") or "")
-                    if status != "captured":
-                        continue
+        with zipfile.ZipFile(bundle_path, "r") as archive:
+            for asset in assets:
+                status = str(asset.get("status") or "")
+                if status != "captured":
+                    continue
 
-                    archive_path = str(asset.get("bundle_path") or "").strip()
-                    restore_path_text = str(asset.get("restore_path") or "").strip()
-                    if not archive_path or not restore_path_text:
-                        errors.append(f"Invalid manifest entry for {asset.get('kind', 'unknown')}")
-                        continue
-                    restore_path = Path(restore_path_text)
+                archive_path = str(asset.get("bundle_path") or "").strip()
+                restore_path_text = str(asset.get("restore_path") or "").strip()
+                if not archive_path or not restore_path_text:
+                    errors.append(f"Invalid manifest entry for {asset.get('kind', 'unknown')}")
+                    continue
+                restore_path = Path(restore_path_text)
 
-                    if restore_path.exists() and not overwrite:
-                        errors.append(
-                            f"Refusing to overwrite existing file without overwrite=True: {restore_path}"
-                        )
-                        continue
-
-                    extracted_path = temp_dir / archive_path
-                    extracted_path.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        archive.extract(archive_path, path=temp_dir)
-                    except KeyError:
-                        errors.append(f"Archive entry missing: {archive_path}")
-                        continue
-
-                    if restore_path.exists():
-                        _pre_restore_backup(restore_path, temp_dir)
-
-                    try:
-                        _restore_file(extracted_path, restore_path)
-                    except Exception as exc:
-                        errors.append(f"{asset.get('kind', 'unknown')}: {exc}")
-                        continue
-
-                    if str(asset.get("kind")) == "sqlite_db":
-                        for suffix in ("-wal", "-shm"):
-                            sidecar = Path(f"{restore_path}{suffix}")
-                            if sidecar.exists():
-                                try:
-                                    sidecar.unlink()
-                                except OSError:
-                                    pass
-
-                    restored_assets.append(
-                        {
-                            "kind": asset.get("kind"),
-                            "restore_path": str(restore_path),
-                            "bundle_path": archive_path,
-                        }
+                if restore_path.exists() and not overwrite:
+                    errors.append(
+                        f"Refusing to overwrite existing file without overwrite=True: {restore_path}"
                     )
+                    continue
+
+                extracted_path = temp_dir / archive_path
+                extracted_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    archive.extract(archive_path, path=temp_dir)
+                except KeyError:
+                    errors.append(f"Archive entry missing: {archive_path}")
+                    continue
+
+                if restore_path.exists():
+                    _pre_restore_backup(restore_path, temp_dir)
+
+                try:
+                    _restore_file(extracted_path, restore_path)
+                except Exception as exc:
+                    errors.append(f"{asset.get('kind', 'unknown')}: {exc}")
+                    continue
+
+                if str(asset.get("kind")) == "sqlite_db":
+                    for suffix in ("-wal", "-shm"):
+                        sidecar = Path(f"{restore_path}{suffix}")
+                        if sidecar.exists():
+                            try:
+                                sidecar.unlink()
+                            except OSError:
+                                pass
+
+                restored_assets.append(
+                    {
+                        "kind": asset.get("kind"),
+                        "restore_path": str(restore_path),
+                        "bundle_path": archive_path,
+                    }
+                )
     except Exception as exc:
         errors.append(str(exc))
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
     return {
         "success": not errors,
