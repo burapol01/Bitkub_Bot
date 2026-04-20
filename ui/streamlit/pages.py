@@ -670,6 +670,117 @@ def _summarize_strategy_decision_counts(
     return counts
 
 
+def _group_strategy_decision_queue(
+    rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = {
+        "Sync first": [],
+        "Promote": [],
+        "Prune candidate": [],
+        "Keep": [],
+    }
+    for row in rows:
+        action = str(row.get("recommended_action") or "")
+        if action in groups:
+            groups[action].append(row)
+    return groups
+
+
+def _render_strategy_decision_queue(decision_rows: list[dict[str, Any]]) -> None:
+    render_section_intro(
+        "Decision Queue",
+        "Symbols grouped by verdict — act on each bucket without opening them one at a time. Highest-priority groups appear first.",
+        "Queue",
+    )
+    groups = _group_strategy_decision_queue(decision_rows)
+
+    def _compact_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "symbol": row.get("symbol", ""),
+                "freshness": row.get("freshness_status", ""),
+                "best_candidate": row.get("best_candidate", ""),
+                "verdict": row.get("compare_verdict", ""),
+                "reason": row.get("action_reason", ""),
+                "last_candle": row.get("last_candle_used", ""),
+            }
+            for row in rows
+        ]
+
+    sync_rows = groups["Sync first"]
+    with st.expander(f"Sync First  ·  {len(sync_rows)}", expanded=bool(sync_rows)):
+        st.caption("Missing or stale candle data — sync before running Compare or deciding.")
+        if sync_rows:
+            st.dataframe(_compact_rows(sync_rows), hide_index=True, width="stretch")
+            stale_symbols = [str(r.get("symbol") or "") for r in sync_rows if r.get("symbol")]
+            if st.button(
+                f"Sync all stale / missing  ({len(stale_symbols)})",
+                key="decision_queue_sync_all_btn",
+                type="primary",
+            ):
+                st.session_state["strategy_queue_sync_symbols"] = stale_symbols
+                queue_strategy_workspace_navigation(workspace="Sync & Rank")
+                st.rerun()
+        else:
+            st.caption("All symbols have usable data.")
+
+    promote_rows = groups["Promote"]
+    with st.expander(f"Promote  ·  {len(promote_rows)}", expanded=bool(promote_rows)):
+        st.caption("Fresh data, variant clearly beats CURRENT. Ready to add to live rules.")
+        if promote_rows:
+            st.dataframe(_compact_rows(promote_rows), hide_index=True, width="stretch")
+            promote_symbols = [str(r.get("symbol") or "") for r in promote_rows if r.get("symbol")]
+            qcol1, qcol2 = st.columns([1, 1])
+            with qcol1:
+                if st.button("Open next promote-ready", key="decision_queue_open_promote_btn", type="primary"):
+                    queue_strategy_workspace_navigation(workspace="Compare", symbol=promote_symbols[0])
+                    st.rerun()
+            with qcol2:
+                selected_promote = st.selectbox(
+                    "Symbol",
+                    promote_symbols,
+                    key="decision_queue_promote_select",
+                    label_visibility="collapsed",
+                )
+                if st.button("Open compare", key="decision_queue_open_promote_compare_btn"):
+                    queue_strategy_workspace_navigation(workspace="Compare", symbol=str(selected_promote or promote_symbols[0]))
+                    st.rerun()
+        else:
+            st.caption("No promote-ready symbols yet.")
+
+    prune_rows = groups["Prune candidate"]
+    with st.expander(f"Prune Candidate  ·  {len(prune_rows)}", expanded=bool(prune_rows)):
+        st.caption("Weak or negative edge on live rules. Review in Live Tuning before removing.")
+        if prune_rows:
+            st.dataframe(_compact_rows(prune_rows), hide_index=True, width="stretch")
+            prune_symbols = [str(r.get("symbol") or "") for r in prune_rows if r.get("symbol")]
+            qcol3, qcol4 = st.columns([1, 1])
+            with qcol3:
+                if st.button("Open next prune candidate", key="decision_queue_open_prune_btn"):
+                    queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=prune_symbols[0])
+                    st.rerun()
+            with qcol4:
+                selected_prune = st.selectbox(
+                    "Symbol",
+                    prune_symbols,
+                    key="decision_queue_prune_select",
+                    label_visibility="collapsed",
+                )
+                if st.button("Open live tuning", key="decision_queue_open_prune_tuning_btn"):
+                    queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=str(selected_prune or prune_symbols[0]))
+                    st.rerun()
+        else:
+            st.caption("No prune candidates right now.")
+
+    keep_rows = groups["Keep"]
+    with st.expander(f"Keep  ·  {len(keep_rows)}", expanded=False):
+        st.caption("Baseline acceptable. No immediate action needed.")
+        if keep_rows:
+            st.dataframe(_compact_rows(keep_rows), hide_index=True, width="stretch")
+        else:
+            st.caption("No symbols in Keep state.")
+
+
 def _sort_strategy_decision_rows(
     rows: list[dict[str, Any]],
     *,
@@ -1343,6 +1454,9 @@ def render_strategy_page(
         else:
             st.caption("No Strategy Decision Summary rows are available yet. Sync candles or add live rules first.")
 
+        st.markdown('<div class="page-gap"></div>', unsafe_allow_html=True)
+        _render_strategy_decision_queue(sorted_decision_rows)
+
     if should_show_ranking:
         st.markdown('<div class="panel-title">Candle Sync & Coin Ranking</div>', unsafe_allow_html=True)
         st.caption(
@@ -1360,13 +1474,25 @@ def render_strategy_page(
                 f"Using local symbol list only | watchlist: {len(watchlist_symbols)} | live rules: {len(configured_symbols)}"
             )
 
+        if "strategy_queue_sync_symbols" in st.session_state:
+            queued_stale = [
+                s for s in st.session_state.pop("strategy_queue_sync_symbols")
+                if s in symbols
+            ]
+            if queued_stale:
+                st.session_state["strategy_sync_symbol_select"] = queued_stale
+        if "strategy_sync_symbol_select" not in st.session_state:
+            st.session_state["strategy_sync_symbol_select"] = (
+                watchlist_symbols or configured_symbols or symbols[: min(len(symbols), 10)]
+            )
+
         with st.form("strategy_candle_sync_form"):
             sync_col1, sync_col2, sync_col3 = st.columns([0.4, 0.3, 0.3])
             with sync_col1:
                 selected_sync_symbols = st.multiselect(
                     "Symbols to Sync",
                     symbols,
-                    default=watchlist_symbols or configured_symbols or symbols[: min(len(symbols), 10)],
+                    key="strategy_sync_symbol_select",
                     help="Options come from the full Bitkub market universe when available. The default selection still follows the watchlist.",
                 )
             with sync_col2:
