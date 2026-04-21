@@ -1415,6 +1415,7 @@ def render_strategy_page(
     } or {"bullish", "mixed"}
 
     strategy_workspace_options = [
+        "Decisions",
         "Sync & Rank",
         "Live Tuning",
         "Compare",
@@ -1422,6 +1423,7 @@ def render_strategy_page(
         "Overview",
     ]
     _workspace_display_names = {
+        "Decisions": "Decisions",
         "Sync & Rank": "Sync & Rank",
         "Live Tuning": "Live Rules",
         "Compare": "Compare Lab",
@@ -1432,7 +1434,7 @@ def render_strategy_page(
     queued_compare_symbol = st.session_state.pop("strategy_compare_symbol_autorun", None)
     queued_tuning_symbol = st.session_state.pop("strategy_tuning_focus_symbol_autorun", None)
     workspace_focus_symbol = st.session_state.pop("strategy_workspace_focus_symbol", None)
-    default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Sync & Rank"))
+    default_strategy_workspace = str(st.session_state.get("strategy_workspace", "Decisions"))
     if workspace_autorun in strategy_workspace_options:
         default_strategy_workspace = str(workspace_autorun)
         st.session_state["strategy_workspace"] = default_strategy_workspace
@@ -1454,7 +1456,7 @@ def render_strategy_page(
         st.session_state["strategy_tuning_focus_symbol"] = queued_tuning_target
         st.session_state["strategy_tuning_focus_autorun"] = queued_tuning_target
     if default_strategy_workspace not in strategy_workspace_options:
-        default_strategy_workspace = "Sync & Rank"
+        default_strategy_workspace = "Decisions"
     _sync_select_state(
         key="strategy_workspace",
         options=strategy_workspace_options,
@@ -1470,6 +1472,7 @@ def render_strategy_page(
     render_callout(
         "Workspace Focus",
         {
+            "Decisions": "Central action hub — see which symbols need sync, are ready to promote, or should be pruned. Click through to the right workspace from here.",
             "Sync & Rank": "Sync candles, inspect ranking, and decide which symbols deserve live attention.",
             "Live Tuning": "Review live rules, fee guardrails, and auto-entry report. Use this when a symbol needs a prune decision.",
             "Compare": "Run variants for one live symbol and apply the winner back to config. Nothing changes until you click Apply.",
@@ -1480,15 +1483,12 @@ def render_strategy_page(
     )
 
     should_show_overview = strategy_workspace == "Overview"
+    should_show_decisions = strategy_workspace == "Decisions"
     should_show_ranking = strategy_workspace == "Sync & Rank"
     should_show_tuning = strategy_workspace == "Live Tuning"
     should_show_compare = strategy_workspace == "Compare"
     should_show_replay = strategy_workspace == "Replay"
-    should_show_decision_summary = strategy_workspace in {
-        "Sync & Rank",
-        "Live Tuning",
-        "Compare",
-    }
+    should_show_decision_summary = should_show_decisions
     should_defer_tuning_ranking = should_show_tuning and bool(queued_tuning_target)
     decision_summary_resolution = str(
         st.session_state.get("strategy_compare_resolution", ranking_resolution)
@@ -1982,6 +1982,7 @@ def render_strategy_page(
                     st.caption("No action queue right now. All current live rules are either stable or still accumulating evidence.")
 
                 if prune_rows:
+                    st.markdown("**── Change config ──**")
                     prune_option_symbols = [row["symbol"] for row in prune_rows]
                     prune_default_symbols = list(prune_option_symbols)
                     prune_selection_key = "strategy_prune_live_rules_selection"
@@ -2261,6 +2262,7 @@ def render_strategy_page(
                     key="strategy_tuning_focus_symbol",
                 )
                 focus_row = next(row for row in tuning_rows if row["symbol"] == focus_symbol)
+                st.markdown("**── Review ──**")
                 _render_symbol_operational_state(
                     symbol=str(focus_row["symbol"]),
                     config=config,
@@ -2301,6 +2303,7 @@ def render_strategy_page(
                 st.caption(f"Tuning note: {focus_row['tuning_note']}")
                 st.caption(f"Confidence: {focus_row['confidence_note']}")
                 st.caption(f"Fee guardrail: {focus_row.get('fee_guardrail_note', 'n/a')}")
+                st.markdown("**── Explore further ──**")
                 nav_left, nav_right = st.columns(2)
                 with nav_left:
                     if st.button(
