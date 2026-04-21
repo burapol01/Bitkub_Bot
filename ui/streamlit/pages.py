@@ -2299,14 +2299,11 @@ def render_strategy_page(
                             st.dataframe(soft_warning_rows, width='stretch', hide_index=True)
 
                         prune_action_options = ["Prune rule only"]
-                        if linked_state_rows and not hard_blocked_symbols:
+                        if linked_state_rows:
                             prune_action_options = [
                                 "Prune rule only",
                                 "Cancel linked orders and prune",
-                                "Review in Live Ops",
                             ]
-                        elif hard_blocked_symbols:
-                            prune_action_options = ["Review in Live Ops"]
 
                         if prune_action_key not in st.session_state:
                             st.session_state[prune_action_key] = prune_action_options[0]
@@ -2317,7 +2314,7 @@ def render_strategy_page(
                             "Prune Action",
                             prune_action_options,
                             key=prune_action_key,
-                            help="Cancel-linked pruning is only available when the symbol state is clear enough to proceed.",
+                            help="Choose 'Cancel linked orders and prune' when linked live orders or reserved balances exist.",
                         )
                         confirm_cancel_linked = False
                         if prune_action == "Cancel linked orders and prune":
@@ -2326,22 +2323,29 @@ def render_strategy_page(
                                 key=prune_cancel_confirm_key,
                             )
                         prune_submitted = st.form_submit_button(
-                            "Continue",
+                            "Remove from Live Rules",
                             type="primary",
                             width='stretch',
-                            help="Removes the selected symbols from live rules. If cancel orders is chosen, linked open orders are canceled first.",
+                            help="Removes the selected symbols from live rules config. If cancel orders is chosen, linked open orders are canceled first.",
                         )
+
+                    if hard_blocked_symbols:
+                        hard_blocked_preview = sorted(set(hard_blocked_symbols))[0]
+                        if st.button(
+                            f"Open Live Ops to inspect {hard_blocked_preview} →",
+                            key="strategy_prune_live_rules_open_live_ops",
+                            help="Navigate to Live Ops to resolve linked state. Does not modify live rules config.",
+                        ):
+                            _open_live_ops_for_symbol(symbol=hard_blocked_preview)
 
                     if prune_submitted:
                         if not effective_prune_selection:
                             st.warning("Select at least one symbol before pruning live rules.")
-                        elif prune_action == "Review in Live Ops":
-                            _open_live_ops_for_symbol(symbol=effective_prune_selection[0])
                         elif hard_blocked_symbols:
                             st.error(
                                 "Prune is blocked for: "
                                 + ", ".join(sorted(set(hard_blocked_symbols)))
-                                + ". Review in Live Ops before pruning."
+                                + ". Deselect those symbols or resolve their state in Live Ops before pruning."
                             )
                         elif prune_action == "Cancel linked orders and prune":
                             if not confirm_cancel_linked:

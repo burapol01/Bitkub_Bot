@@ -511,7 +511,7 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertEqual(list(prune_widget.value), ["THB_FF", "THB_SUMX"])
 
         submit_button = next(
-            button for button in at.button if button.label == "Continue"
+            button for button in at.button if button.label == "Remove from Live Rules"
         )
         submit_button.click()
         at.run(timeout=20)
@@ -1032,7 +1032,7 @@ class StrategyPageAppTests(unittest.TestCase):
         prune_action = at.radio(key="strategy_prune_live_rules_action")
         self.assertIn("Prune rule only", list(prune_action.options))
         self.assertIn("Cancel linked orders and prune", list(prune_action.options))
-        self.assertIn("Review in Live Ops", list(prune_action.options))
+        self.assertNotIn("Review in Live Ops", list(prune_action.options))
 
     def test_live_tuning_prune_routes_to_live_ops_when_state_is_unclear(self) -> None:
         script = _app_script(
@@ -1122,9 +1122,16 @@ class StrategyPageAppTests(unittest.TestCase):
         at.run(timeout=20)
 
         prune_action = at.radio(key="strategy_prune_live_rules_action")
-        self.assertEqual(list(prune_action.options), ["Review in Live Ops"])
+        self.assertEqual(
+            list(prune_action.options),
+            ["Prune rule only", "Cancel linked orders and prune"],
+        )
 
-        next(button for button in at.button if button.label == "Continue").click()
+        next(
+            button
+            for button in at.button
+            if button.label == "Open Live Ops to inspect THB_SUMX →"
+        ).click()
         at.run(timeout=20)
 
         self.assertEqual(len(at.exception), 0)
