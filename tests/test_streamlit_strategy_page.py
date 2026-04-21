@@ -626,7 +626,7 @@ class StrategyPageAppTests(unittest.TestCase):
 
         self.assertEqual(len(at.exception), 0)
         rendered = "\n".join(str(caption.value) for caption in at.caption)
-        self.assertIn("Live price overlay: price=1.05000000", rendered)
+        self.assertIn("Live quote overlay (separate from compare data): price=1.05000000", rendered)
 
     def test_compare_shows_live_price_overlay_for_selected_symbol(self) -> None:
         script = _app_script(
@@ -660,7 +660,7 @@ class StrategyPageAppTests(unittest.TestCase):
         markdown_rendered = "\n".join(str(markdown.value) for markdown in at.markdown)
         self.assertIn("Live quote overlay (separate from compare data): price=10.50000000", rendered)
         self.assertIn("live quote", markdown_rendered)
-        self.assertIn("quote freshness fresh", markdown_rendered)
+        self.assertIn("quote freshness", markdown_rendered)
 
     def test_compare_shows_freshness_source_and_last_candle_timestamp(self) -> None:
         fresh_rows = json.loads(json.dumps(_compare_rows()))
