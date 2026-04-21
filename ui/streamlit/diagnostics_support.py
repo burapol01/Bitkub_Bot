@@ -822,6 +822,11 @@ def render_diagnostics_page(
     private_ctx: dict[str, Any],
     latest_prices: dict[str, float],
 ) -> None:
+    render_section_intro(
+        "Diagnostics",
+        "Storage health, reconciliation, and retention signals. Start with DB summary and reconciliation before diving into retention tools.",
+        "Diagnostics",
+    )
     diagnostics_dataset = _cached_diagnostics_page_dataset()
     db_summary = dict(diagnostics_dataset.get("db_summary") or {})
     dashboard_summary = dict(diagnostics_dataset.get("summary") or {})
