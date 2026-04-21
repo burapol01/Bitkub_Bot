@@ -68,6 +68,32 @@ def _latest_guardrail_block(*, symbol: str) -> dict[str, Any] | None:
     }
 
 
+def build_symbol_operational_state_context(
+    *,
+    account_snapshot: dict[str, Any] | None,
+    latest_prices: dict[str, float],
+    execution_orders: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    resolved_execution_orders = list(execution_orders or fetch_open_execution_orders())
+    latest_filled_execution_orders = fetch_latest_filled_execution_orders_by_symbol()
+    holdings_rows = build_live_holdings_snapshot(
+        account_snapshot=account_snapshot,
+        latest_prices=latest_prices,
+        latest_filled_execution_orders=latest_filled_execution_orders,
+    )
+    findings = collect_runtime_reconciliation_findings(
+        execution_orders=resolved_execution_orders,
+        live_holdings_rows=holdings_rows,
+        account_snapshot=account_snapshot,
+    )
+    return {
+        "execution_orders": resolved_execution_orders,
+        "holdings_rows": holdings_rows,
+        "findings": findings,
+        "exchange_open_orders_by_symbol": extract_open_orders_by_symbol(account_snapshot),
+    }
+
+
 def build_symbol_operational_state(
     *,
     symbol: str,
@@ -76,27 +102,27 @@ def build_symbol_operational_state(
     latest_prices: dict[str, float],
     runtime: dict[str, Any] | None = None,
     execution_orders: list[dict[str, Any]] | None = None,
+    precomputed_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_symbol = _safe_str(symbol)
-    execution_orders = list(execution_orders or fetch_open_execution_orders())
-    latest_filled_execution_orders = fetch_latest_filled_execution_orders_by_symbol()
-    holdings_rows = build_live_holdings_snapshot(
-        account_snapshot=account_snapshot,
-        latest_prices=latest_prices,
-        latest_filled_execution_orders=latest_filled_execution_orders,
+    context = dict(
+        precomputed_context
+        or build_symbol_operational_state_context(
+            account_snapshot=account_snapshot,
+            latest_prices=latest_prices,
+            execution_orders=execution_orders,
+        )
     )
+    execution_orders = list(context.get("execution_orders") or [])
+    holdings_rows = list(context.get("holdings_rows") or [])
     holdings_row = next(
         (row for row in holdings_rows if _safe_str(row.get("symbol")) == normalized_symbol),
         {},
     )
-    exchange_open_orders_by_symbol = extract_open_orders_by_symbol(account_snapshot)
+    exchange_open_orders_by_symbol = dict(context.get("exchange_open_orders_by_symbol") or {})
     exchange_rows = list(exchange_open_orders_by_symbol.get(normalized_symbol, []))
     local_rows = _extract_symbol_rows(execution_orders, normalized_symbol)
-    findings = collect_runtime_reconciliation_findings(
-        execution_orders=execution_orders,
-        live_holdings_rows=holdings_rows,
-        account_snapshot=account_snapshot,
-    )
+    findings = dict(context.get("findings") or {})
     symbol_findings = _symbol_findings(findings, normalized_symbol)
 
     open_buy_orders = [row for row in local_rows if _safe_str(row.get("side")) == "buy"]

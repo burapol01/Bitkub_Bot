@@ -34,7 +34,10 @@ from ui.streamlit.diagnostics_support import render_diagnostics_page, render_log
 from ui.streamlit.data import calc_daily_totals, capability_badge_tone
 from ui.streamlit.refresh import PAGE_ORDER, render_refreshable_fragment
 from ui.streamlit.styles import badge, render_callout, render_metric_card, render_section_intro, render_sidebar_block
-from ui.streamlit.symbol_state import build_symbol_operational_state
+from ui.streamlit.symbol_state import (
+    build_symbol_operational_state,
+    build_symbol_operational_state_context,
+)
 from ui.streamlit.strategy_support import (
     annotate_strategy_compare_rows,
     build_live_rule_tuning_rows,
@@ -282,6 +285,61 @@ def _render_symbol_operational_state(
     return state
 
 
+_PRUNE_SOFT_REVIEW_REASONS = {
+    "exchange open-orders coverage is partial",
+    "exchange open-orders query returned an error",
+}
+
+
+def _split_prune_review_reasons(state: dict[str, Any]) -> tuple[list[str], list[str]]:
+    review_reasons = [
+        str(reason).strip()
+        for reason in list(state.get("review_reasons") or [])
+        if str(reason).strip()
+    ]
+    hard_reasons = [
+        reason for reason in review_reasons if reason not in _PRUNE_SOFT_REVIEW_REASONS
+    ]
+    soft_reasons = [
+        reason for reason in review_reasons if reason in _PRUNE_SOFT_REVIEW_REASONS
+    ]
+    return hard_reasons, soft_reasons
+
+
+def _build_prune_symbol_assessment(state: dict[str, Any]) -> dict[str, Any]:
+    hard_review_reasons, soft_warning_reasons = _split_prune_review_reasons(state)
+    hard_block_reasons: list[str] = []
+    open_buy_count = int(state.get("open_buy_count", 0) or 0)
+    open_sell_count = int(state.get("open_sell_count", 0) or 0)
+    reserved_thb = float(state.get("reserved_thb", 0.0) or 0.0)
+    reserved_coin = float(state.get("reserved_coin", 0.0) or 0.0)
+    partial_fill = bool(state.get("partial_fill"))
+    if open_buy_count > 0:
+        hard_block_reasons.append(f"{open_buy_count} open buy order(s) exist")
+    if open_sell_count > 0:
+        hard_block_reasons.append(f"{open_sell_count} open sell order(s) exist")
+    if reserved_thb > 0:
+        hard_block_reasons.append(f"reserved THB {reserved_thb:,.2f} is still linked")
+    if reserved_coin > 0:
+        hard_block_reasons.append(
+            f"reserved coin {reserved_coin:,.8f} is still linked"
+        )
+    if partial_fill:
+        hard_block_reasons.append("partial fill is still unresolved")
+    hard_block_reasons.extend(hard_review_reasons)
+    return {
+        "hard_block_reasons": hard_block_reasons,
+        "soft_warning_reasons": soft_warning_reasons,
+        "has_linked_state": bool(
+            open_buy_count > 0
+            or open_sell_count > 0
+            or reserved_thb > 0
+            or reserved_coin > 0
+            or partial_fill
+        ),
+    }
+
+
 def _strategy_compare_scope_key(
     *,
     symbol: str,
@@ -492,6 +550,7 @@ def _render_compare_data_freshness(
     freshness: dict[str, Any],
 ) -> None:
     badges = [
+        badge("compare data", "info"),
         badge(f"source {freshness.get('source_label', 'n/a')}", "info"),
         badge(
             f"{str(freshness.get('timestamp_label') or 'Last Timestamp').lower()} {freshness.get('last_timestamp_text', 'Missing')}",
@@ -1136,38 +1195,75 @@ def _render_live_rule_price_overlay(
     latest_prices: dict[str, float],
     quote_fetched_at: str | None,
 ) -> None:
+    quote_freshness = _build_live_quote_freshness(quote_fetched_at=quote_fetched_at)
     live_price = float(latest_prices.get(str(symbol), 0.0) or 0.0)
     if live_price <= 0:
         st.caption(
             "Live price overlay: market price is unavailable for this symbol right now."
         )
+        _render_live_quote_freshness(freshness=quote_freshness)
         return
 
     buy_gap_percent = ((buy_below - live_price) / live_price) * 100.0
     sell_gap_percent = ((sell_above - live_price) / live_price) * 100.0
     st.caption(
-        "Live price overlay: "
+        "Live quote overlay (separate from compare data): "
         f"price={live_price:,.8f} | "
         f"buy_below={buy_below:,.8f} ({buy_gap_percent:+.2f}%) | "
         f"sell_above={sell_above:,.8f} ({sell_gap_percent:+.2f}%)"
     )
+    _render_live_quote_freshness(freshness=quote_freshness)
 
-    if quote_fetched_at:
-        try:
-            quote_age_seconds = max(
-                0.0,
-                (now_dt() - parse_time_text(str(quote_fetched_at))).total_seconds(),
-            )
-            freshness = "fresh" if quote_age_seconds <= 30.0 else "stale"
-            st.caption(
-                f"Live quote freshness: {freshness} ({quote_age_seconds:.0f}s old)"
-            )
-        except Exception:
-            st.caption(
-                f"Live quote freshness: timestamp unavailable ({quote_fetched_at})"
-            )
-    else:
-        st.caption("Live quote freshness: unavailable.")
+def _build_live_quote_freshness(
+    *,
+    quote_fetched_at: str | None,
+    checked_at: Any | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": "unavailable",
+        "tone": "warn",
+        "age_seconds": None,
+        "detail": "Live quote timestamp is unavailable.",
+    }
+    normalized_timestamp = str(quote_fetched_at or "").strip()
+    if not normalized_timestamp:
+        return payload
+
+    try:
+        checked_dt = checked_at if checked_at is not None else now_dt()
+        quote_age_seconds = max(
+            0.0,
+            (checked_dt - parse_time_text(normalized_timestamp)).total_seconds(),
+        )
+    except Exception:
+        payload["detail"] = f"Live quote timestamp unavailable ({normalized_timestamp})"
+        return payload
+
+    freshness = "fresh" if quote_age_seconds <= 30.0 else "stale"
+    payload["status"] = freshness
+    payload["tone"] = "good" if freshness == "fresh" else "bad"
+    payload["age_seconds"] = quote_age_seconds
+    payload["detail"] = f"Live quote freshness: {freshness} ({quote_age_seconds:.0f}s old)"
+    return payload
+
+
+def _render_live_quote_freshness(*, freshness: dict[str, Any]) -> None:
+    age_seconds = freshness.get("age_seconds")
+    age_text = (
+        f"{float(age_seconds):.0f}s old"
+        if isinstance(age_seconds, (int, float))
+        else "age unavailable"
+    )
+    badges = [
+        badge("live quote", "info"),
+        badge(
+            f"quote freshness {str(freshness.get('status') or 'unavailable')}",
+            str(freshness.get("tone") or "info"),
+        ),
+        badge(age_text, "info"),
+    ]
+    st.markdown(" ".join(badges), unsafe_allow_html=True)
+    st.caption(str(freshness.get("detail") or "Live quote timestamp is unavailable."))
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -1421,7 +1517,14 @@ def render_strategy_page(
         for symbol, price in dict(latest_prices or {}).items()
         if str(symbol)
     }
-    open_execution_orders = fetch_open_execution_orders()
+    open_execution_orders: list[dict[str, Any]] | None = None
+
+    def _get_open_execution_orders() -> list[dict[str, Any]]:
+        nonlocal open_execution_orders
+        if open_execution_orders is None:
+            open_execution_orders = fetch_open_execution_orders()
+        return list(open_execution_orders)
+
     render_section_intro(
         "Strategy Lab",
         "Research first, then tighten live rules. Watchlist symbols are your research universe, while config rules remain the live shortlist.",
@@ -2140,7 +2243,17 @@ def render_strategy_page(
                             prune_add_symbols,
                         )
                         linked_state_rows: list[dict[str, Any]] = []
-                        unclear_symbols: list[str] = []
+                        hard_blocked_symbols: list[str] = []
+                        soft_warning_rows: list[dict[str, Any]] = []
+                        prune_state_context = (
+                            build_symbol_operational_state_context(
+                                account_snapshot=private_ctx.get("account_snapshot"),
+                                latest_prices=latest_prices,
+                                execution_orders=_get_open_execution_orders(),
+                            )
+                            if effective_prune_selection
+                            else None
+                        )
                         for symbol in effective_prune_selection:
                             state = build_symbol_operational_state(
                                 symbol=symbol,
@@ -2148,14 +2261,11 @@ def render_strategy_page(
                                 account_snapshot=private_ctx.get("account_snapshot"),
                                 latest_prices=latest_prices,
                                 runtime=runtime,
-                                execution_orders=open_execution_orders,
+                                execution_orders=_get_open_execution_orders(),
+                                precomputed_context=prune_state_context,
                             )
-                            if (
-                                state["open_buy_count"]
-                                or state["open_sell_count"]
-                                or state["reserved_thb"] > 0
-                                or state["reserved_coin"] > 0
-                            ):
+                            assessment = _build_prune_symbol_assessment(state)
+                            if assessment["has_linked_state"]:
                                 linked_state_rows.append(
                                     {
                                         "symbol": symbol,
@@ -2166,23 +2276,35 @@ def render_strategy_page(
                                         "partial_fill": "YES" if state["partial_fill"] else "NO",
                                     }
                                 )
-                            if state["review_required"]:
-                                unclear_symbols.append(symbol)
+                            if assessment["hard_block_reasons"]:
+                                hard_blocked_symbols.append(symbol)
+                            elif assessment["soft_warning_reasons"]:
+                                soft_warning_rows.append(
+                                    {
+                                        "symbol": symbol,
+                                        "warning": "; ".join(assessment["soft_warning_reasons"]),
+                                    }
+                                )
 
                         if linked_state_rows:
                             st.dataframe(linked_state_rows, width='stretch', hide_index=True)
                             st.caption(
-                                "Linked live orders exist for the selected symbol(s). Choose a safe action below; review is required if any order state is unclear."
+                                "Linked live orders or reserved balances exist for the selected symbol(s). Choose a safe action below."
                             )
+                        if soft_warning_rows:
+                            st.warning(
+                                "Exchange open-order coverage is partial or unclear for some selected symbols, but they remain prune-ready when no symbol-specific blockers exist."
+                            )
+                            st.dataframe(soft_warning_rows, width='stretch', hide_index=True)
 
                         prune_action_options = ["Prune rule only"]
-                        if linked_state_rows and not unclear_symbols:
+                        if linked_state_rows and not hard_blocked_symbols:
                             prune_action_options = [
                                 "Prune rule only",
                                 "Cancel linked orders and prune",
                                 "Review in Live Ops",
                             ]
-                        elif linked_state_rows and unclear_symbols:
+                        elif hard_blocked_symbols:
                             prune_action_options = ["Review in Live Ops"]
 
                         if prune_action_key not in st.session_state:
@@ -2214,10 +2336,10 @@ def render_strategy_page(
                             st.warning("Select at least one symbol before pruning live rules.")
                         elif prune_action == "Review in Live Ops":
                             _open_live_ops_for_symbol(symbol=effective_prune_selection[0])
-                        elif linked_state_rows and unclear_symbols:
+                        elif hard_blocked_symbols:
                             st.error(
-                                "Order state is unclear for: "
-                                + ", ".join(sorted(set(unclear_symbols)))
+                                "Prune is blocked for: "
+                                + ", ".join(sorted(set(hard_blocked_symbols)))
                                 + ". Review in Live Ops before pruning."
                             )
                         elif prune_action == "Cancel linked orders and prune":
@@ -2232,7 +2354,7 @@ def render_strategy_page(
                                     ambiguous_symbols: list[str] = []
                                     error_lines: list[str] = []
                                     selection_set = set(effective_prune_selection)
-                                    for order in open_execution_orders:
+                                    for order in _get_open_execution_orders():
                                         if str(order.get("symbol")) not in selection_set:
                                             continue
                                         try:
@@ -2354,7 +2476,7 @@ def render_strategy_page(
                     private_ctx=private_ctx,
                     latest_prices=latest_prices,
                     runtime=runtime,
-                    open_execution_orders=open_execution_orders,
+                    open_execution_orders=_get_open_execution_orders(),
                     title="Symbol Operational State",
                     kicker="State",
                 )
@@ -2680,7 +2802,7 @@ def render_strategy_page(
                         private_ctx=private_ctx,
                         latest_prices=latest_prices,
                         runtime=runtime,
-                        open_execution_orders=open_execution_orders,
+                        open_execution_orders=_get_open_execution_orders(),
                         title="Symbol Operational State",
                         kicker="State",
                     )

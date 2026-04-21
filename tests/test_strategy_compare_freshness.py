@@ -153,6 +153,21 @@ class StrategyCompareFreshnessTests(unittest.TestCase):
         self.assertEqual(aging["status"], "Aging")
         self.assertEqual(stale["status"], "Stale")
 
+    def test_live_quote_freshness_classifies_fresh_stale_and_unavailable(self) -> None:
+        checked_at = parse_time_text("2026-04-20 12:00:00")
+        with patch.object(pages, "now_dt", return_value=checked_at):
+            fresh = pages._build_live_quote_freshness(
+                quote_fetched_at="2026-04-20 11:59:45"
+            )
+            stale = pages._build_live_quote_freshness(
+                quote_fetched_at="2026-04-20 11:58:00"
+            )
+            unavailable = pages._build_live_quote_freshness(quote_fetched_at=None)
+
+        self.assertEqual(fresh["status"], "fresh")
+        self.assertEqual(stale["status"], "stale")
+        self.assertEqual(unavailable["status"], "unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()

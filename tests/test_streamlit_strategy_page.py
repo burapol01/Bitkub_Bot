@@ -632,6 +632,7 @@ class StrategyPageAppTests(unittest.TestCase):
         script = _app_script(
             workspace="Compare",
             latest_prices={"THB_TRX": 10.5},
+            quote_fetched_at="2026-04-19 10:00:10",
             body=f"""
             COMPARE_ROWS = json.loads({_json_string(_compare_rows())})
             COMPARE_VARIANTS = json.loads({_json_string([{"variant": row["variant"], "rule": row["rule"]} for row in _compare_rows()])})
@@ -656,7 +657,10 @@ class StrategyPageAppTests(unittest.TestCase):
 
         self.assertEqual(len(at.exception), 0)
         rendered = "\n".join(str(caption.value) for caption in at.caption)
-        self.assertIn("Live price overlay: price=10.50000000", rendered)
+        markdown_rendered = "\n".join(str(markdown.value) for markdown in at.markdown)
+        self.assertIn("Live quote overlay (separate from compare data): price=10.50000000", rendered)
+        self.assertIn("live quote", markdown_rendered)
+        self.assertIn("quote freshness fresh", markdown_rendered)
 
     def test_compare_shows_freshness_source_and_last_candle_timestamp(self) -> None:
         fresh_rows = json.loads(json.dumps(_compare_rows()))
@@ -694,6 +698,7 @@ class StrategyPageAppTests(unittest.TestCase):
 
         self.assertEqual(len(at.exception), 0)
         rendered = "\n".join(str(markdown.value) for markdown in at.markdown)
+        self.assertIn("compare data", rendered)
         self.assertIn("source Candles", rendered)
         self.assertIn("last candle timestamp 2026-04-20 00:00:00", rendered)
         self.assertIn("freshness Fresh", rendered)
@@ -964,6 +969,7 @@ class StrategyPageAppTests(unittest.TestCase):
             pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
             pages.build_live_rule_tuning_rows = lambda **kwargs: TUNING_ROWS
             pages.fetch_open_execution_orders = lambda: [{{"symbol": "THB_SUMX", "side": "buy", "state": "open", "request_payload": {{"amt": 100.0}}}}]
+            pages.build_symbol_operational_state_context = lambda **kwargs: {{"execution_orders": kwargs.get("execution_orders", []), "holdings_rows": [], "findings": {{}}, "exchange_open_orders_by_symbol": {{}}}}
             pages.insert_runtime_event = lambda **kwargs: None
             pages._build_auto_entry_review_report = lambda limit=40: AUTO_ENTRY_REPORT
             pages.build_symbol_operational_state = lambda **kwargs: (
@@ -1046,6 +1052,7 @@ class StrategyPageAppTests(unittest.TestCase):
             pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
             pages.build_live_rule_tuning_rows = lambda **kwargs: TUNING_ROWS
             pages.fetch_open_execution_orders = lambda: [{{"id": 9, "symbol": "THB_SUMX", "side": "buy", "state": "open", "request_payload": {{"amt": 100.0}}}}]
+            pages.build_symbol_operational_state_context = lambda **kwargs: {{"execution_orders": kwargs.get("execution_orders", []), "holdings_rows": [], "findings": {{}}, "exchange_open_orders_by_symbol": {{}}}}
             pages.insert_runtime_event = lambda **kwargs: None
             pages._build_auto_entry_review_report = lambda limit=40: AUTO_ENTRY_REPORT
 
@@ -1124,6 +1131,65 @@ class StrategyPageAppTests(unittest.TestCase):
         self.assertNotIn("prune_saved", at.session_state)
         self.assertEqual(at.session_state["ui_page_autorun"], "Live Ops")
         self.assertEqual(at.session_state["live_ops_focus_symbol"], "THB_SUMX")
+
+    def test_live_tuning_prune_keeps_soft_coverage_warning_prune_ready(self) -> None:
+        script = _app_script(
+            workspace="Live Tuning",
+            body=f"""
+            RANKING_PAYLOAD = {{"rows": [], "coverage": [], "errors": []}}
+            TUNING_ROWS = json.loads({_json_string(_tuning_rows())})
+            AUTO_ENTRY_REPORT = {{
+                "events": [],
+                "latest_context": {{}},
+                "rejection_summary": [],
+                "symbol_reject_summary": [],
+                "symbol_candidate_summary": [],
+                "top_candidates": [],
+            }}
+
+            pages._cached_coin_ranking = lambda **kwargs: RANKING_PAYLOAD
+            pages.build_live_rule_tuning_rows = lambda **kwargs: TUNING_ROWS
+            pages.fetch_open_execution_orders = lambda: []
+            pages.build_symbol_operational_state_context = lambda **kwargs: {{"execution_orders": kwargs.get("execution_orders", []), "holdings_rows": [], "findings": {{}}, "exchange_open_orders_by_symbol": {{}}}}
+            pages.insert_runtime_event = lambda **kwargs: None
+            pages._build_auto_entry_review_report = lambda limit=40: AUTO_ENTRY_REPORT
+            pages.build_symbol_operational_state = lambda **kwargs: {{
+                "symbol": str(kwargs["symbol"]),
+                "state_summary": "open buy 0 | open sell 0 | reserved THB 0.00 | reserved coin 0.00000000",
+                "risk_summary": "entry clear | exit clear",
+                "available_coin": 0.0,
+                "reserved_coin": 0.0,
+                "reserved_thb": 0.0,
+                "open_buy_count": 0,
+                "open_sell_count": 0,
+                "partial_fill": False,
+                "entry_blocked": False,
+                "exit_blocked": False,
+                "entry_block_reasons": [],
+                "exit_block_reasons": [],
+                "review_required": True,
+                "review_reasons": ["exchange open-orders coverage is partial"],
+                "recent_guardrail_block": None,
+                "holdings_row": {{}},
+                "exchange_open_order_count": 0,
+                "exchange_open_orders": [],
+                "local_open_orders": [],
+                "findings": {{}},
+                "symbol_findings": {{}},
+            }}
+            """,
+        )
+
+        at = AppTest.from_string(script)
+        at.run(timeout=20)
+
+        at.multiselect(key="strategy_prune_live_rules_selection").set_value(["THB_FF"])
+        at.run(timeout=20)
+
+        prune_action = at.radio(key="strategy_prune_live_rules_action")
+        self.assertEqual(list(prune_action.options), ["Prune rule only"])
+        self.assertNotIn("Review in Live Ops", str(prune_action.options))
+        self.assertIn("Exchange open-order coverage is partial or unclear", "\n".join(str(alert.value) for alert in at.warning))
 
 
 if __name__ == "__main__":
