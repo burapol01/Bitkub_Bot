@@ -1888,6 +1888,9 @@ def render_strategy_page(
                 st.caption("No extra watchlist symbols are currently strong enough to promote.")
 
     if should_show_tuning:
+        _tuning_decision_context = st.session_state.pop("strategy_decision_context", None)
+        if _tuning_decision_context:
+            render_callout("From Decisions", _tuning_decision_context, "info")
         st.markdown('<div class="panel-title">Live Rule Tuning</div>', unsafe_allow_html=True)
         st.caption(
             "This section scores the current live rules against the active auto-entry gate and a candle replay using the same lookback window. "
@@ -2264,9 +2267,6 @@ def render_strategy_page(
                     key="strategy_tuning_focus_symbol",
                 )
                 focus_row = next(row for row in tuning_rows if row["symbol"] == focus_symbol)
-                _tuning_decision_context = st.session_state.pop("strategy_decision_context", None)
-                if _tuning_decision_context:
-                    render_callout("From Decisions", _tuning_decision_context, "info")
                 st.markdown("**── Review ──**")
                 _render_symbol_operational_state(
                     symbol=str(focus_row["symbol"]),
@@ -2351,8 +2351,6 @@ def render_strategy_page(
             "Compare Lab",
         )
         _decision_context = st.session_state.pop("strategy_decision_context", None)
-        if _decision_context:
-            render_callout("From Decisions", _decision_context, "info")
 
         compare_symbol_options = configured_symbols or symbols
         compare_source_options = ["candles", "snapshots"]
@@ -2383,11 +2381,17 @@ def render_strategy_page(
                 st.session_state[compare_resolution_input_key] = autorun_resolution
             st.session_state[compare_days_key] = min(max(int(autorun_days), 1), 90)
             st.session_state[compare_days_input_key] = st.session_state[compare_days_key]
-            render_callout(
-                "Pre-filled from Live Rules",
-                f"{autorun_symbol}  ·  {autorun_source}  ·  resolution {autorun_resolution}  ·  {autorun_days}d lookback. You can change any setting below before running.",
-                "info",
-            )
+            prefill_line = f"Pre-filled: {autorun_symbol}  ·  {autorun_source}  ·  resolution {autorun_resolution}  ·  {autorun_days}d lookback. You can change any setting below before running."
+            if _decision_context:
+                render_callout(
+                    "From Decisions",
+                    f"{_decision_context}<br><br>{prefill_line}",
+                    "info",
+                )
+            else:
+                render_callout("Pre-filled from Live Rules", prefill_line, "info")
+        elif _decision_context:
+            render_callout("From Decisions", _decision_context, "info")
 
         current_symbol = st.session_state.get(compare_symbol_key)
         current_input = st.session_state.get(compare_symbol_input_key)
