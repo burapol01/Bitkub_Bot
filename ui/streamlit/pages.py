@@ -872,6 +872,10 @@ def _render_strategy_decision_queue(
                 help="Pre-fills the symbol list in Sync & Rank and switches to that tab. You will still need to click Sync Selected Symbols to execute.",
             ):
                 st.session_state["strategy_queue_sync_symbols"] = stale_symbols
+                st.session_state["strategy_decision_context"] = (
+                    f"Batch sync queued for {len(stale_symbols)} symbol(s) flagged as Sync First. "
+                    "Click Sync Selected Symbols below to execute."
+                )
                 queue_strategy_workspace_navigation(workspace="Sync & Rank")
                 st.rerun()
         else:
@@ -1660,6 +1664,9 @@ def render_strategy_page(
         )
 
     if should_show_ranking:
+        _ranking_decision_context = st.session_state.pop("strategy_decision_context", None)
+        if _ranking_decision_context:
+            render_callout("From Decisions", _ranking_decision_context, "info")
         st.markdown('<div class="panel-title">Candle Sync & Coin Ranking</div>', unsafe_allow_html=True)
         st.caption(
             "Sync TradingView history into SQLite first, then rank coins by recent momentum, range position, stability, and average volume."
