@@ -1538,6 +1538,11 @@ def render_strategy_page(
     strategy_decision_rows: list[dict[str, Any]] = []
 
     if should_show_overview:
+        render_section_intro(
+            "Overview",
+            "Lightweight summary of actual paper-trade results. Read-only — use this to check realized performance before diving into rules or variants.",
+            "Overview",
+        )
         analytics = _cached_trade_analytics()
         totals = analytics["totals"]
 
@@ -1696,9 +1701,10 @@ def render_strategy_page(
         _ranking_decision_context = st.session_state.pop("strategy_decision_context", None)
         if _ranking_decision_context:
             render_callout("From Decisions", _ranking_decision_context, "info")
-        st.markdown('<div class="panel-title">Candle Sync & Coin Ranking</div>', unsafe_allow_html=True)
-        st.caption(
-            "Sync TradingView history into SQLite first, then rank coins by recent momentum, range position, stability, and average volume."
+        render_section_intro(
+            "Sync & Rank",
+            "Sync TradingView history into SQLite first, then rank coins by recent momentum, range position, stability, and average volume.",
+            "Sync & Rank",
         )
 
         if market_universe.get("error"):
