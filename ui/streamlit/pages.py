@@ -898,6 +898,7 @@ def _render_strategy_decision_queue(
             with qcol1:
                 if st.button("Open next promote-ready", key="decision_queue_open_promote_btn", type="primary"):
                     queue_strategy_workspace_navigation(workspace="Compare", symbol=promote_symbols[0])
+                    st.session_state["strategy_decision_context"] = str(promote_rows[0].get("action_reason") or "")
                     st.rerun()
             with qcol2:
                 selected_promote = st.selectbox(
@@ -907,7 +908,9 @@ def _render_strategy_decision_queue(
                     label_visibility="collapsed",
                 )
                 if st.button("Open compare", key="decision_queue_open_promote_compare_btn"):
-                    queue_strategy_workspace_navigation(workspace="Compare", symbol=str(selected_promote or promote_symbols[0]))
+                    target_promote = str(selected_promote or promote_symbols[0])
+                    queue_strategy_workspace_navigation(workspace="Compare", symbol=target_promote)
+                    st.session_state["strategy_decision_context"] = str(promote_by_symbol.get(target_promote, {}).get("action_reason") or "")
                     st.rerun()
         else:
             st.caption("No promote-ready symbols yet.")
@@ -945,6 +948,7 @@ def _render_strategy_decision_queue(
             with qcol3:
                 if st.button("Open next prune candidate", key="decision_queue_open_prune_btn"):
                     queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=prune_symbols[0])
+                    st.session_state["strategy_decision_context"] = str(prune_rows[0].get("action_reason") or "")
                     st.rerun()
             with qcol4:
                 selected_prune = st.selectbox(
@@ -954,7 +958,9 @@ def _render_strategy_decision_queue(
                     label_visibility="collapsed",
                 )
                 if st.button("Open live tuning", key="decision_queue_open_prune_tuning_btn"):
-                    queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=str(selected_prune or prune_symbols[0]))
+                    target_prune = str(selected_prune or prune_symbols[0])
+                    queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=target_prune)
+                    st.session_state["strategy_decision_context"] = str(prune_by_symbol.get(target_prune, {}).get("action_reason") or "")
                     st.rerun()
         else:
             st.caption("No prune candidates right now.")
@@ -1469,18 +1475,18 @@ def render_strategy_page(
         key="strategy_workspace",
         format_func=lambda w: _workspace_display_names.get(w, w),
     )
-    render_callout(
-        "Workspace Focus",
-        {
-            "Decisions": "Central action hub — see which symbols need sync, are ready to promote, or should be pruned. Click through to the right workspace from here.",
-            "Sync & Rank": "Sync candles, inspect ranking, and decide which symbols deserve live attention.",
-            "Live Tuning": "Review live rules, fee guardrails, and auto-entry report. Use this when a symbol needs a prune decision.",
-            "Compare": "Run variants for one live symbol and apply the winner back to config. Nothing changes until you click Apply.",
-            "Replay": "Manual deep-dive for a single symbol with its own replay controls and coverage. Read-only.",
-            "Overview": "Lightweight summary of actual paper-trade results. Read-only.",
-        }[strategy_workspace],
-        "info",
-    )
+    if strategy_workspace != "Decisions":
+        render_callout(
+            "Workspace Focus",
+            {
+                "Sync & Rank": "Sync candles, inspect ranking, and decide which symbols deserve live attention.",
+                "Live Tuning": "Review live rules, fee guardrails, and auto-entry report. Use this when a symbol needs a prune decision.",
+                "Compare": "Run variants for one live symbol and apply the winner back to config. Nothing changes until you click Apply.",
+                "Replay": "Manual deep-dive for a single symbol with its own replay controls and coverage. Read-only.",
+                "Overview": "Lightweight summary of actual paper-trade results. Read-only.",
+            }[strategy_workspace],
+            "info",
+        )
 
     should_show_overview = strategy_workspace == "Overview"
     should_show_decisions = strategy_workspace == "Decisions"
@@ -1635,10 +1641,6 @@ def render_strategy_page(
                         "symbol": row["symbol"],
                         "live_rule": row["in_live_rules"],
                         "freshness": row["freshness_status"],
-                        "last_candle_used": row["last_candle_used"],
-                        "best_candidate": row["best_candidate"],
-                        "compare_verdict": row["compare_verdict"],
-                        "strength": row["strength"],
                         "recommended_action": row["recommended_action"],
                         "action_reason": row["action_reason"],
                     }
@@ -2262,6 +2264,9 @@ def render_strategy_page(
                     key="strategy_tuning_focus_symbol",
                 )
                 focus_row = next(row for row in tuning_rows if row["symbol"] == focus_symbol)
+                _tuning_decision_context = st.session_state.pop("strategy_decision_context", None)
+                if _tuning_decision_context:
+                    render_callout("From Decisions", _tuning_decision_context, "info")
                 st.markdown("**── Review ──**")
                 _render_symbol_operational_state(
                     symbol=str(focus_row["symbol"]),
@@ -2345,6 +2350,9 @@ def render_strategy_page(
             "Run parameter variants for one live symbol and compare them against the current baseline. Nothing changes until you click Apply to Live Config.",
             "Compare Lab",
         )
+        _decision_context = st.session_state.pop("strategy_decision_context", None)
+        if _decision_context:
+            render_callout("From Decisions", _decision_context, "info")
 
         compare_symbol_options = configured_symbols or symbols
         compare_source_options = ["candles", "snapshots"]
