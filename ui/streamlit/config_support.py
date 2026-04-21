@@ -15,7 +15,7 @@ from services.audit_service import audit_config_change
 from services.db_service import fetch_open_execution_orders
 from services.telegram_service import DEFAULT_TELEGRAM_NOTIFY_EVENTS
 from ui.streamlit.strategy_support import build_rule_seed, fetch_market_symbol_universe
-from ui.streamlit.styles import badge, render_metric_card
+from ui.streamlit.styles import badge, render_metric_card, render_section_intro
 
 
 def _sync_form_defaults(*, prefix: str, values: dict[str, Any]) -> None:
@@ -130,7 +130,11 @@ def save_config_with_feedback(
 
 
 def render_config_page(*, config: dict[str, Any]) -> None:
-    st.markdown('<div class="panel-title">Config Editor</div>', unsafe_allow_html=True)
+    render_section_intro(
+        "Config Editor",
+        "Edit live rules, watchlist, and live controls here. Changes save to the active override file — the engine still needs a reload to apply them.",
+        "Config",
+    )
     if CONFIG_BASE_PATH.exists() and CONFIG_BASE_PATH != CONFIG_PATH:
         st.caption(
             f"Merged config: base=`{CONFIG_BASE_PATH}` + override=`{CONFIG_PATH}`"
