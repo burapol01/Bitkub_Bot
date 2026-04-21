@@ -23,9 +23,9 @@ def queue_strategy_workspace_navigation(*, workspace: str, symbol: str | None = 
 
     normalized_symbol = str(symbol)
     st.session_state["strategy_workspace_focus_symbol"] = normalized_symbol
-    if normalized_workspace == "Compare":
+    if normalized_workspace == "Compare Lab":
         st.session_state["strategy_compare_symbol_autorun"] = normalized_symbol
         st.session_state.pop("strategy_tuning_focus_symbol_autorun", None)
-    elif normalized_workspace == "Live Tuning":
+    elif normalized_workspace == "Live Rules":
         st.session_state["strategy_tuning_focus_symbol_autorun"] = normalized_symbol
         st.session_state.pop("strategy_compare_symbol_autorun", None)
