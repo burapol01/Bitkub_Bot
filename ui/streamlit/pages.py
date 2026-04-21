@@ -314,29 +314,30 @@ def _build_prune_symbol_assessment(state: dict[str, Any]) -> dict[str, Any]:
     reserved_thb = float(state.get("reserved_thb", 0.0) or 0.0)
     reserved_coin = float(state.get("reserved_coin", 0.0) or 0.0)
     partial_fill = bool(state.get("partial_fill"))
-    if open_buy_count > 0:
-        hard_block_reasons.append(f"{open_buy_count} open buy order(s) exist")
-    if open_sell_count > 0:
-        hard_block_reasons.append(f"{open_sell_count} open sell order(s) exist")
-    if reserved_thb > 0:
-        hard_block_reasons.append(f"reserved THB {reserved_thb:,.2f} is still linked")
-    if reserved_coin > 0:
-        hard_block_reasons.append(
-            f"reserved coin {reserved_coin:,.8f} is still linked"
-        )
+    # Open orders and reserved balances are linked state (manageable via "Cancel linked orders
+    # and prune") — not hard blocks on their own.  Only partial fills and hard review reasons
+    # (ambiguous/unclear state) block outright.
+    # Exception: soft review reasons escalate to a hard block when linked state exists, because
+    # partial exchange-order coverage means we cannot safely enumerate orders to cancel.
+    has_linked_state = bool(
+        open_buy_count > 0
+        or open_sell_count > 0
+        or reserved_thb > 0
+        or reserved_coin > 0
+        or partial_fill
+    )
     if partial_fill:
         hard_block_reasons.append("partial fill is still unresolved")
     hard_block_reasons.extend(hard_review_reasons)
+    if has_linked_state and soft_warning_reasons:
+        hard_block_reasons.extend(soft_warning_reasons)
+        effective_soft_warnings: list[str] = []
+    else:
+        effective_soft_warnings = soft_warning_reasons
     return {
         "hard_block_reasons": hard_block_reasons,
-        "soft_warning_reasons": soft_warning_reasons,
-        "has_linked_state": bool(
-            open_buy_count > 0
-            or open_sell_count > 0
-            or reserved_thb > 0
-            or reserved_coin > 0
-            or partial_fill
-        ),
+        "soft_warning_reasons": effective_soft_warnings,
+        "has_linked_state": has_linked_state,
     }
 
 
