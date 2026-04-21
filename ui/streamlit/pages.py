@@ -813,13 +813,26 @@ def _group_strategy_decision_queue(
     return groups
 
 
-def _record_decision_review(symbol: str, action: str) -> None:
+def _record_decision_review(symbol: str, action: str, *, was_in_rules: bool) -> None:
     sym = str(symbol or "").strip()
     if not sym:
         return
     ledger = st.session_state.setdefault("strategy_decision_reviewed_ledger", {})
     ledger.pop(sym, None)
-    ledger[sym] = str(action)
+    ledger[sym] = {"action": str(action), "was_in_rules": bool(was_in_rules)}
+
+
+def _decision_review_status(entry: Any, sym: str, current_rule_symbols: set[str]) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    action = str(entry.get("action") or "")
+    was_in_rules = bool(entry.get("was_in_rules"))
+    now_in_rules = sym in current_rule_symbols
+    if action == "Compare" and not was_in_rules and now_in_rules:
+        return "Done (promoted)"
+    if action == "Live Tuning" and was_in_rules and not now_in_rules:
+        return "Done (pruned)"
+    return ""
 
 
 def _render_strategy_decision_queue(
@@ -827,6 +840,7 @@ def _render_strategy_decision_queue(
     *,
     decision_resolution: str,
     decision_days: int,
+    current_rule_symbols: set[str],
 ) -> None:
     render_section_intro(
         "Decision Queue",
@@ -912,7 +926,11 @@ def _render_strategy_decision_queue(
                 if st.button("Open next promote-ready", key="decision_queue_open_promote_btn", type="primary"):
                     queue_strategy_workspace_navigation(workspace="Compare", symbol=promote_symbols[0])
                     st.session_state["strategy_decision_context"] = str(promote_rows[0].get("action_reason") or "")
-                    _record_decision_review(promote_symbols[0], "Compare")
+                    _record_decision_review(
+                        promote_symbols[0],
+                        "Compare",
+                        was_in_rules=promote_symbols[0] in current_rule_symbols,
+                    )
                     st.rerun()
             with qcol2:
                 selected_promote = st.selectbox(
@@ -925,7 +943,11 @@ def _render_strategy_decision_queue(
                     target_promote = str(selected_promote or promote_symbols[0])
                     queue_strategy_workspace_navigation(workspace="Compare", symbol=target_promote)
                     st.session_state["strategy_decision_context"] = str(promote_by_symbol.get(target_promote, {}).get("action_reason") or "")
-                    _record_decision_review(target_promote, "Compare")
+                    _record_decision_review(
+                        target_promote,
+                        "Compare",
+                        was_in_rules=target_promote in current_rule_symbols,
+                    )
                     st.rerun()
         else:
             st.caption("No promote-ready symbols yet.")
@@ -964,7 +986,11 @@ def _render_strategy_decision_queue(
                 if st.button("Open next prune candidate", key="decision_queue_open_prune_btn"):
                     queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=prune_symbols[0])
                     st.session_state["strategy_decision_context"] = str(prune_rows[0].get("action_reason") or "")
-                    _record_decision_review(prune_symbols[0], "Live Tuning")
+                    _record_decision_review(
+                        prune_symbols[0],
+                        "Live Tuning",
+                        was_in_rules=prune_symbols[0] in current_rule_symbols,
+                    )
                     st.rerun()
             with qcol4:
                 selected_prune = st.selectbox(
@@ -977,7 +1003,11 @@ def _render_strategy_decision_queue(
                     target_prune = str(selected_prune or prune_symbols[0])
                     queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=target_prune)
                     st.session_state["strategy_decision_context"] = str(prune_by_symbol.get(target_prune, {}).get("action_reason") or "")
-                    _record_decision_review(target_prune, "Live Tuning")
+                    _record_decision_review(
+                        target_prune,
+                        "Live Tuning",
+                        was_in_rules=target_prune in current_rule_symbols,
+                    )
                     st.rerun()
         else:
             st.caption("No prune candidates right now.")
@@ -1617,10 +1647,17 @@ def render_strategy_page(
             session_state=st.session_state,
         )
 
+        _current_rule_symbols = set(config.get("rules", {}).keys())
         _reviewed_ledger = dict(st.session_state.get("strategy_decision_reviewed_ledger") or {})
         if _reviewed_ledger:
             recent_items = list(_reviewed_ledger.items())[-5:]
-            reviewed_line = "  ·  ".join(f"{sym} → {action}" for sym, action in reversed(recent_items))
+            display_parts: list[str] = []
+            for sym, entry in reversed(recent_items):
+                action = entry.get("action", "") if isinstance(entry, dict) else str(entry)
+                status = _decision_review_status(entry, sym, _current_rule_symbols)
+                suffix = f" · {status}" if status else ""
+                display_parts.append(f"{sym} → {action}{suffix}")
+            reviewed_line = "  ·  ".join(display_parts)
             ledger_col, clear_col = st.columns([0.85, 0.15])
             with ledger_col:
                 render_callout(
@@ -1695,6 +1732,7 @@ def render_strategy_page(
             sorted_decision_rows,
             decision_resolution=decision_summary_resolution,
             decision_days=decision_summary_days,
+            current_rule_symbols=_current_rule_symbols,
         )
 
     if should_show_ranking:
