@@ -689,11 +689,11 @@ def _build_strategy_action_preview(row: dict[str, Any]) -> dict[str, Any]:
     if action == "Prune candidate":
         prune_grade = _classify_prune_strength(row)
     suggested_page = {
-        "Promote": "Compare",
-        "Prune candidate": "Live Tuning",
+        "Promote": "Compare Lab",
+        "Prune candidate": "Live Rules",
         "Sync first": "Sync & Rank",
-        "Keep": "Compare",
-    }.get(action, "Compare")
+        "Keep": "Compare Lab",
+    }.get(action, "Compare Lab")
     return {
         "type": "single",
         "symbol": str(row.get("symbol") or ""),
@@ -866,9 +866,10 @@ def _render_strategy_decision_queue(
                 )
             )
             if st.button(
-                f"Sync all stale / missing  ({len(stale_symbols)})",
+                f"Sync These Now — {len(stale_symbols)} symbol(s)",
                 key="decision_queue_sync_all_btn",
                 type="primary",
+                help="Pre-fills the symbol list in Sync & Rank and switches to that tab. You will still need to click Sync Selected Symbols to execute.",
             ):
                 st.session_state["strategy_queue_sync_symbols"] = stale_symbols
                 queue_strategy_workspace_navigation(workspace="Sync & Rank")
@@ -895,8 +896,8 @@ def _render_strategy_decision_queue(
                 )
             qcol1, qcol2 = st.columns([1, 1])
             with qcol1:
-                if st.button("Open next promote-ready", key="decision_queue_open_promote_btn", type="primary"):
-                    queue_strategy_workspace_navigation(workspace="Compare", symbol=promote_symbols[0])
+                if st.button("View next in Compare Lab →", key="decision_queue_open_promote_btn", type="primary"):
+                    queue_strategy_workspace_navigation(workspace="Compare Lab", symbol=promote_symbols[0])
                     st.rerun()
             with qcol2:
                 selected_promote = st.selectbox(
@@ -905,8 +906,8 @@ def _render_strategy_decision_queue(
                     key="decision_queue_promote_select",
                     label_visibility="collapsed",
                 )
-                if st.button("Open compare", key="decision_queue_open_promote_compare_btn"):
-                    queue_strategy_workspace_navigation(workspace="Compare", symbol=str(selected_promote or promote_symbols[0]))
+                if st.button("View in Compare Lab →", key="decision_queue_open_promote_compare_btn"):
+                    queue_strategy_workspace_navigation(workspace="Compare Lab", symbol=str(selected_promote or promote_symbols[0]))
                     st.rerun()
         else:
             st.caption("No promote-ready symbols yet.")
@@ -942,8 +943,8 @@ def _render_strategy_decision_queue(
                 )
             qcol3, qcol4 = st.columns([1, 1])
             with qcol3:
-                if st.button("Open next prune candidate", key="decision_queue_open_prune_btn"):
-                    queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=prune_symbols[0])
+                if st.button("View next in Live Rules ←", key="decision_queue_open_prune_btn"):
+                    queue_strategy_workspace_navigation(workspace="Live Rules", symbol=prune_symbols[0])
                     st.rerun()
             with qcol4:
                 selected_prune = st.selectbox(
@@ -952,8 +953,8 @@ def _render_strategy_decision_queue(
                     key="decision_queue_prune_select",
                     label_visibility="collapsed",
                 )
-                if st.button("Open live tuning", key="decision_queue_open_prune_tuning_btn"):
-                    queue_strategy_workspace_navigation(workspace="Live Tuning", symbol=str(selected_prune or prune_symbols[0]))
+                if st.button("View in Live Rules ←", key="decision_queue_open_prune_tuning_btn"):
+                    queue_strategy_workspace_navigation(workspace="Live Rules", symbol=str(selected_prune or prune_symbols[0]))
                     st.rerun()
         else:
             st.caption("No prune candidates right now.")
@@ -1414,11 +1415,11 @@ def render_strategy_page(
     } or {"bullish", "mixed"}
 
     strategy_workspace_options = [
-        "Overview",
         "Sync & Rank",
-        "Live Tuning",
-        "Compare",
-        "Replay",
+        "Live Rules",
+        "Compare Lab",
+        "Replay Lab",
+        "Analytics",
     ]
     workspace_autorun = st.session_state.pop("strategy_workspace_autorun", None)
     queued_compare_symbol = st.session_state.pop("strategy_compare_symbol_autorun", None)
@@ -1431,7 +1432,7 @@ def render_strategy_page(
 
     queued_compare_target = str(queued_compare_symbol or workspace_focus_symbol or "").strip()
     if (
-        default_strategy_workspace == "Compare"
+        default_strategy_workspace == "Compare Lab"
         and queued_compare_target
         and queued_compare_target in configured_symbols
     ):
@@ -1442,7 +1443,7 @@ def render_strategy_page(
             "days": ranking_days,
         }
     queued_tuning_target = str(queued_tuning_symbol or workspace_focus_symbol or "").strip()
-    if default_strategy_workspace == "Live Tuning" and queued_tuning_target:
+    if default_strategy_workspace == "Live Rules" and queued_tuning_target:
         st.session_state["strategy_tuning_focus_symbol"] = queued_tuning_target
         st.session_state["strategy_tuning_focus_autorun"] = queued_tuning_target
     if default_strategy_workspace not in strategy_workspace_options:
@@ -1461,24 +1462,24 @@ def render_strategy_page(
     render_callout(
         "Workspace Focus",
         {
-            "Overview": "Lightweight summary of actual paper-trade analytics only.",
             "Sync & Rank": "Sync candles, inspect ranking, and decide which symbols deserve live attention.",
-            "Live Tuning": "Run the expensive live-rule review, fee guardrails, and auto-entry review report only when you are actively tuning.",
-            "Compare": "Compare variants for one live symbol without reloading ranking and tuning matrices.",
-            "Replay": "Manual deep-dive for a single symbol with its own replay controls and coverage.",
+            "Live Rules": "Review live rules, fee guardrails, and auto-entry report. Use this when a symbol needs a prune decision.",
+            "Compare Lab": "Run variants for one live symbol and apply the winner back to config. Nothing changes until you click Apply.",
+            "Replay Lab": "Manual deep-dive for a single symbol with its own replay controls and coverage. Read-only.",
+            "Analytics": "Lightweight summary of actual paper-trade results. Read-only.",
         }[strategy_workspace],
         "info",
     )
 
-    should_show_overview = strategy_workspace == "Overview"
+    should_show_overview = strategy_workspace == "Analytics"
     should_show_ranking = strategy_workspace == "Sync & Rank"
-    should_show_tuning = strategy_workspace == "Live Tuning"
-    should_show_compare = strategy_workspace == "Compare"
-    should_show_replay = strategy_workspace == "Replay"
+    should_show_tuning = strategy_workspace == "Live Rules"
+    should_show_compare = strategy_workspace == "Compare Lab"
+    should_show_replay = strategy_workspace == "Replay Lab"
     should_show_decision_summary = strategy_workspace in {
         "Sync & Rank",
-        "Live Tuning",
-        "Compare",
+        "Live Rules",
+        "Compare Lab",
     }
     should_defer_tuning_ranking = should_show_tuning and bool(queued_tuning_target)
     decision_summary_resolution = str(
@@ -1677,6 +1678,7 @@ def render_strategy_page(
                 watchlist_symbols or configured_symbols or symbols[: min(len(symbols), 10)]
             )
 
+        st.caption("Step 1 — select symbols and resolution below   ·   Step 2 — click Sync Selected Symbols to execute")
         with st.form("strategy_candle_sync_form"):
             sync_col1, sync_col2, sync_col3 = st.columns([0.4, 0.3, 0.3])
             with sync_col1:
@@ -1700,7 +1702,12 @@ def render_strategy_page(
                     value=default_rank_days,
                     step=1,
                 )
-            run_candle_sync = st.form_submit_button("Sync Candles", type="primary", width='stretch')
+            run_candle_sync = st.form_submit_button(
+                "Sync Selected Symbols",
+                type="primary",
+                width='stretch',
+                help="Fetches candle history for every symbol selected above. This writes to the local candle store.",
+            )
 
         if run_candle_sync:
             sync_result = sync_candles_for_symbols(
@@ -1804,8 +1811,9 @@ def render_strategy_page(
                             help="Adds a conservative starter rule for each selected ranked symbol and keeps them in the watchlist.",
                         )
                         submitted_promotions = st.form_submit_button(
-                            "Add Selected Ranked Symbols",
+                            "Promote to Live Rules",
                             width='stretch',
+                            help="Adds a conservative starter rule for each selected symbol and saves to config. This mutates config.",
                         )
                     if submitted_promotions:
                         if not selected_promotions:
@@ -2026,6 +2034,9 @@ def render_strategy_page(
                             help="Leave this off if you still want ranking, replay, and research coverage for the symbol after pruning it from live rules.",
                         )
 
+                        st.divider()
+                        st.markdown("**Choose how to prune**")
+
                         effective_prune_selection = ordered_unique_symbols(
                             [
                                 symbol
@@ -2098,9 +2109,10 @@ def render_strategy_page(
                                 key=prune_cancel_confirm_key,
                             )
                         prune_submitted = st.form_submit_button(
-                            "Continue",
+                            "Confirm Prune",
                             type="primary",
                             width='stretch',
+                            help="Removes the selected symbols from live rules. If cancel orders is chosen, linked open orders are canceled first.",
                         )
 
                     if prune_submitted:
@@ -2284,19 +2296,21 @@ def render_strategy_page(
                 nav_left, nav_right = st.columns(2)
                 with nav_left:
                     if st.button(
-                        "Open Live Ops",
+                        "Go to Live Ops ↗",
                         key=f"tuning_open_live_ops_{focus_row['symbol']}",
                         width='stretch',
+                        help="Navigates away from Strategy to the Live Ops page for this symbol.",
                     ):
                         _open_live_ops_for_symbol(symbol=str(focus_row["symbol"]))
                 with nav_right:
                     if st.button(
-                        "Open Compare",
+                        "View in Compare Lab →",
                         key=f"tuning_open_compare_{focus_row['symbol']}",
                         width='stretch',
+                        help="Switches to the Compare Lab tab and pre-fills this symbol. Nothing changes until you click Apply.",
                     ):
                         _queue_strategy_workspace(
-                            workspace="Compare",
+                            workspace="Compare Lab",
                             symbol=str(focus_row["symbol"]),
                         )
                         st.query_params["page"] = "Strategy"
@@ -2316,9 +2330,9 @@ def render_strategy_page(
 
     if should_show_compare:
         render_section_intro(
-            "Strategy Compare Lab",
-            "Compare a few parameter variants for one live-rule symbol at once, then apply the winner back into config only when it beats the current baseline clearly enough.",
-            "Compare",
+            "Compare Lab",
+            "Run parameter variants for one live symbol and compare them against the current baseline. Nothing changes until you click Apply to Live Config.",
+            "Compare Lab",
         )
 
         compare_symbol_options = configured_symbols or symbols
@@ -2350,6 +2364,11 @@ def render_strategy_page(
                 st.session_state[compare_resolution_input_key] = autorun_resolution
             st.session_state[compare_days_key] = min(max(int(autorun_days), 1), 90)
             st.session_state[compare_days_input_key] = st.session_state[compare_days_key]
+            render_callout(
+                "Pre-filled from Live Rules",
+                f"{autorun_symbol}  ·  {autorun_source}  ·  resolution {autorun_resolution}  ·  {autorun_days}d lookback. You can change any setting below before running.",
+                "info",
+            )
 
         current_symbol = st.session_state.get(compare_symbol_key)
         current_input = st.session_state.get(compare_symbol_input_key)
@@ -2607,19 +2626,21 @@ def render_strategy_page(
                     nav_left, nav_right = st.columns(2)
                     with nav_left:
                         if st.button(
-                            "Open Live Ops",
+                            "Go to Live Ops ↗",
                             key=f"compare_open_live_ops_{compare_payload['symbol']}",
                             width='stretch',
+                            help="Navigates away from Strategy to the Live Ops page for this symbol.",
                         ):
                             _open_live_ops_for_symbol(symbol=str(compare_payload["symbol"]))
                     with nav_right:
                         if st.button(
-                            "Open Live Tuning",
+                            "View in Live Rules ←",
                             key=f"compare_open_live_tuning_{compare_payload['symbol']}",
                             width='stretch',
+                            help="Switches to the Live Rules tab and focuses this symbol. No config change.",
                         ):
                             _queue_strategy_workspace(
-                                workspace="Live Tuning",
+                                workspace="Live Rules",
                                 symbol=str(compare_payload["symbol"]),
                             )
                             st.query_params["page"] = "Strategy"
@@ -2641,8 +2662,10 @@ def render_strategy_page(
                                 "Compare result is using stale or missing source data. Sync candles and rerun Compare before applying a variant."
                             )
                         apply_submitted = st.form_submit_button(
-                            "Apply Compared Variant",
+                            "Apply to Live Config",
+                            type="primary",
                             width='stretch',
+                            help="Writes the selected variant's parameters to config as the new live rule. This mutates config and cannot be undone without re-running Compare.",
                         )
                     if apply_submitted:
                         chosen_rule = dict(compare_payload.get("variant_rules", {}).get(apply_variant) or {})
@@ -2750,8 +2773,8 @@ def render_strategy_page(
     if should_show_replay:
         render_section_intro(
             "Replay Lab",
-            "Use this for manual deep-dive after ranking and compare. Candles are the default; snapshots remain available for the older console-style feed.",
-            "Replay",
+            "Manual deep-dive for a single symbol with your own parameters. Read-only — no config changes from here.",
+            "Replay Lab",
         )
 
         default_symbol = str(st.session_state.get("strategy_replay_symbol", symbols[0]))
