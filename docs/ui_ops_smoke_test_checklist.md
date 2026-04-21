@@ -29,12 +29,13 @@ Use this after UI or operator-flow changes that touch `Strategy`, `Execution Ass
 
 - In `Strategy -> Live Tuning`, choose a `PRUNE` symbol that still has linked live orders or reserved balances.
 - Open the prune form and confirm the linked-state review table appears.
-- Expected when state is clear:
-  - `Prune rule only`
-  - `Cancel linked orders and prune`
-  - `Review in Live Ops`
+- Expected when linked state exists but is clear:
+  - radio options: `Prune rule only`, `Cancel linked orders and prune`
+  - primary button: `Remove from Live Rules` removes the symbol from live rules config
 - Expected when state is unclear or `review required` is present:
-  - only `Review in Live Ops` is allowed
+  - radio options remain: `Prune rule only`, `Cancel linked orders and prune`
+  - submitting `Remove from Live Rules` shows an error and does NOT modify config
+  - a separate `Open Live Ops to inspect <symbol> →` button is available outside the form for manual inspection
   - no prune or cancel happens silently
 
 ## 3. Deep Links
