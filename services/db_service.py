@@ -482,6 +482,37 @@ def init_db():
                 metadata_json TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS strategy_proposals (
+                proposal_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                tier TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                rule_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                snapshot_ts TEXT NOT NULL,
+                expires_at TEXT,
+                status TEXT NOT NULL,
+                status_updated_at TEXT NOT NULL,
+                dismissed_until TEXT,
+                resolution TEXT,
+                lookback_days INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS strategy_proposal_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                proposal_id TEXT NOT NULL,
+                decided_at TEXT NOT NULL,
+                decision TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                reason TEXT,
+                metadata_json TEXT,
+                FOREIGN KEY(proposal_id) REFERENCES strategy_proposals(proposal_id) ON DELETE CASCADE
+            );
+
             CREATE INDEX IF NOT EXISTS idx_market_snapshots_created_symbol_id
             ON market_snapshots(created_at, symbol, id);
 
@@ -535,6 +566,21 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_audit_events_symbol
             ON audit_events(symbol, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_strategy_proposals_status_kind
+            ON strategy_proposals(status, kind, snapshot_ts DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_strategy_proposals_symbol_kind
+            ON strategy_proposals(symbol, kind, status);
+
+            CREATE INDEX IF NOT EXISTS idx_strategy_proposals_dismissed
+            ON strategy_proposals(symbol, kind, rule_hash, dismissed_until);
+
+            CREATE INDEX IF NOT EXISTS idx_strategy_proposals_expires_at
+            ON strategy_proposals(status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS idx_strategy_proposal_decisions_proposal
+            ON strategy_proposal_decisions(proposal_id, id DESC);
             """
         )
 

@@ -8,10 +8,17 @@ Pure Python; no Streamlit or database imports — safe for direct unit testing.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Iterable
+
+
+class ProposalKind(str, Enum):
+    RULE_UPDATE = "RULE_UPDATE"
+    PRUNE = "PRUNE"
 
 
 class ProposalTier(str, Enum):
@@ -23,6 +30,57 @@ class ProposalTier(str, Enum):
 
 
 DEFAULT_PROPOSAL_TTL_SECONDS = 300
+DEFAULT_SNAPSHOT_BUCKET_SECONDS = 300
+
+
+def rule_hash(rule: dict[str, Any] | None) -> str:
+    """Stable sha1 of a rule dict.
+
+    Canonicalised via sorted keys + ensure_ascii so identical logical rules
+    hash identically regardless of insertion order.
+    """
+
+    payload = json.dumps(dict(rule or {}), sort_keys=True, ensure_ascii=True, default=str)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _parse_iso_to_utc(ts: str | datetime) -> datetime:
+    if isinstance(ts, datetime):
+        dt = ts
+    else:
+        dt = datetime.fromisoformat(str(ts))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def stable_proposal_id(
+    *,
+    symbol: str,
+    kind: str,
+    rule_hash_value: str,
+    snapshot_ts: str | datetime,
+    bucket_seconds: int = DEFAULT_SNAPSHOT_BUCKET_SECONDS,
+) -> str:
+    """Dedup-friendly proposal id.
+
+    Identical (symbol, kind, rule_hash) produced within the same
+    ``bucket_seconds`` window collapse to the same id so repeated recomputes
+    within a bucket are idempotent on INSERT OR IGNORE.
+    """
+
+    dt = _parse_iso_to_utc(snapshot_ts)
+    epoch = int(dt.timestamp())
+    bucket = epoch // max(1, int(bucket_seconds))
+    key = "|".join(
+        (
+            str(symbol).strip().upper(),
+            str(kind).strip().upper(),
+            str(rule_hash_value),
+            str(bucket),
+        )
+    )
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 SOFT_REVIEW_REASONS: frozenset[str] = frozenset(
     {
