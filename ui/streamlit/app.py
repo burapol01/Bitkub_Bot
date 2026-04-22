@@ -26,6 +26,7 @@ from ui.streamlit.pages import (
     render_sidebar,
     render_strategy_page,
 )
+from ui.streamlit.strategy_inbox import render_strategy_inbox_page
 from ui.streamlit.refresh import (
     PAGE_ORDER,
     get_auto_refresh_run_every,
@@ -133,6 +134,15 @@ def main() -> None:
         elif selected_page == "Strategy":
             ctx = build_dashboard_context(config)
             render_strategy_page(
+                config=config,
+                private_ctx=ctx["private_ctx"],
+                runtime=ctx["runtime"],
+                latest_prices=dict(ctx.get("latest_prices") or {}),
+                quote_fetched_at=str(ctx.get("quote_fetched_at") or ""),
+            )
+        elif selected_page == "Strategy Inbox":
+            ctx = build_dashboard_context(config)
+            render_strategy_inbox_page(
                 config=config,
                 private_ctx=ctx["private_ctx"],
                 runtime=ctx["runtime"],
