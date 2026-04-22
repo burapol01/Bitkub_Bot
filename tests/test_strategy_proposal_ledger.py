@@ -118,7 +118,7 @@ class SchemaTests(LedgerTestBase):
     def test_foreign_key_cascade(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        row = ledger.list_active()[0]
+        row = ledger.list_active(now=now)[0]
         with db_service._connect() as conn:
             conn.execute(
                 "DELETE FROM strategy_proposals WHERE proposal_id = ?",
@@ -189,7 +189,7 @@ class UpsertTests(LedgerTestBase):
         self.assertEqual(len(result.persisted), 1)
         self.assertEqual(result.deduped, [])
 
-        active = ledger.list_active()
+        active = ledger.list_active(now=now)
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0].status, ledger.ProposalStatus.PENDING)
         self.assertEqual(active[0].tier, ProposalTier.AUTO_APPROVE.value)
@@ -206,7 +206,7 @@ class UpsertTests(LedgerTestBase):
         self.assertEqual(second.persisted, [])
         self.assertEqual(len(second.deduped), 1)
 
-        active = ledger.list_active()
+        active = ledger.list_active(now=now)
         self.assertEqual(len(active), 1)
         decisions = ledger.list_decisions(active[0].proposal_id)
         self.assertEqual(len([d for d in decisions if d["decision"] == "created"]), 1)
@@ -236,14 +236,14 @@ class UpsertTests(LedgerTestBase):
         self.assertEqual(len(result.persisted), 1)
         self.assertEqual(len(result.superseded), 1)
 
-        active = ledger.list_active()
+        active = ledger.list_active(now=now2)
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0].rule_hash, rule_hash({"buy_below": -1.5, "sell_above": 1.8}))
 
     def test_prune_proposal_persists_with_prune_kind(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_prune_proposal()], now=now)
-        active = ledger.list_active(kind=ProposalKind.PRUNE.value)
+        active = ledger.list_active(kind=ProposalKind.PRUNE.value, now=now)
         self.assertEqual(len(active), 1)
         self.assertEqual(active[0].kind, ProposalKind.PRUNE.value)
         self.assertEqual(active[0].symbol, "DOGE_THB")
@@ -253,12 +253,12 @@ class LifecycleTests(LedgerTestBase):
     def test_mark_applied_transitions_pending_to_applied(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
 
         applied = ledger.mark_applied(pid, actor_id="alice", metadata={"source": "ui"}, now=now)
         self.assertEqual(applied.status, ledger.ProposalStatus.APPLIED)
 
-        self.assertEqual(ledger.list_active(), [])
+        self.assertEqual(ledger.list_active(now=now), [])
         decisions = ledger.list_decisions(pid)
         decisions_by_kind = {d["decision"] for d in decisions}
         self.assertIn("applied", decisions_by_kind)
@@ -269,7 +269,7 @@ class LifecycleTests(LedgerTestBase):
     def test_apply_rejects_terminal_state(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
         ledger.mark_applied(pid, actor_id="alice", now=now)
         with self.assertRaises(ledger.LedgerError):
             ledger.mark_applied(pid, actor_id="alice", now=now)
@@ -336,7 +336,7 @@ class DismissalTests(LedgerTestBase):
     def test_dismiss_sets_status_and_window(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
         row = ledger.mark_dismissed(
             pid,
             actor_id="alice",
@@ -347,14 +347,14 @@ class DismissalTests(LedgerTestBase):
         self.assertEqual(row.status, ledger.ProposalStatus.DISMISSED)
         self.assertIsNotNone(row.dismissed_until)
 
-        self.assertEqual(ledger.list_active(), [])
+        self.assertEqual(ledger.list_active(now=now), [])
         decisions_by_kind = {d["decision"] for d in ledger.list_decisions(pid)}
         self.assertIn("dismissed", decisions_by_kind)
 
     def test_dismiss_suppresses_identical_rule_hash_within_window(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
         ledger.mark_dismissed(
             pid,
             actor_id="alice",
@@ -380,7 +380,7 @@ class DismissalTests(LedgerTestBase):
     def test_suppression_expires_after_window(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
         ledger.mark_dismissed(
             pid,
             actor_id="alice",
@@ -408,7 +408,7 @@ class DismissalTests(LedgerTestBase):
             [_make_rule_proposal(proposed_rule={"buy_below": -1.2, "sell_above": 1.4})],
             now=now,
         )
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
         ledger.mark_dismissed(
             pid,
             actor_id="alice",
@@ -434,7 +434,7 @@ class DismissalTests(LedgerTestBase):
     def test_apply_after_dismiss_raises(self) -> None:
         now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
         ledger.upsert_pending([_make_rule_proposal()], now=now)
-        pid = ledger.list_active()[0].proposal_id
+        pid = ledger.list_active(now=now)[0].proposal_id
         ledger.mark_dismissed(pid, actor_id="alice", dismissal_seconds=3600, now=now)
         with self.assertRaises(ledger.LedgerError):
             ledger.mark_applied(pid, actor_id="alice", now=now)
