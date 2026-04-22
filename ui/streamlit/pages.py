@@ -18,6 +18,7 @@ from services.db_service import (
     insert_runtime_event,
 )
 from services.execution_service import cancel_live_order, refresh_live_order_from_exchange
+from services import strategy_proposal_service
 from services.strategy_lab_service import (
     build_coin_ranking,
     fetch_market_snapshot_coverage,
@@ -285,60 +286,26 @@ def _render_symbol_operational_state(
     return state
 
 
-_PRUNE_SOFT_REVIEW_REASONS = {
-    "exchange open-orders coverage is partial",
-    "exchange open-orders query returned an error",
-}
+_PRUNE_SOFT_REVIEW_REASONS = set(strategy_proposal_service.SOFT_REVIEW_REASONS)
 
 
 def _split_prune_review_reasons(state: dict[str, Any]) -> tuple[list[str], list[str]]:
-    review_reasons = [
-        str(reason).strip()
-        for reason in list(state.get("review_reasons") or [])
-        if str(reason).strip()
-    ]
-    hard_reasons = [
-        reason for reason in review_reasons if reason not in _PRUNE_SOFT_REVIEW_REASONS
-    ]
-    soft_reasons = [
-        reason for reason in review_reasons if reason in _PRUNE_SOFT_REVIEW_REASONS
-    ]
-    return hard_reasons, soft_reasons
+    reasons = list(state.get("review_reasons") or [])
+    hard: list[str] = []
+    soft: list[str] = []
+    for raw in reasons:
+        text = str(raw).strip()
+        if not text:
+            continue
+        if text in _PRUNE_SOFT_REVIEW_REASONS:
+            soft.append(text)
+        else:
+            hard.append(text)
+    return hard, soft
 
 
 def _build_prune_symbol_assessment(state: dict[str, Any]) -> dict[str, Any]:
-    hard_review_reasons, soft_warning_reasons = _split_prune_review_reasons(state)
-    hard_block_reasons: list[str] = []
-    open_buy_count = int(state.get("open_buy_count", 0) or 0)
-    open_sell_count = int(state.get("open_sell_count", 0) or 0)
-    reserved_thb = float(state.get("reserved_thb", 0.0) or 0.0)
-    reserved_coin = float(state.get("reserved_coin", 0.0) or 0.0)
-    partial_fill = bool(state.get("partial_fill"))
-    # Open orders and reserved balances are linked state (manageable via "Cancel linked orders
-    # and prune") — not hard blocks on their own.  Only partial fills and hard review reasons
-    # (ambiguous/unclear state) block outright.
-    # Exception: soft review reasons escalate to a hard block when linked state exists, because
-    # partial exchange-order coverage means we cannot safely enumerate orders to cancel.
-    has_linked_state = bool(
-        open_buy_count > 0
-        or open_sell_count > 0
-        or reserved_thb > 0
-        or reserved_coin > 0
-        or partial_fill
-    )
-    if partial_fill:
-        hard_block_reasons.append("partial fill is still unresolved")
-    hard_block_reasons.extend(hard_review_reasons)
-    if has_linked_state and soft_warning_reasons:
-        hard_block_reasons.extend(soft_warning_reasons)
-        effective_soft_warnings: list[str] = []
-    else:
-        effective_soft_warnings = soft_warning_reasons
-    return {
-        "hard_block_reasons": hard_block_reasons,
-        "soft_warning_reasons": effective_soft_warnings,
-        "has_linked_state": has_linked_state,
-    }
+    return strategy_proposal_service.assess_prune_readiness(state)
 
 
 def _strategy_compare_scope_key(
