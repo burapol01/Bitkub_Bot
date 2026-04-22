@@ -1,38 +1,38 @@
 # Bitkub Bot
 
-Bitkub trading workspace, three layers:
+Bitkub trading workspace with three clear layers:
 
-- `main.py` runs console engine + auto loop.
-- `ui/streamlit/app.py` main dashboard + page routing.
-- `streamlit_app.py` thin compatibility launcher.
-- `data/bitkub.db` stores logs, reports, execution history, diagnostics.
+- `main.py` runs the console engine and auto loop.
+- `ui/streamlit/app.py` contains the main dashboard and page routing.
+- `streamlit_app.py` is a thin compatibility launcher.
+- `data/bitkub.db` stores logs, reports, execution history, and diagnostics.
 
 Current direction:
 
-- Console = engine.
-- Streamlit = control plane, not auto runner.
-- `config.json` = base source of truth; VPS runtime seeds `runtime/config.json` from it.
-- SQLite = audit, reports, operational history.
+- Console remains the engine.
+- Streamlit is a control plane, not the auto runner.
+- `config.json` remains the base source of truth, and the VPS runtime seeds `runtime/config.json` from it.
+- SQLite is used for audit, reports, and operational history.
 
 ## Current Status
 
 - `paper` mode: usable
 - `read-only` mode: usable
-- `live` mode: guarded auto entry, guarded auto exit, manual live controls
-- Private API: wallet, balances, open orders, order history working
-- Streamlit UI: available, improving
+- `live` mode: guarded auto entry, guarded auto exit, and manual live controls
+- Private API: wallet, balances, open orders, and order history are working
+- Streamlit UI: available and improving
 
-Still intentionally limited:
+What is still intentionally limited:
 
-- Watchlist symbols separate from live tradable rules.
-- Strategy-driven live entry wired only when `live_auto_entry_enabled` on.
-- Streamlit does not replace console engine.
+- Watchlist symbols are separate from live tradable rules.
+- Strategy-driven live entry is wired only when `live_auto_entry_enabled` is on.
+- Streamlit does not replace the console engine.
 
 ## Architecture
 
 ### Console Engine
 
-Run engine:
+Run the engine with:
 
 ```powershell
 .venv\Scripts\python.exe main.py
@@ -49,13 +49,13 @@ Responsibilities:
 
 ### Streamlit Dashboard
 
-Run UI:
+Run the UI with:
 
 ```powershell
 .venv\Scripts\python.exe -m streamlit run ui/streamlit/app.py
 ```
 
-If Streamlit not installed:
+If Streamlit is not installed:
 
 ```powershell
 .venv\Scripts\python.exe -m pip install streamlit
@@ -63,52 +63,52 @@ If Streamlit not installed:
 
 Responsibilities:
 
-- edit active config target
+- edit the active config target
 - inspect market/account/execution state
 - run manual live actions
 - view reports and diagnostics
 
 Important:
 
-- Saving config in UI writes to active `BITKUB_CONFIG_PATH` target.
-- On VPS that target is `runtime/config.json`.
-- Console engine still needs own reload/apply step.
+- Saving config in UI writes to the active `BITKUB_CONFIG_PATH` target.
+- On the VPS that target is `runtime/config.json`.
+- The console engine still needs its own reload/apply step.
 
 ## Audit Logging
 
-Structured audit records stored separately from casual runtime/debug events.
+Structured audit records are stored separately from casual runtime/debug events.
 
 - Primary store: SQLite `audit_events` table in [data/bitkub.db](/d:/Project/Bitkub/data/bitkub.db)
-- Fallback when SQLite audit writes fail: `data/audit_events.jsonl`
+- Fallback store when SQLite audit writes fail: `data/audit_events.jsonl`
 - Streamlit view: `Logs` page, `Audit Trail` section
 
-High-value audit coverage:
+Current high-value audit coverage:
 
-- config saves/updates from Streamlit and Telegram
+- config saves and updates from Streamlit and Telegram
 - config reloads and runtime mode-control transitions
-- manual pause/resume
-- manual live orders from Streamlit, Telegram, console hotkey
+- manual pause and resume
+- manual live orders from Streamlit, Telegram, and console hotkey
 - live order cancel actions from operator and Telegram flows
 - retention archive / cleanup runs
-- startup/shutdown lifecycle events
+- startup and shutdown lifecycle events
 - startup reconciliation and open-order reconciliation warnings
 - wallet import and clear-paper-position operator actions
 
 Redaction rules:
 
-- secret-looking field names stored as `***REDACTED***`
-- includes `secret`, `token`, `password`, `api_key`, `api_secret`
-- audit records keep config diff shape; sensitive values not written in clear text
+- fields whose names look like secrets are stored as `***REDACTED***`
+- this includes keys such as `secret`, `token`, `password`, `api_key`, and `api_secret`
+- audit records keep the shape of config diffs, but sensitive values are not written in clear text
 
 ## Reconciliation
 
-Runtime consistency tracked in SQLite with `state_reconciliation_runs` table alongside older `reconciliation_results` summary rows.
+Runtime consistency is tracked in SQLite with a dedicated `state_reconciliation_runs` table alongside the older `reconciliation_results` summary rows.
 
-- Startup: engine restores `runtime_state.json`, fetches fresh exchange snapshot when private API available, refreshes tracked open execution orders, records structured mismatch findings.
-- Periodic: every 5 min in `live` / `shadow-live`, engine repeats detect-and-record pass; applies only safe corrections to already-tracked open execution orders.
-- Diagnostics: `Diagnostics` page shows latest structured reconciliation run, mismatch counts, unresolved items, recent run history.
+- Startup: the engine restores `runtime_state.json`, fetches a fresh exchange snapshot when private API access is available, refreshes tracked open execution orders, and records structured mismatch findings.
+- Periodic: every 5 minutes in `live` / `shadow-live`, the engine repeats the same detect-and-record pass and only applies safe corrections to already-tracked open execution orders.
+- Diagnostics: the `Diagnostics` page shows the latest structured reconciliation run, mismatch counts, unresolved items, and recent run history.
 
-Mismatch categories tracked:
+Mismatch categories currently tracked:
 
 - `missing_locally`
 - `missing_on_exchange`
@@ -122,28 +122,28 @@ Mismatch categories tracked:
 
 Safe auto-corrections:
 
-- refresh/persist state transitions for existing open execution orders when `order_info` / exchange state makes transition clear
-- update tracked order metadata and event history when exchange confirms newer status
+- refresh and persist state transitions for existing open execution orders when `order_info` / exchange state makes the transition clear
+- update tracked order metadata and event history when the exchange confirms a newer status
 
 Flag-only cases:
 
-- exchange open orders with no local execution row
+- exchange open orders that have no local execution row
 - exchange/account data unavailable or partial
-- unmanaged holdings without tracked filled buy
+- unmanaged holdings without a tracked filled buy
 - stale runtime state snapshots or pending-file restores
 
 Details: [docs/runtime_reconciliation.md](/d:/Project/Bitkub/docs/runtime_reconciliation.md)
 
 ## API Retry Handling
 
-Exchange/notification calls use endpoint-specific retry rules, not one broad policy.
+Exchange and notification calls now use endpoint-specific retry rules instead of one broad retry policy.
 
 - public market reads: bounded exponential backoff
 - balance/account reads: cautious retry
 - open-order and status reads: cautious retry
 - create-order: no blind retry on ambiguous failures
-- cancel-order: re-check status before one retry when first cancel outcome ambiguous
-- Telegram polling/delivery: retry only for safe transient failures
+- cancel-order: re-check status before one retry when the first cancel outcome is ambiguous
+- Telegram polling and delivery: retry only for safe transient failures
 
 Retry classes:
 
@@ -155,7 +155,7 @@ Retry classes:
 - `validation`
 - `auth`
 
-Structured retry events written to `runtime_events` with `event_type=api_retry`, including endpoint, action, attempt, outcome, category, correlation id when caller provides one.
+Structured retry events are written to `runtime_events` with `event_type=api_retry`, including endpoint, action, attempt, outcome, category, and correlation id when the caller provides one.
 
 Details: [docs/api_retry_handling.md](/d:/Project/Bitkub/docs/api_retry_handling.md)
 
@@ -164,8 +164,8 @@ Details: [docs/api_retry_handling.md](/d:/Project/Bitkub/docs/api_retry_handling
 Recommended target:
 
 - `Ubuntu 24.04 LTS`
-- run with Docker Compose on VPS
-- keep `runtime/` and `data/` on VPS as single source of truth
+- run the app with Docker Compose on the VPS
+- keep `runtime/` and `data/` on that VPS as the single source of truth
 
 Quick start:
 
@@ -371,24 +371,24 @@ Example:
 
 ### Manual Live Order
 
-`M` hotkey and `Live Ops` page use `live_manual_order`.
+The `M` hotkey and the `Live Ops` page use `live_manual_order`.
 
 Before using manual live order:
 
 - set `mode = "live"`
 - set `live_execution_enabled = true`
 - set `live_manual_order.enabled = true`
-- confirm symbol, side, size, rate carefully
+- confirm symbol, side, size, and rate carefully
 
 ### Auto Live Entry
 
-`live_auto_entry_enabled` allows guarded buy evaluation for symbols in `rules`.
+`live_auto_entry_enabled` allows guarded buy evaluation for symbols already present in `rules`.
 
 Current behavior:
 
 - at most one auto entry per loop
-- only uses live tradable shortlist in `rules`
-- requires fresh BUY-zone transition in market loop
+- only uses the live tradable shortlist in `rules`
+- requires a fresh BUY-zone transition in the market loop
 - skips symbols with holdings, open execution orders, or exchange open orders
 
 ### Auto Live Exit
@@ -398,14 +398,14 @@ Current behavior:
 Current behavior:
 
 - at most one exit order per loop
-- sell side only
+- only sell side
 - requires matching live holding context
 - skips symbols with active open orders
 
 ### Watchlist vs Rules
 
-- `watchlist_symbols` = research universe for candle sync, ranking, replay
-- `rules` = live tradable shortlist used by console engine
+- `watchlist_symbols` = research universe for candle sync, ranking, and replay
+- `rules` = live tradable shortlist used by the console engine
 
 ## Private API
 
@@ -430,7 +430,7 @@ Current private coverage:
 
 - [runtime_state.json](/d:/Projects/Bitkub_Bot/runtime_state.json)
 
-On VPS Docker deployment, runtime file mounted under `runtime/runtime_state.json`.
+On the VPS Docker deployment, the same runtime file is mounted under `runtime/runtime_state.json`.
 
 Stores:
 
@@ -445,7 +445,7 @@ Stores:
 - [signal_log.csv](/d:/Projects/Bitkub_Bot/signal_log.csv)
 - [paper_trade_log.csv](/d:/Projects/Bitkub_Bot/paper_trade_log.csv)
 
-On VPS Docker deployment, logs mounted under `runtime/`.
+On the VPS Docker deployment, these logs are mounted under `runtime/`.
 
 ### SQLite
 
@@ -464,14 +464,14 @@ Main tables:
 
 ## Retention
 
-SQLite = hot runtime store. Long-term history archived to disk before old analytical rows removed.
+SQLite is the hot runtime store. Long-term analysis history is archived to disk before old analytical rows are removed from SQLite.
 
 Current phase-1 retention behavior:
 
-- `market_snapshots`, `signal_logs`, `account_snapshots`, `reconciliation_results` use hot retention + archive-before-delete
-- `runtime_events` short-lived, pruned directly
-- archive files written under `archive_dir` in gzip-compressed CSV
-- archive metadata tracked in SQLite; archive/cleanup runs visible in Diagnostics
+- `market_snapshots`, `signal_logs`, `account_snapshots`, and `reconciliation_results` use hot retention plus archive-before-delete
+- `runtime_events` stays short-lived and is still pruned directly
+- archive files are written under `archive_dir` in gzip-compressed CSV form
+- archive metadata is tracked in SQLite so archive and cleanup runs are visible in Diagnostics
 
 Current cleanup triggers:
 
@@ -479,56 +479,56 @@ Current cleanup triggers:
 - successful config reload
 - at most once per day during runtime
 
-To inspect or restore archived data:
+How to inspect or restore archived data later:
 
-- open archive directory, load date-partitioned CSV.GZ files directly
-- SQLite `retention_archive_runs` table records archived date range, row count, archive path, cleanup status
-- to rebuild analytics, read archive files back into SQLite or separate analysis database
+- open the archive directory and load the date-partitioned CSV.GZ files directly
+- the SQLite `retention_archive_runs` table records the archived date range, row count, archive path, and cleanup status
+- if you need to rebuild analytics, read the archive files back into SQLite or a separate analysis database
 
-`paper_trade_logs` not auto-pruned yet.
+`paper_trade_logs` are not auto-pruned yet.
 
 ## Backup and Restore
 
-Operational recovery uses separate backup bundle flow.
+Operational recovery uses a separate backup bundle flow.
 
 What gets backed up:
 
-- `data/bitkub.db` via SQLite backup API (WAL-safe)
+- `data/bitkub.db` through SQLite's backup API so WAL mode stays safe
 - `runtime_state.json` and `runtime_state.pending.json` when present
 - `config.json` and `config.base.json`
-- optional `.env` when `backup_include_env_file=true`
+- optional `.env` file when `backup_include_env_file=true`
 
-Backups written under `backups/YYYY/MM/DD/` by default; include manifest inside each `.zip`.
+Backups are written under `backups/YYYY/MM/DD/` by default and include a manifest inside each `.zip` bundle.
 
-Run backup:
+Run a backup:
 
 ```powershell
 python scripts/backup_runtime.py
 ```
 
-Restore from bundle after stopping bot and Streamlit:
+Restore from a bundle after stopping the bot and Streamlit:
 
 ```powershell
 python scripts/restore_runtime.py --bundle backups/2026/04/17/runtime_backup_20260417_153000.zip --overwrite
 ```
 
-Restore is offline work. Helper extracts into temp staging directory first; refuses to overwrite existing files unless `--overwrite` set.
+Restore is offline work. The helper extracts into a temporary staging directory first and refuses to overwrite existing files unless `--overwrite` is set.
 
-Diagnostics page shows latest backup timestamp, location, size, and `Run Backup Now` action.
+The Diagnostics page shows the latest backup timestamp, backup location, backup size, and a `Run Backup Now` action.
 
 ## Safety Behavior
 
-Engine can enter `safety pause` for important mismatches or invalid state:
+The engine can enter `safety pause` for important mismatches or invalid state, such as:
 
 - invalid `config.json`
 - config/rule mismatch against current runtime state
 - reconciliation mismatch in guarded modes
 
-When triggered:
+When this happens:
 
 - execution stops
 - diagnostics remain available
-- fix issue, then reload
+- fix the issue, then reload
 
 ## Useful Commands
 
@@ -577,18 +577,18 @@ Check more files:
 
 - keep polishing Streamlit UX
 - add richer Telegram control and confirmation flows
-- keep console as engine even if cloud deployment added later
+- keep console as the engine even if cloud deployment is added later
 
 ## Telegram Foundation
 
-Codebase includes Telegram notifications-and-control foundation:
+The codebase now includes a Telegram notifications-and-control foundation:
 
-- critical events queued into SQLite `telegram_outbox`
-- console engine flushes queued notifications to Telegram when delivery settings ready
-- Telegram commands polled from `getUpdates`, logged into `telegram_command_log`
-- enabling Telegram in config does not start webhook server or separate bot process
+- critical events are queued into SQLite `telegram_outbox`
+- the console engine flushes queued notifications to Telegram when delivery settings are ready
+- Telegram commands are polled from `getUpdates` and logged into `telegram_command_log`
+- enabling Telegram in config does not start a webhook server or separate bot process by itself
 
-Supported Telegram commands:
+Supported Telegram commands now include:
 
 - `/start`
 - `/help`
@@ -613,9 +613,9 @@ Supported Telegram commands:
 - `/reload`
 - `/confirm <code>`
 
-Dangerous commands use confirmation code flow. Bot replies with `/confirm <code>` instructions before applying `/buy`, `/sell`, `/set_config`, `/set_rule`, `/promote_symbol`, `/pause`, `/resume`, `/cancel`, `/reload`.
+Dangerous commands use a confirmation code flow. The bot replies with `/confirm <code>` instructions before it applies `/buy`, `/sell`, `/set_config`, `/set_rule`, `/promote_symbol`, `/pause`, `/resume`, `/cancel`, or `/reload`.
 
-Required `.env` for delivery:
+Required `.env` values for delivery:
 
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token
@@ -623,26 +623,26 @@ TELEGRAM_CHAT_IDS=123456789,987654321
 TELEGRAM_ALLOWED_CHAT_IDS=123456789
 ```
 
-Use `TELEGRAM_CHAT_ID` when only one chat receives notifications. If `TELEGRAM_ALLOWED_CHAT_IDS` omitted, command authorization falls back to notify chat ids.
+You can use `TELEGRAM_CHAT_ID` instead when only one chat should receive notifications. If `TELEGRAM_ALLOWED_CHAT_IDS` is omitted, command authorization falls back to the notify chat ids.
 
 ### Find `TELEGRAM_CHAT_ID` with `telegram_test_token.py`
 
-Use helper script to confirm resolved chat id from env file and fetch latest chats seen by bot.
+Use the helper script below to confirm which chat id is currently resolved from your env file and to ask Telegram for the latest chats seen by the bot.
 
-1. Open Telegram, send `/start` to bot first.
-2. Run helper from project root.
+1. Open Telegram and send a message such as `/start` to your bot first.
+2. Run the helper script from the project root.
 
 ```bash
 python telegram_test_token.py --env-file env_dev
 ```
 
-Script behavior:
+What the script does:
 
-- loads selected env file (e.g. `env_dev`)
-- reads `TELEGRAM_CHAT_ID`, `TELEGRAM_CHAT_IDS`, `TELEGRAM_ALLOWED_CHAT_IDS` using same fallback logic as app
-- calls Telegram `getUpdates` to show which `chat_id` to use
+- loads the selected env file, such as `env_dev`
+- reads `TELEGRAM_CHAT_ID`, `TELEGRAM_CHAT_IDS`, and `TELEGRAM_ALLOWED_CHAT_IDS` using the same fallback logic as the app
+- calls Telegram `getUpdates` so you can see which `chat_id` should be used
 
-Observed output from current workspace run:
+Observed output from the current workspace run:
 
 ```text
 Loaded env file: env_dev
@@ -657,7 +657,7 @@ Private chat ids are usually positive numbers; group or supergroup ids are usual
 Telegram API lookup failed: requests is not installed. Install project dependencies before using Telegram API lookup.
 ```
 
-If `requests is not installed` appears, install project dependencies in the Python environment and re-run. To verify env parsing without calling Telegram:
+If you see the same `requests is not installed` message, install the project dependencies in the Python environment you are using and run the command again. If you only want to verify env parsing without calling Telegram, use:
 
 ```bash
 python telegram_test_token.py --env-file env_dev --skip-api
