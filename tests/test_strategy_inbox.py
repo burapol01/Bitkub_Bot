@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +15,13 @@ os.environ["TEMP"] = str(_TEST_TEMP_DIR)
 os.environ["TMPDIR"] = str(_TEST_TEMP_DIR)
 tempfile.tempdir = str(_TEST_TEMP_DIR)
 
-from services.strategy_proposal_service import ProposalTier
+from services import db_service, strategy_proposal_ledger as ledger
+from services.strategy_proposal_service import (
+    ProposalKind,
+    ProposalTier,
+    PruneProposal,
+    RuleProposal,
+)
 from ui.streamlit import strategy_inbox
 
 
@@ -379,6 +387,292 @@ class TuningRowIsPruneTests(unittest.TestCase):
 
     def test_empty_row_returns_false(self) -> None:
         self.assertFalse(strategy_inbox._tuning_row_is_prune({}))
+
+
+class LedgerTestBase(unittest.TestCase):
+    """Spin up a fresh SQLite DB per test so ledger writes stay isolated."""
+
+    def setUp(self) -> None:
+        self._original_db_path = db_service.DB_PATH
+        self._original_db_dir = db_service.DB_DIR
+        safe_name = self.id().replace(".", "_")
+        self._temp_dir = Path.cwd() / "data" / "test_strategy_inbox_ledger" / safe_name
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
+        self._temp_dir.mkdir(parents=True, exist_ok=True)
+        db_service.DB_PATH = self._temp_dir / "bitkub.db"
+        db_service.DB_DIR = db_service.DB_PATH.parent
+        db_service.init_db()
+
+    def tearDown(self) -> None:
+        db_service.DB_PATH = self._original_db_path
+        db_service.DB_DIR = self._original_db_dir
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+
+def _rule_proposal(
+    *,
+    symbol: str = "THB_AAA",
+    snapshot_ts: str = "2026-04-22T10:00:00+00:00",
+    expires_at: str = "2026-04-22T10:05:00+00:00",
+    tier: ProposalTier = ProposalTier.AUTO_APPROVE,
+    proposed_rule: dict[str, Any] | None = None,
+) -> RuleProposal:
+    return RuleProposal(
+        symbol=symbol,
+        tier=tier,
+        confidence=0.9,
+        current_rule={"buy_below": -1.0, "sell_above": 1.0},
+        proposed_rule=proposed_rule or {"buy_below": -1.2, "sell_above": 1.4},
+        reason="strong uplift",
+        warnings=[],
+        hard_blocks=[],
+        best_variant="FASTER_EXIT",
+        baseline_pnl_thb=10.0,
+        proposed_pnl_thb=25.0,
+        edge_thb=15.0,
+        win_rate_percent=65.0,
+        trades=14,
+        fee_guardrail="FEE_OK",
+        freshness_status="Fresh",
+        snapshot_ts=snapshot_ts,
+        expires_at=expires_at,
+    )
+
+
+def _prune_proposal(
+    *,
+    symbol: str = "THB_DOGE",
+    snapshot_ts: str = "2026-04-22T10:00:00+00:00",
+    tier: ProposalTier = ProposalTier.AUTO_APPROVE,
+) -> PruneProposal:
+    return PruneProposal(
+        symbol=symbol,
+        tier=tier,
+        confidence=0.8,
+        reason="prune-flagged",
+        warnings=[],
+        hard_blocks=[],
+        remove_from_watchlist=False,
+        tuning_recommendation="PRUNE",
+        baseline_pnl_thb=-5.0,
+        best_pnl_thb=-5.0,
+        snapshot_ts=snapshot_ts,
+    )
+
+
+class PersistRecomputeTests(LedgerTestBase):
+    def test_persist_writes_updates_and_prunes_as_pending(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        snapshot = {
+            "updates": [_rule_proposal()],
+            "prunes": [_prune_proposal()],
+            "resolution": "240",
+            "lookback_days": 14,
+        }
+        result = strategy_inbox.persist_recompute_to_ledger(
+            snapshot,
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        self.assertEqual(len(result.persisted), 2)
+
+        active = strategy_inbox.load_active_inbox(now=now)
+        self.assertEqual(len(active["updates"]), 1)
+        self.assertEqual(len(active["prunes"]), 1)
+        self.assertEqual(active["updates"][0].symbol, "THB_AAA")
+        self.assertEqual(active["prunes"][0].symbol, "THB_DOGE")
+
+    def test_reload_survives_session_reset(self) -> None:
+        """Simulate a page refresh: persist once, then reload on a cold reader."""
+
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [_rule_proposal()], "prunes": []},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        # Second call with no recompute data simulates reloading the page.
+        active = strategy_inbox.load_active_inbox(now=now)
+        self.assertEqual(len(active["updates"]), 1)
+        self.assertEqual(active["updates"][0].confidence, 0.9)
+        self.assertEqual(active["updates"][0].best_variant, "FASTER_EXIT")
+
+    def test_reconstructed_proposal_carries_ledger_proposal_id(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [_rule_proposal()], "prunes": []},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        active = strategy_inbox.load_active_inbox(now=now)
+        proposal = active["updates"][0]
+        self.assertTrue(proposal.proposal_id)
+        fetched = ledger.get(proposal.proposal_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.status, ledger.ProposalStatus.PENDING)
+
+
+class ApplyActionTests(LedgerTestBase):
+    def test_apply_rule_update_marks_ledger_applied(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [_rule_proposal()], "prunes": []},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        active = strategy_inbox.load_active_inbox(now=now)
+        proposal = active["updates"][0]
+
+        save_calls: list[dict[str, Any]] = []
+
+        def fake_save(old, new, *args, **kwargs):  # noqa: ANN001 — stub
+            save_calls.append({"new": new, "args": args, "kwargs": kwargs})
+
+        outcome = strategy_inbox.apply_rule_update_action(
+            config=_config(),
+            proposals=active["updates"],
+            selected_symbols=[proposal.symbol],
+            save_config_fn=fake_save,
+            now=now,
+        )
+
+        self.assertEqual(len(outcome["applied"]), 1)
+        self.assertEqual(len(save_calls), 1)
+
+        # Ledger row now terminal; load_active should no longer surface it.
+        refreshed = strategy_inbox.load_active_inbox(now=now)
+        self.assertEqual(refreshed["updates"], [])
+        stored = ledger.get(proposal.proposal_id)
+        self.assertEqual(stored.status, ledger.ProposalStatus.APPLIED)
+
+    def test_apply_rule_update_skips_hard_blocked(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        blocked = _rule_proposal(tier=ProposalTier.BLOCKED)
+        blocked.hard_blocks = ["no candle data"]
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [blocked], "prunes": []},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        active = strategy_inbox.load_active_inbox(now=now)
+        proposal = active["updates"][0]
+
+        save_calls: list[Any] = []
+
+        def fake_save(*args, **kwargs):  # noqa: ANN001 — stub
+            save_calls.append((args, kwargs))
+
+        outcome = strategy_inbox.apply_rule_update_action(
+            config=_config(),
+            proposals=active["updates"],
+            selected_symbols=[proposal.symbol],
+            save_config_fn=fake_save,
+            now=now,
+        )
+        self.assertEqual(outcome["applied"], [])
+        self.assertEqual(outcome["skipped"], [proposal.symbol])
+        self.assertEqual(save_calls, [])
+        self.assertEqual(
+            ledger.get(proposal.proposal_id).status,
+            ledger.ProposalStatus.PENDING,
+        )
+
+    def test_apply_prune_marks_ledger_applied(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [], "prunes": [_prune_proposal()]},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        active = strategy_inbox.load_active_inbox(now=now)
+        proposal = active["prunes"][0]
+
+        def fake_save(*args, **kwargs):  # noqa: ANN001 — stub
+            return None
+
+        config = _config()
+        config["rules"]["THB_DOGE"] = {"buy_below": 1.0, "sell_above": 2.0}
+
+        outcome = strategy_inbox.apply_prune_action(
+            config=config,
+            proposals=active["prunes"],
+            selected_symbols=[proposal.symbol],
+            remove_watchlist=False,
+            save_config_fn=fake_save,
+            now=now,
+        )
+        self.assertEqual(len(outcome["applied"]), 1)
+        refreshed = strategy_inbox.load_active_inbox(now=now)
+        self.assertEqual(refreshed["prunes"], [])
+        self.assertEqual(
+            ledger.get(proposal.proposal_id).status,
+            ledger.ProposalStatus.APPLIED,
+        )
+
+
+class DismissActionTests(LedgerTestBase):
+    def test_dismiss_marks_ledger_dismissed(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [_rule_proposal()], "prunes": []},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        active = strategy_inbox.load_active_inbox(now=now)
+        proposal = active["updates"][0]
+
+        dismissed = strategy_inbox.dismiss_proposals_action(
+            proposals=active["updates"],
+            selected_symbols=[proposal.symbol],
+            now=now,
+        )
+        self.assertEqual(len(dismissed), 1)
+        refreshed = strategy_inbox.load_active_inbox(now=now)
+        self.assertEqual(refreshed["updates"], [])
+        stored = ledger.get(proposal.proposal_id)
+        self.assertEqual(stored.status, ledger.ProposalStatus.DISMISSED)
+
+    def test_dismiss_suppresses_identical_rule_hash_on_next_recompute(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        strategy_inbox.persist_recompute_to_ledger(
+            {"updates": [_rule_proposal()], "prunes": []},
+            resolution="240",
+            lookback_days=14,
+            now=now,
+        )
+        active = strategy_inbox.load_active_inbox(now=now)
+        strategy_inbox.dismiss_proposals_action(
+            proposals=active["updates"],
+            selected_symbols=[active["updates"][0].symbol],
+            now=now,
+        )
+
+        later = datetime(2026, 4, 22, 10, 10, 0, tzinfo=timezone.utc)
+        result = strategy_inbox.persist_recompute_to_ledger(
+            {
+                "updates": [
+                    _rule_proposal(
+                        snapshot_ts="2026-04-22T10:10:00+00:00",
+                        expires_at="2026-04-22T10:15:00+00:00",
+                    )
+                ],
+                "prunes": [],
+            },
+            resolution="240",
+            lookback_days=14,
+            now=later,
+        )
+        self.assertEqual(len(result.suppressed), 1)
+        self.assertEqual(result.persisted, [])
+        refreshed = strategy_inbox.load_active_inbox(now=later)
+        self.assertEqual(refreshed["updates"], [])
 
 
 if __name__ == "__main__":

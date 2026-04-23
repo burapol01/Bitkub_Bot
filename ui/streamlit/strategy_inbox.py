@@ -17,14 +17,16 @@ during rollout.
 
 from __future__ import annotations
 
-from dataclasses import replace as dataclass_replace
+from datetime import datetime
 from typing import Any
 
 import streamlit as st
 
 from config import ordered_unique_symbols
+from services import strategy_proposal_ledger as ledger
 from services import strategy_proposal_service as sps
 from services.strategy_proposal_service import (
+    ProposalKind,
     ProposalTier,
     PruneProposal,
     RuleProposal,
@@ -83,6 +85,56 @@ _UPDATE_TIER_ORDER: tuple[str, ...] = (
 )
 
 _PRUNE_TIER_ORDER: tuple[str, ...] = _UPDATE_TIER_ORDER
+
+
+def persist_recompute_to_ledger(
+    snapshot: dict[str, Any],
+    *,
+    resolution: str,
+    lookback_days: int,
+    now: datetime | None = None,
+) -> ledger.UpsertResult:
+    """Write recompute results to the ledger as pending proposals."""
+
+    proposals: list[Any] = []
+    proposals.extend(snapshot.get("updates") or [])
+    proposals.extend(snapshot.get("prunes") or [])
+    return ledger.upsert_pending(
+        proposals,
+        resolution=str(resolution),
+        lookback_days=int(lookback_days),
+        now=now,
+    )
+
+
+def _rule_proposal_from_row(row: ledger.LedgerRow) -> RuleProposal:
+    data = dict(row.payload)
+    data["tier"] = ProposalTier(data.get("tier") or ProposalTier.NEEDS_REVIEW.value)
+    data["proposal_id"] = row.proposal_id
+    return RuleProposal(**data)
+
+
+def _prune_proposal_from_row(row: ledger.LedgerRow) -> PruneProposal:
+    data = dict(row.payload)
+    data["tier"] = ProposalTier(data.get("tier") or ProposalTier.BLOCKED.value)
+    data["proposal_id"] = row.proposal_id
+    return PruneProposal(**data)
+
+
+def load_active_inbox(
+    *, now: datetime | None = None
+) -> dict[str, list[Any]]:
+    """Read active proposals from the ledger as reconstructed dataclasses."""
+
+    updates = [
+        _rule_proposal_from_row(row)
+        for row in ledger.list_active(kind=ProposalKind.RULE_UPDATE.value, now=now)
+    ]
+    prunes = [
+        _prune_proposal_from_row(row)
+        for row in ledger.list_active(kind=ProposalKind.PRUNE.value, now=now)
+    ]
+    return {"updates": updates, "prunes": prunes}
 
 
 def _tuning_row_is_prune(tuning_row: dict[str, Any]) -> bool:
@@ -249,7 +301,7 @@ def render_strategy_inbox_page(
         "Proposal Inbox",
     )
 
-    snapshot = st.session_state.get(INBOX_STATE_KEY)
+    session_meta = dict(st.session_state.get(INBOX_STATE_KEY) or {})
 
     header_cols = st.columns([3, 2, 2])
     with header_cols[0]:
@@ -266,7 +318,18 @@ def render_strategy_inbox_page(
                     runtime=runtime,
                     latest_prices=latest_prices,
                 )
-            st.session_state[INBOX_STATE_KEY] = snapshot
+                persist_recompute_to_ledger(
+                    snapshot,
+                    resolution=str(snapshot.get("resolution")),
+                    lookback_days=int(snapshot.get("lookback_days") or 0),
+                )
+            st.session_state[INBOX_STATE_KEY] = {
+                "snapshot_ts": snapshot.get("snapshot_ts"),
+                "resolution": snapshot.get("resolution"),
+                "lookback_days": snapshot.get("lookback_days"),
+                "skipped": snapshot.get("skipped") or [],
+                "ranking_errors": snapshot.get("ranking_errors") or [],
+            }
             st.rerun()
     with header_cols[1]:
         st.caption(
@@ -274,15 +337,21 @@ def render_strategy_inbox_page(
             f"{len(latest_prices)} symbols"
         )
     with header_cols[2]:
-        if snapshot:
+        if session_meta:
             st.caption(
-                f"Last recompute: {snapshot.get('snapshot_ts') or 'n/a'}  ·  "
-                f"lookback {snapshot.get('lookback_days')}d @ {snapshot.get('resolution')}"
+                f"Last recompute: {session_meta.get('snapshot_ts') or 'n/a'}  ·  "
+                f"lookback {session_meta.get('lookback_days')}d @ {session_meta.get('resolution')}"
             )
         else:
-            st.caption("No proposals yet — click recompute.")
+            st.caption("Showing persisted proposals — click recompute for fresh signal.")
 
-    if not snapshot:
+    active = load_active_inbox()
+    updates: list[RuleProposal] = list(active.get("updates") or [])
+    prunes: list[PruneProposal] = list(active.get("prunes") or [])
+    skipped = list(session_meta.get("skipped") or [])
+    ranking_errors = list(session_meta.get("ranking_errors") or [])
+
+    if not updates and not prunes and not session_meta:
         render_callout(
             "Getting started",
             "Run <em>Refresh prices & recompute proposals</em> to score every live rule. "
@@ -290,11 +359,6 @@ def render_strategy_inbox_page(
             "info",
         )
         return
-
-    updates: list[RuleProposal] = list(snapshot.get("updates") or [])
-    prunes: list[PruneProposal] = list(snapshot.get("prunes") or [])
-    skipped = list(snapshot.get("skipped") or [])
-    ranking_errors = list(snapshot.get("ranking_errors") or [])
 
     _render_summary_banner(updates=updates, prunes=prunes, skipped=len(skipped))
 
@@ -389,6 +453,7 @@ def _render_rule_update_bucket(
     form_key = f"strategy_inbox_update_form::{tier}"
     select_key = f"strategy_inbox_update_select::{tier}"
     apply_key = f"strategy_inbox_update_apply::{tier}"
+    dismiss_key = f"strategy_inbox_update_dismiss::{tier}"
 
     options = [p.symbol for p in proposals]
     default = [
@@ -402,21 +467,29 @@ def _render_rule_update_bucket(
         for proposal in proposals:
             _render_rule_proposal_row(proposal)
         selection = st.multiselect(
-            "Symbols to apply",
+            "Symbols to act on",
             options=options,
             default=default,
             key=select_key,
-            disabled=tier == ProposalTier.BLOCKED.value,
         )
-        submitted = st.form_submit_button(
-            f"Apply {len(selection)} update(s) to live config",
-            key=apply_key,
-            type="primary" if tier == ProposalTier.AUTO_APPROVE.value else "secondary",
-            disabled=tier == ProposalTier.BLOCKED.value,
-        )
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            apply_clicked = st.form_submit_button(
+                f"Apply {len(selection)} update(s) to live config",
+                key=apply_key,
+                type="primary" if tier == ProposalTier.AUTO_APPROVE.value else "secondary",
+                disabled=tier == ProposalTier.BLOCKED.value,
+            )
+        with action_cols[1]:
+            dismiss_clicked = st.form_submit_button(
+                f"Dismiss {len(selection)} selected",
+                key=dismiss_key,
+            )
 
-    if submitted and selection:
+    if apply_clicked and selection and tier != ProposalTier.BLOCKED.value:
         _apply_rule_updates(config=config, proposals=proposals, selected_symbols=selection)
+    elif dismiss_clicked and selection:
+        _dismiss_proposals(proposals=proposals, selected_symbols=selection)
 
 
 def _render_rule_proposal_row(proposal: RuleProposal) -> None:
@@ -546,33 +619,44 @@ def _render_prune_bucket(
 
     blocked_tier = tier == ProposalTier.BLOCKED.value
 
+    dismiss_key = f"strategy_inbox_prune_dismiss::{tier}"
+
     with st.form(form_key):
         for proposal in proposals:
             _render_prune_proposal_row(proposal)
 
         selection = st.multiselect(
-            "Symbols to remove",
+            "Symbols to act on",
             options=options,
             default=default,
             key=select_key,
-            disabled=blocked_tier,
         )
         action_label = (
             "Remove rule + watchlist" if remove_watchlist else "Remove rule only"
         )
-        submitted = st.form_submit_button(
-            f"{action_label} ({len(selection)})",
-            key=apply_key,
-            type="primary" if tier == ProposalTier.AUTO_APPROVE.value else "secondary",
-            disabled=blocked_tier,
-        )
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            apply_clicked = st.form_submit_button(
+                f"{action_label} ({len(selection)})",
+                key=apply_key,
+                type="primary" if tier == ProposalTier.AUTO_APPROVE.value else "secondary",
+                disabled=blocked_tier,
+            )
+        with action_cols[1]:
+            dismiss_clicked = st.form_submit_button(
+                f"Dismiss {len(selection)} selected",
+                key=dismiss_key,
+            )
 
-    if submitted and selection:
+    if apply_clicked and selection and not blocked_tier:
         _apply_prune(
             config=config,
+            proposals=proposals,
             selected_symbols=selection,
             remove_watchlist=remove_watchlist,
         )
+    elif dismiss_clicked and selection:
+        _dismiss_proposals(proposals=proposals, selected_symbols=selection)
 
 
 def _render_prune_proposal_row(proposal: PruneProposal) -> None:
@@ -615,55 +699,88 @@ def _render_prune_proposal_row(proposal: PruneProposal) -> None:
     st.markdown("---")
 
 
-def _apply_rule_updates(
+def apply_rule_update_action(
     *,
     config: dict[str, Any],
     proposals: list[RuleProposal],
     selected_symbols: list[str],
-) -> None:
-    if not selected_symbols:
-        return
+    save_config_fn=save_config_with_feedback,
+    mark_applied_fn=ledger.mark_applied,
+    actor_id: str = "inbox_user",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Apply rule updates to config and mark ledger entries applied.
+
+    Returns a summary ``{"applied": [(symbol, proposal_id)], "skipped": [symbol]}``
+    so callers (UI, tests) can report outcomes without touching Streamlit.
+    """
 
     proposal_by_symbol = {p.symbol: p for p in proposals}
     updated = dict(config)
     rules = dict(updated.get("rules") or {})
 
-    applied: list[str] = []
+    applied: list[tuple[str, str]] = []
+    skipped: list[str] = []
     for symbol in selected_symbols:
         proposal = proposal_by_symbol.get(symbol)
         if proposal is None:
             continue
         if proposal.hard_blocks:
+            skipped.append(symbol)
             continue
         rules[symbol] = dict(proposal.proposed_rule)
-        applied.append(symbol)
+        applied.append((symbol, proposal.proposal_id))
 
     if not applied:
-        st.warning("No updates applied — selected proposals were blocked.")
-        return
+        return {"applied": [], "skipped": skipped}
 
     updated["rules"] = rules
-    save_config_with_feedback(
+    applied_symbols = [symbol for symbol, _ in applied]
+    save_config_fn(
         config,
         updated,
-        f"Applied rule updates: {', '.join(applied)}",
+        f"Applied rule updates: {', '.join(applied_symbols)}",
         audit_action_type="strategy_inbox_rule_update",
-        audit_metadata={"applied_symbols": applied},
+        audit_metadata={"applied_symbols": applied_symbols},
     )
-    _invalidate_snapshot(applied_symbols=applied, prune=False)
-    st.rerun()
+    for symbol, proposal_id in applied:
+        if not proposal_id:
+            continue
+        mark_applied_fn(
+            proposal_id,
+            actor_id=actor_id,
+            metadata={"symbol": symbol, "source": "strategy_inbox"},
+            now=now,
+        )
+    return {"applied": applied, "skipped": skipped}
 
 
-def _apply_prune(
+def apply_prune_action(
     *,
     config: dict[str, Any],
+    proposals: list[PruneProposal],
     selected_symbols: list[str],
     remove_watchlist: bool,
-) -> None:
-    if not selected_symbols:
-        return
-
+    save_config_fn=save_config_with_feedback,
+    mark_applied_fn=ledger.mark_applied,
+    actor_id: str = "inbox_user",
+    now: datetime | None = None,
+) -> dict[str, Any]:
     prune_set = {str(symbol) for symbol in selected_symbols if str(symbol).strip()}
+    if not prune_set:
+        return {"applied": [], "skipped": []}
+
+    proposal_by_symbol = {p.symbol: p for p in proposals}
+
+    applied: list[tuple[str, str]] = []
+    skipped: list[str] = []
+    for symbol in sorted(prune_set):
+        proposal = proposal_by_symbol.get(symbol)
+        if proposal is None:
+            skipped.append(symbol)
+            continue
+        applied.append((symbol, proposal.proposal_id))
+
     updated = dict(config)
     current_rules = dict(updated.get("rules") or {})
     remaining_rules = {
@@ -689,7 +806,7 @@ def _apply_prune(
         )
 
     action = "Remove rule + watchlist" if remove_watchlist else "Remove rule"
-    save_config_with_feedback(
+    save_config_fn(
         config,
         updated,
         f"{action}: {', '.join(sorted(prune_set))}",
@@ -699,33 +816,108 @@ def _apply_prune(
             "remove_from_watchlist": bool(remove_watchlist),
         },
     )
-    _invalidate_snapshot(applied_symbols=list(prune_set), prune=True)
+    for symbol, proposal_id in applied:
+        if not proposal_id:
+            continue
+        mark_applied_fn(
+            proposal_id,
+            actor_id=actor_id,
+            metadata={"symbol": symbol, "remove_from_watchlist": bool(remove_watchlist)},
+            now=now,
+        )
+    return {"applied": applied, "skipped": skipped}
+
+
+def dismiss_proposals_action(
+    *,
+    proposals: list[Any],
+    selected_symbols: list[str],
+    mark_dismissed_fn=ledger.mark_dismissed,
+    actor_id: str = "inbox_user",
+    reason: str = "dismissed via Strategy Inbox",
+    now: datetime | None = None,
+) -> list[tuple[str, str]]:
+    """Mark selected proposals dismissed in the ledger."""
+
+    proposal_by_symbol = {p.symbol: p for p in proposals}
+    dismissed: list[tuple[str, str]] = []
+    for symbol in selected_symbols:
+        proposal = proposal_by_symbol.get(symbol)
+        if proposal is None or not getattr(proposal, "proposal_id", ""):
+            continue
+        mark_dismissed_fn(
+            proposal.proposal_id,
+            actor_id=actor_id,
+            reason=reason,
+            now=now,
+        )
+        dismissed.append((symbol, proposal.proposal_id))
+    return dismissed
+
+
+def _apply_rule_updates(
+    *,
+    config: dict[str, Any],
+    proposals: list[RuleProposal],
+    selected_symbols: list[str],
+) -> None:
+    if not selected_symbols:
+        return
+    outcome = apply_rule_update_action(
+        config=config,
+        proposals=proposals,
+        selected_symbols=selected_symbols,
+    )
+    if not outcome["applied"]:
+        st.warning("No updates applied — selected proposals were blocked.")
+        return
     st.rerun()
 
 
-def _invalidate_snapshot(*, applied_symbols: list[str], prune: bool) -> None:
-    snapshot = st.session_state.get(INBOX_STATE_KEY)
-    if not snapshot:
+def _apply_prune(
+    *,
+    config: dict[str, Any],
+    proposals: list[PruneProposal],
+    selected_symbols: list[str],
+    remove_watchlist: bool,
+) -> None:
+    if not selected_symbols:
         return
-    applied_set = set(applied_symbols)
-    if prune:
-        snapshot["prunes"] = [p for p in snapshot.get("prunes") or [] if p.symbol not in applied_set]
-        snapshot["updates"] = [u for u in snapshot.get("updates") or [] if u.symbol not in applied_set]
-    else:
-        snapshot["updates"] = [
-            dataclass_replace(
-                u,
-                reason=f"Applied at {now_text()} — re-run recompute for fresh signal.",
-            )
-            if u.symbol in applied_set
-            else u
-            for u in snapshot.get("updates") or []
-        ]
-    st.session_state[INBOX_STATE_KEY] = snapshot
+    outcome = apply_prune_action(
+        config=config,
+        proposals=proposals,
+        selected_symbols=selected_symbols,
+        remove_watchlist=remove_watchlist,
+    )
+    if not outcome["applied"]:
+        st.warning("No prunes applied — selected proposals could not be resolved.")
+        return
+    st.rerun()
+
+
+def _dismiss_proposals(
+    *,
+    proposals: list[Any],
+    selected_symbols: list[str],
+) -> None:
+    if not selected_symbols:
+        return
+    dismissed = dismiss_proposals_action(
+        proposals=proposals,
+        selected_symbols=selected_symbols,
+    )
+    if dismissed:
+        st.toast(f"Dismissed {len(dismissed)} proposal(s)")
+    st.rerun()
 
 
 __all__ = [
     "INBOX_STATE_KEY",
+    "apply_prune_action",
+    "apply_rule_update_action",
+    "dismiss_proposals_action",
+    "load_active_inbox",
+    "persist_recompute_to_ledger",
     "recompute_proposals",
     "render_strategy_inbox_page",
 ]
