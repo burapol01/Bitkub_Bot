@@ -362,19 +362,24 @@ def render_strategy_inbox_page(
         return
 
     _render_summary_banner(updates=updates, prunes=prunes, skipped=len(skipped))
-    _render_metrics_panel()
-    _render_decision_audit_panel()
 
-    _render_rule_updates_section(config=config, updates=updates)
+    tab_labels = [f"Rule updates ({len(updates)})", f"Prune ({len(prunes)})"]
+    updates_tab, prune_tab = st.tabs(tab_labels)
+    with updates_tab:
+        _render_rule_updates_section(config=config, updates=updates)
+    with prune_tab:
+        _render_prune_section(config=config, prunes=prunes)
+
     st.divider()
-    _render_prune_section(config=config, prunes=prunes)
-
-    if skipped:
-        with st.expander(f"Skipped ({len(skipped)})", expanded=False):
+    with st.expander("Inbox diagnostics", expanded=False):
+        _render_metrics_panel()
+        _render_decision_audit_panel()
+        if skipped:
+            st.caption(f"**Skipped ({len(skipped)})**")
             for entry in skipped:
                 st.caption(f"• {entry['symbol']}: {entry['reason']}")
-    if ranking_errors:
-        with st.expander(f"Ranking notices ({len(ranking_errors)})", expanded=False):
+        if ranking_errors:
+            st.caption(f"**Ranking notices ({len(ranking_errors)})**")
             for note in ranking_errors:
                 st.caption(f"• {note}")
 
@@ -556,86 +561,110 @@ def _render_summary_banner(
 def _render_rule_updates_section(
     *, config: dict[str, Any], updates: list[RuleProposal]
 ) -> None:
-    st.markdown("### Rule update proposals")
     if not updates:
         st.caption("No rule-update proposals — every live rule is either PRUNE or skipped.")
         return
 
     buckets = group_proposals_by_tier(updates)
-
+    tier_entries: list[tuple[str, list[RuleProposal]]] = []
     for tier_value in _UPDATE_TIER_ORDER:
-        tier_updates: list[RuleProposal] = list(buckets.get(tier_value) or [])
-        if not tier_updates:
-            continue
-        default_expanded = tier_value in {
-            ProposalTier.AUTO_APPROVE.value,
-            ProposalTier.RECOMMENDED.value,
-        }
-        with st.expander(
-            f"{_TIER_LABEL[tier_value]}  ·  {len(tier_updates)}",
-            expanded=default_expanded,
-        ):
+        tier_list = list(buckets.get(tier_value) or [])
+        if tier_list:
+            tier_entries.append((tier_value, tier_list))
+    if not tier_entries:
+        return
+
+    tab_labels = [
+        f"{_TIER_LABEL[tier_value]} · {len(tier_list)}"
+        for tier_value, tier_list in tier_entries
+    ]
+    tabs = st.tabs(tab_labels)
+    for tab, (tier_value, tier_list) in zip(tabs, tier_entries):
+        with tab:
             _render_rule_update_bucket(
                 config=config,
                 tier=tier_value,
-                proposals=tier_updates,
+                proposals=tier_list,
             )
+
+
+def _format_rule_row_label(proposal: RuleProposal) -> str:
+    tone_icon = {
+        ProposalTier.AUTO_APPROVE.value: "🟢",
+        ProposalTier.RECOMMENDED.value: "🟡",
+        ProposalTier.NEEDS_REVIEW.value: "🟠",
+        ProposalTier.BLOCKED.value: "🔴",
+    }.get(proposal.tier.value, "·")
+    block_tag = " 🚫" if proposal.hard_blocks else ""
+    warn_tag = f" ⚠{len(proposal.warnings)}" if proposal.warnings else ""
+    freshness_tag = "" if proposal.freshness_status == "Fresh" else f" [{proposal.freshness_status}]"
+    return (
+        f"{tone_icon} **{proposal.symbol}**  ·  {proposal.best_variant or 'n/a'}  ·  "
+        f"conf {proposal.confidence:.2f}  ·  edge {proposal.edge_thb:+.1f} THB  ·  "
+        f"{proposal.trades} trades{freshness_tag}{block_tag}{warn_tag}"
+    )
 
 
 def _render_rule_update_bucket(
     *, config: dict[str, Any], tier: str, proposals: list[RuleProposal]
 ) -> None:
     form_key = f"strategy_inbox_update_form::{tier}"
-    select_key = f"strategy_inbox_update_select::{tier}"
     apply_key = f"strategy_inbox_update_apply::{tier}"
     dismiss_key = f"strategy_inbox_update_dismiss::{tier}"
 
-    options = [p.symbol for p in proposals]
-    default = [
+    default_symbols = {
         p.symbol
         for p in proposals
         if tier in {ProposalTier.AUTO_APPROVE.value, ProposalTier.RECOMMENDED.value}
         and not p.hard_blocks
-    ]
+    }
+    default_count = len(default_symbols)
+    is_blocked_tier = tier == ProposalTier.BLOCKED.value
 
     with st.form(form_key):
-        for proposal in proposals:
-            _render_rule_proposal_row(proposal)
-        selection = st.multiselect(
-            "Symbols to act on",
-            options=options,
-            default=default,
-            key=select_key,
-        )
-        action_cols = st.columns(2)
+        action_cols = st.columns([1.3, 1, 2])
         with action_cols[0]:
             apply_clicked = st.form_submit_button(
-                f"Apply {len(selection)} update(s) to live config",
+                f"Approve selected (defaults: {default_count})"
+                if not is_blocked_tier
+                else "Apply disabled for blocked tier",
                 key=apply_key,
                 type="primary" if tier == ProposalTier.AUTO_APPROVE.value else "secondary",
-                disabled=tier == ProposalTier.BLOCKED.value,
+                disabled=is_blocked_tier,
             )
         with action_cols[1]:
             dismiss_clicked = st.form_submit_button(
-                f"Dismiss {len(selection)} selected",
+                "Dismiss selected",
                 key=dismiss_key,
             )
 
-    if apply_clicked and selection and tier != ProposalTier.BLOCKED.value:
-        _apply_rule_updates(config=config, proposals=proposals, selected_symbols=selection)
-    elif dismiss_clicked and selection:
-        _dismiss_proposals(proposals=proposals, selected_symbols=selection)
+        st.caption(
+            "Toggle rows below to change the selection before clicking approve/dismiss."
+        )
+
+        selected_symbols: list[str] = []
+        for proposal in proposals:
+            row_id = proposal.proposal_id or proposal.symbol
+            sel_key = f"strategy_inbox_update_sel::{tier}::{row_id}"
+            checked = st.checkbox(
+                _format_rule_row_label(proposal),
+                value=proposal.symbol in default_symbols,
+                key=sel_key,
+            )
+            with st.expander(f"Details — {proposal.symbol}", expanded=False):
+                _render_rule_proposal_details(proposal)
+            if checked:
+                selected_symbols.append(proposal.symbol)
+
+    if apply_clicked and selected_symbols and not is_blocked_tier:
+        _apply_rule_updates(
+            config=config, proposals=proposals, selected_symbols=selected_symbols
+        )
+    elif dismiss_clicked and selected_symbols:
+        _dismiss_proposals(proposals=proposals, selected_symbols=selected_symbols)
 
 
-def _render_rule_proposal_row(proposal: RuleProposal) -> None:
-    header = (
-        f"<strong>{proposal.symbol}</strong>  "
-        f"{badge(proposal.best_variant or 'n/a', 'info')}  "
-        f"{badge(f'conf {proposal.confidence:.2f}', _TIER_TONE.get(proposal.tier.value, 'info'))}  "
-        f"{badge(proposal.freshness_status, 'good' if proposal.freshness_status == 'Fresh' else 'warn')}"
-    )
-    st.markdown(header, unsafe_allow_html=True)
-
+def _render_rule_proposal_details(proposal: RuleProposal) -> None:
     cols = st.columns(3)
     with cols[0]:
         render_metric_card(
@@ -665,7 +694,6 @@ def _render_rule_proposal_row(proposal: RuleProposal) -> None:
         st.warning(warning)
     for block in proposal.hard_blocks:
         st.error(f"Blocked: {block}")
-    st.markdown("---")
 
 
 def _rule_diff_summary(current: dict[str, Any], proposed: dict[str, Any]) -> str:
@@ -699,7 +727,6 @@ def _rule_diff_summary(current: dict[str, Any], proposed: dict[str, Any]) -> str
 def _render_prune_section(
     *, config: dict[str, Any], prunes: list[PruneProposal]
 ) -> None:
-    st.markdown("### Prune queue")
     if not prunes:
         st.caption("No PRUNE-flagged live rules right now.")
         return
@@ -713,25 +740,49 @@ def _render_prune_section(
         help="Leave unchecked to keep the symbol in the research watchlist.",
     )
 
+    tier_entries: list[tuple[str, list[PruneProposal]]] = []
     for tier_value in _PRUNE_TIER_ORDER:
-        tier_prunes: list[PruneProposal] = list(buckets.get(tier_value) or [])
-        if not tier_prunes:
-            continue
-        default_expanded = tier_value in {
-            ProposalTier.AUTO_APPROVE.value,
-            ProposalTier.RECOMMENDED.value,
-            ProposalTier.BLOCKED.value,
-        }
-        with st.expander(
-            f"{_TIER_LABEL[tier_value]}  ·  {len(tier_prunes)}",
-            expanded=default_expanded,
-        ):
+        tier_list = list(buckets.get(tier_value) or [])
+        if tier_list:
+            tier_entries.append((tier_value, tier_list))
+    if not tier_entries:
+        return
+
+    tab_labels = [
+        f"{_TIER_LABEL[tier_value]} · {len(tier_list)}"
+        for tier_value, tier_list in tier_entries
+    ]
+    tabs = st.tabs(tab_labels)
+    for tab, (tier_value, tier_list) in zip(tabs, tier_entries):
+        with tab:
             _render_prune_bucket(
                 config=config,
                 tier=tier_value,
-                proposals=tier_prunes,
+                proposals=tier_list,
                 remove_watchlist=remove_watchlist,
             )
+
+
+def _format_prune_row_label(proposal: PruneProposal) -> str:
+    tone_icon = {
+        ProposalTier.AUTO_APPROVE.value: "🟢",
+        ProposalTier.RECOMMENDED.value: "🟡",
+        ProposalTier.NEEDS_REVIEW.value: "🟠",
+        ProposalTier.BLOCKED.value: "🔴",
+    }.get(proposal.tier.value, "·")
+    block_tag = " 🚫" if proposal.hard_blocks else ""
+    warn_tag = f" ⚠{len(proposal.warnings)}" if proposal.warnings else ""
+    open_tag = (
+        f" buy {proposal.open_buy_count}" if proposal.open_buy_count else ""
+    ) + (
+        f" sell {proposal.open_sell_count}" if proposal.open_sell_count else ""
+    )
+    ghost_tag = " ghost reserved" if proposal.has_ghost_reserved else ""
+    return (
+        f"{tone_icon} **{proposal.symbol}**  ·  conf {proposal.confidence:.2f}  ·  "
+        f"base {proposal.baseline_pnl_thb:+.1f} THB  ·  best {proposal.best_pnl_thb:+.1f} THB"
+        f"{open_tag}{ghost_tag}{block_tag}{warn_tag}"
+    )
 
 
 def _render_prune_bucket(
@@ -742,59 +793,65 @@ def _render_prune_bucket(
     remove_watchlist: bool,
 ) -> None:
     form_key = f"strategy_inbox_prune_form::{tier}"
-    select_key = f"strategy_inbox_prune_select::{tier}"
     apply_key = f"strategy_inbox_prune_apply::{tier}"
+    dismiss_key = f"strategy_inbox_prune_dismiss::{tier}"
 
-    options = [p.symbol for p in proposals]
-    default = [
+    default_symbols = {
         p.symbol
         for p in proposals
         if tier == ProposalTier.AUTO_APPROVE.value and not p.hard_blocks
-    ]
-
+    }
+    default_count = len(default_symbols)
     blocked_tier = tier == ProposalTier.BLOCKED.value
-
-    dismiss_key = f"strategy_inbox_prune_dismiss::{tier}"
+    action_label = "Remove rule + watchlist" if remove_watchlist else "Remove rule only"
 
     with st.form(form_key):
-        for proposal in proposals:
-            _render_prune_proposal_row(proposal)
-
-        selection = st.multiselect(
-            "Symbols to act on",
-            options=options,
-            default=default,
-            key=select_key,
-        )
-        action_label = (
-            "Remove rule + watchlist" if remove_watchlist else "Remove rule only"
-        )
-        action_cols = st.columns(2)
+        action_cols = st.columns([1.3, 1, 2])
         with action_cols[0]:
             apply_clicked = st.form_submit_button(
-                f"{action_label} ({len(selection)})",
+                f"{action_label} (defaults: {default_count})"
+                if not blocked_tier
+                else "Apply disabled for blocked tier",
                 key=apply_key,
                 type="primary" if tier == ProposalTier.AUTO_APPROVE.value else "secondary",
                 disabled=blocked_tier,
             )
         with action_cols[1]:
             dismiss_clicked = st.form_submit_button(
-                f"Dismiss {len(selection)} selected",
+                "Dismiss selected",
                 key=dismiss_key,
             )
 
-    if apply_clicked and selection and not blocked_tier:
+        st.caption(
+            "Toggle rows below to change the selection before clicking remove/dismiss."
+        )
+
+        selected_symbols: list[str] = []
+        for proposal in proposals:
+            row_id = proposal.proposal_id or proposal.symbol
+            sel_key = f"strategy_inbox_prune_sel::{tier}::{row_id}"
+            checked = st.checkbox(
+                _format_prune_row_label(proposal),
+                value=proposal.symbol in default_symbols,
+                key=sel_key,
+            )
+            with st.expander(f"Details — {proposal.symbol}", expanded=False):
+                _render_prune_proposal_details(proposal)
+            if checked:
+                selected_symbols.append(proposal.symbol)
+
+    if apply_clicked and selected_symbols and not blocked_tier:
         _apply_prune(
             config=config,
             proposals=proposals,
-            selected_symbols=selection,
+            selected_symbols=selected_symbols,
             remove_watchlist=remove_watchlist,
         )
-    elif dismiss_clicked and selection:
-        _dismiss_proposals(proposals=proposals, selected_symbols=selection)
+    elif dismiss_clicked and selected_symbols:
+        _dismiss_proposals(proposals=proposals, selected_symbols=selected_symbols)
 
 
-def _render_prune_proposal_row(proposal: PruneProposal) -> None:
+def _render_prune_proposal_details(proposal: PruneProposal) -> None:
     tone = _TIER_TONE.get(proposal.tier.value, "info")
     header = (
         f"<strong>{proposal.symbol}</strong>  "
@@ -831,7 +888,6 @@ def _render_prune_proposal_row(proposal: PruneProposal) -> None:
         st.warning(warning)
     for block in proposal.hard_blocks:
         st.error(f"Blocked: {block}")
-    st.markdown("---")
 
 
 def apply_rule_update_action(
