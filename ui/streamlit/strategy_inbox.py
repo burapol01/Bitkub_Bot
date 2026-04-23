@@ -363,6 +363,7 @@ def render_strategy_inbox_page(
 
     _render_summary_banner(updates=updates, prunes=prunes, skipped=len(skipped))
     _render_metrics_panel()
+    _render_decision_audit_panel()
 
     _render_rule_updates_section(config=config, updates=updates)
     st.divider()
@@ -434,6 +435,80 @@ def _render_metrics_panel() -> None:
                     f"{entry['symbol'] or '?'} ({entry['kind'] or '?'})  "
                     f"by {entry['actor_id'] or entry['actor_type']}"
                 )
+
+
+_DECISION_KIND_FILTER_OPTIONS: tuple[str, ...] = (
+    "all",
+    ProposalKind.RULE_UPDATE.value,
+    ProposalKind.PRUNE.value,
+)
+
+_DECISION_ACTION_FILTER_OPTIONS: tuple[str, ...] = (
+    "all",
+    "applied",
+    "dismissed",
+    "expired",
+    "superseded",
+    "created",
+)
+
+
+def _render_decision_audit_panel() -> None:
+    with st.expander("Decision audit log", expanded=False):
+        filter_cols = st.columns([1, 1, 1, 1])
+        with filter_cols[0]:
+            kind_filter = st.selectbox(
+                "Kind",
+                options=_DECISION_KIND_FILTER_OPTIONS,
+                key="strategy_inbox_audit_kind",
+            )
+        with filter_cols[1]:
+            action_filter = st.selectbox(
+                "Decision",
+                options=_DECISION_ACTION_FILTER_OPTIONS,
+                key="strategy_inbox_audit_action",
+            )
+        with filter_cols[2]:
+            symbol_filter = st.text_input(
+                "Symbol contains",
+                key="strategy_inbox_audit_symbol",
+            ).strip().upper()
+        with filter_cols[3]:
+            limit = int(
+                st.number_input(
+                    "Limit",
+                    min_value=5,
+                    max_value=500,
+                    value=50,
+                    step=5,
+                    key="strategy_inbox_audit_limit",
+                )
+            )
+
+        try:
+            rows = metrics.list_recent_decisions(
+                limit=limit,
+                kind=None if kind_filter == "all" else kind_filter,
+                decision=None if action_filter == "all" else action_filter,
+                symbol=symbol_filter or None,
+            )
+        except Exception as exc:  # noqa: BLE001 — never block UI on audit failure
+            st.caption(f"Audit log unavailable: {exc}")
+            return
+
+        if not rows:
+            st.caption("No decisions match the current filters.")
+            return
+
+        for row in rows:
+            actor = row["actor_id"] or row["actor_type"]
+            reason = f" — {row['reason']}" if row.get("reason") else ""
+            st.caption(
+                f"• {row['decided_at']}  {row['decision']}  "
+                f"{row['symbol'] or '?'} ({row['kind'] or '?'}, "
+                f"tier {row['tier'] or '?'}, status {row['status'] or '?'})  "
+                f"by {actor}{reason}"
+            )
 
 
 def _render_summary_banner(

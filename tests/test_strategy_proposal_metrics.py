@@ -9,6 +9,7 @@ from services import db_service, strategy_proposal_ledger as ledger
 from services.strategy_proposal_metrics import (
     DEFAULT_WINDOW_HOURS,
     compute_ledger_summary,
+    list_recent_decisions,
 )
 from services.strategy_proposal_service import (
     ProposalKind,
@@ -163,6 +164,91 @@ class LedgerSummaryTests(MetricsTestBase):
         self.assertEqual(summary.window_counts_by_decision["applied"], 0)
         # But lifetime counts still reflect the applied row.
         self.assertEqual(summary.counts_by_status["applied"], 1)
+
+
+class ListRecentDecisionsTests(MetricsTestBase):
+    def _seed(self, now: datetime) -> dict[str, str]:
+        ledger.upsert_pending(
+            [
+                _rule(symbol="A_THB", proposed_rule={"buy_below": -1.1, "sell_above": 1.3}),
+                _rule(symbol="B_THB", proposed_rule={"buy_below": -1.2, "sell_above": 1.4}),
+                _prune(symbol="C_THB"),
+            ],
+            now=now,
+        )
+        active = ledger.list_active(now=now)
+        ids = {row.symbol: row.proposal_id for row in active}
+        ledger.mark_applied(ids["A_THB"], actor_id="alice", now=now)
+        ledger.mark_dismissed(ids["B_THB"], actor_id="bob", reason="noisy", now=now)
+        return ids
+
+    def test_returns_newest_first(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        self._seed(now)
+
+        rows = list_recent_decisions(limit=20)
+        self.assertGreaterEqual(len(rows), 2)
+        # Newest decisions come first; mark_dismissed happened after mark_applied.
+        self.assertEqual(rows[0]["decision"], "dismissed")
+
+    def test_filter_by_kind(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        self._seed(now)
+        rule_rows = list_recent_decisions(kind=ProposalKind.RULE_UPDATE.value)
+        prune_rows = list_recent_decisions(kind=ProposalKind.PRUNE.value)
+        self.assertTrue(all(r["kind"] == ProposalKind.RULE_UPDATE.value for r in rule_rows))
+        self.assertTrue(all(r["kind"] == ProposalKind.PRUNE.value for r in prune_rows))
+        self.assertGreater(len(rule_rows), 0)
+
+    def test_filter_by_symbol(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        self._seed(now)
+        rows = list_recent_decisions(symbol="A_THB")
+        self.assertTrue(all(r["symbol"] == "A_THB" for r in rows))
+        self.assertGreater(len(rows), 0)
+
+    def test_filter_by_decision(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        self._seed(now)
+        rows = list_recent_decisions(decision="applied")
+        self.assertTrue(all(r["decision"] == "applied" for r in rows))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["symbol"], "A_THB")
+
+    def test_filter_by_proposal_id_returns_full_history(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        ids = self._seed(now)
+        rows = list_recent_decisions(proposal_id=ids["A_THB"])
+        kinds = {row["decision"] for row in rows}
+        self.assertIn("created", kinds)
+        self.assertIn("applied", kinds)
+
+    def test_limit_is_respected(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        self._seed(now)
+        rows = list_recent_decisions(limit=1)
+        self.assertEqual(len(rows), 1)
+
+    def test_since_filter_drops_old_rows(self) -> None:
+        old = datetime(2026, 4, 20, 10, 0, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        ledger.upsert_pending([_rule(symbol="OLD_THB")], now=old)
+        ledger.mark_applied(
+            ledger.list_active(now=old)[0].proposal_id,
+            actor_id="alice",
+            now=old,
+        )
+        ledger.upsert_pending([_rule(symbol="NEW_THB")], now=now)
+        ledger.mark_applied(
+            ledger.list_active(now=now)[0].proposal_id,
+            actor_id="alice",
+            now=now,
+        )
+
+        windowed = list_recent_decisions(since=now - timedelta(hours=6))
+        symbols = {row["symbol"] for row in windowed if row["symbol"]}
+        self.assertIn("NEW_THB", symbols)
+        self.assertNotIn("OLD_THB", symbols)
 
 
 if __name__ == "__main__":

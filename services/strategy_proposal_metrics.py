@@ -198,6 +198,83 @@ def compute_ledger_summary(
     )
 
 
+def list_recent_decisions(
+    *,
+    limit: int = 50,
+    since: datetime | str | None = None,
+    kind: str | None = None,
+    symbol: str | None = None,
+    decision: str | None = None,
+    proposal_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Flexible audit-log query over ``strategy_proposal_decisions``.
+
+    Joins proposal metadata so callers can filter by symbol/kind without a
+    second round trip. All filters are optional; ``limit`` caps the result
+    size. Results are ordered newest first.
+    """
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if since is not None:
+        if isinstance(since, datetime):
+            since_iso = _iso(_as_utc(since))
+        else:
+            since_iso = str(since)
+        clauses.append("d.decided_at >= ?")
+        params.append(since_iso)
+    if kind:
+        clauses.append("p.kind = ?")
+        params.append(str(kind))
+    if symbol:
+        clauses.append("p.symbol = ?")
+        params.append(str(symbol))
+    if decision:
+        clauses.append("d.decision = ?")
+        params.append(str(decision))
+    if proposal_id:
+        clauses.append("d.proposal_id = ?")
+        params.append(str(proposal_id))
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    query = f"""
+        SELECT d.id, d.proposal_id, d.decided_at, d.decision, d.actor_type,
+               d.actor_id, d.reason, d.metadata_json,
+               p.symbol, p.kind, p.tier, p.status
+        FROM strategy_proposal_decisions d
+        LEFT JOIN strategy_proposals p ON p.proposal_id = d.proposal_id
+        {where}
+        ORDER BY d.id DESC
+        LIMIT ?
+    """
+
+    params.append(int(max(0, limit)))
+
+    with db_service._connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+
+    import json
+
+    return [
+        {
+            "id": row["id"],
+            "proposal_id": row["proposal_id"],
+            "decided_at": row["decided_at"],
+            "decision": row["decision"],
+            "actor_type": row["actor_type"],
+            "actor_id": row["actor_id"],
+            "reason": row["reason"],
+            "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+            "symbol": row["symbol"],
+            "kind": row["kind"],
+            "tier": row["tier"],
+            "status": row["status"],
+        }
+        for row in rows
+    ]
+
+
 __all__ = [
     "DEFAULT_RECENT_DECISIONS_LIMIT",
     "DEFAULT_WINDOW_HOURS",
@@ -205,4 +282,5 @@ __all__ = [
     "TERMINAL_DECISIONS",
     "USER_DECISIONS",
     "compute_ledger_summary",
+    "list_recent_decisions",
 ]
