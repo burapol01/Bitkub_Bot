@@ -24,6 +24,7 @@ import streamlit as st
 
 from config import ordered_unique_symbols
 from services import strategy_proposal_ledger as ledger
+from services import strategy_proposal_metrics as metrics
 from services import strategy_proposal_service as sps
 from services.strategy_proposal_service import (
     ProposalKind,
@@ -361,6 +362,7 @@ def render_strategy_inbox_page(
         return
 
     _render_summary_banner(updates=updates, prunes=prunes, skipped=len(skipped))
+    _render_metrics_panel()
 
     _render_rule_updates_section(config=config, updates=updates)
     st.divider()
@@ -374,6 +376,64 @@ def render_strategy_inbox_page(
         with st.expander(f"Ranking notices ({len(ranking_errors)})", expanded=False):
             for note in ranking_errors:
                 st.caption(f"• {note}")
+
+
+def _render_metrics_panel() -> None:
+    try:
+        summary = metrics.compute_ledger_summary()
+    except Exception as exc:  # noqa: BLE001 — never block the UI on metrics failure
+        st.caption(f"Ledger metrics unavailable: {exc}")
+        return
+
+    with st.expander(
+        f"Inbox metrics (last {summary.window_hours}h)", expanded=False
+    ):
+        applied = summary.window_counts_by_decision.get("applied", 0)
+        dismissed = summary.window_counts_by_decision.get("dismissed", 0)
+        expired = summary.window_counts_by_decision.get("expired", 0)
+        superseded = summary.window_counts_by_decision.get("superseded", 0)
+        avg_sec = summary.avg_time_to_decision_seconds
+
+        cols = st.columns(4)
+        with cols[0]:
+            render_metric_card(
+                "Applied",
+                str(applied),
+                f"{summary.apply_rate * 100:.1f}% of decisions",
+            )
+        with cols[1]:
+            render_metric_card(
+                "Dismissed",
+                str(dismissed),
+                f"{summary.dismissal_rate * 100:.1f}% of decisions",
+            )
+        with cols[2]:
+            render_metric_card(
+                "Expired",
+                str(expired),
+                f"{superseded} superseded",
+            )
+        with cols[3]:
+            avg_label = f"{avg_sec:,.0f}s" if avg_sec is not None else "n/a"
+            render_metric_card("Avg time-to-decision", avg_label, "user decisions")
+
+        st.caption(
+            "Lifetime: "
+            f"pending {summary.counts_by_status['pending']}  ·  "
+            f"applied {summary.counts_by_status['applied']}  ·  "
+            f"dismissed {summary.counts_by_status['dismissed']}  ·  "
+            f"expired {summary.counts_by_status['expired']}  ·  "
+            f"superseded {summary.counts_by_status['superseded']}"
+        )
+
+        if summary.recent_decisions:
+            st.caption("Recent decisions:")
+            for entry in summary.recent_decisions:
+                st.caption(
+                    f"• {entry['decided_at']}  {entry['decision']}  "
+                    f"{entry['symbol'] or '?'} ({entry['kind'] or '?'})  "
+                    f"by {entry['actor_id'] or entry['actor_type']}"
+                )
 
 
 def _render_summary_banner(
