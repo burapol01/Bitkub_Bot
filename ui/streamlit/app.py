@@ -3,6 +3,7 @@ from __future__ import annotations
 import streamlit as st
 
 from config import reload_config
+from services import strategy_proposal_ledger as _ledger
 from services.db_service import init_db
 from ui.streamlit.data import (
     build_dashboard_context,
@@ -47,9 +48,26 @@ st.set_page_config(
 )
 
 
+LEDGER_SWEEP_STATE_KEY = "_ledger_last_sweep_at"
+LEDGER_SWEEP_MIN_INTERVAL_SECONDS = 60
+
+
+def _run_ledger_sweep() -> None:
+    last_sweep_at = st.session_state.get(LEDGER_SWEEP_STATE_KEY)
+    try:
+        outcome = _ledger.run_startup_sweep(
+            min_interval_seconds=LEDGER_SWEEP_MIN_INTERVAL_SECONDS,
+            last_sweep_at=last_sweep_at,
+        )
+    except Exception:  # noqa: BLE001 — never block the UI on sweep failure
+        return
+    st.session_state[LEDGER_SWEEP_STATE_KEY] = outcome.get("last_sweep_at")
+
+
 def main() -> None:
     inject_css()
     init_db()
+    _run_ledger_sweep()
     version_snapshot = get_app_version_snapshot()
     version_label = format_app_version_label(version_snapshot)
     version_detail = format_app_version_detail(version_snapshot)
