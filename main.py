@@ -283,6 +283,94 @@ def missing_position_symbols(rules: dict, active_positions: dict) -> list[str]:
     return sorted(symbol for symbol in active_positions if symbol not in rules)
 
 
+def missing_position_tracking_label(mode: str) -> str:
+    normalized_mode = str(mode or "").strip().lower() or "unknown"
+    if normalized_mode == "paper":
+        return "mode=paper, local paper position"
+    return f"mode={normalized_mode}, local paper position shown for visibility"
+
+
+def describe_missing_position_line(
+    *,
+    prefix: str,
+    symbol: str,
+    position: dict,
+    mode: str,
+) -> str:
+    try:
+        qty = float(position.get("coin_qty", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        qty = 0.0
+    try:
+        buy_price = float(position.get("buy_price", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        buy_price = 0.0
+    try:
+        budget = float(position.get("budget_thb", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        budget = 0.0
+    buy_time = str(position.get("buy_time", "") or "").strip() or "unknown"
+    entry_source = str(position.get("entry_source", "") or "").strip() or "unknown"
+    tracking = missing_position_tracking_label(mode)
+    return (
+        f"{prefix} {symbol} "
+        f"({tracking}, qty={qty:.8f}, buy_price={buy_price:.8f}, "
+        f"budget_thb={budget:.2f}, buy_time={buy_time}, entry_source={entry_source})"
+    )
+
+
+def build_missing_position_block_lines(
+    *,
+    prefix: str,
+    removed_symbols: list[str],
+    active_positions: dict,
+    mode: str,
+    closing_note: str,
+) -> list[str]:
+    lines = [
+        describe_missing_position_line(
+            prefix=prefix,
+            symbol=symbol,
+            position=active_positions.get(symbol, {}),
+            mode=mode,
+        )
+        for symbol in removed_symbols
+    ]
+    if closing_note:
+        lines.append(closing_note)
+    return lines
+
+
+def missing_position_cleanup_note(mode: str, *, context: str) -> str:
+    normalized_mode = str(mode or "").strip().lower()
+    if context == "startup":
+        if normalized_mode == "paper":
+            return (
+                "Restore the symbols in config.json, or press 'c' at the console to clear "
+                "local paper positions for them before starting, then reload."
+            )
+        return (
+            f"Mode={normalized_mode or 'unknown'}. These are local paper positions kept "
+            "for visibility only. Restore the symbols in config.json, or switch to paper "
+            "mode and press 'c' at the console to clear the local paper positions before "
+            "continuing. This gate only reflects local paper state; it does not submit "
+            "or cancel Bitkub orders."
+        )
+    if normalized_mode == "paper":
+        return (
+            "Reload was rejected. These are simulated paper positions. "
+            "Restore the symbols in config.json, or press 'c' to clear local paper "
+            "positions for them, then retry."
+        )
+    return (
+        f"Reload was rejected while mode={normalized_mode or 'unknown'}. These are local "
+        "paper positions kept for visibility only. Restore the symbols in config.json, "
+        "or switch to paper mode and press 'c' to clear the local paper positions, then "
+        "retry. This gate only reflects local paper state; it does not submit or cancel "
+        "Bitkub orders."
+    )
+
+
 def mode_notice(
     mode: str,
     active_positions: dict,
@@ -661,12 +749,12 @@ def main():
     startup_missing_symbols = missing_position_symbols(config["rules"], positions)
     if startup_missing_symbols:
         safety_pause = True
-        safety_pause_lines = [
-            f"open position exists for removed symbol: {symbol}"
-            for symbol in startup_missing_symbols
-        ]
-        safety_pause_lines.append(
-            "Restore these symbols in config.json or close the positions before removing them."
+        safety_pause_lines = build_missing_position_block_lines(
+            prefix="open position exists for removed symbol:",
+            removed_symbols=startup_missing_symbols,
+            active_positions=positions,
+            mode=startup_mode,
+            closing_note=missing_position_cleanup_note(startup_mode, context="startup"),
         )
         notice = "Safety pause: restored positions are missing from current config"
         notice_lines = safety_pause_lines
@@ -2626,15 +2714,18 @@ def main():
 
                 removed_symbols = missing_position_symbols(new_config["rules"], positions)
                 if removed_symbols:
+                    reload_mode = str(new_config.get("mode", config.get("mode", "paper")))
                     activate_safety_pause(
                         "Safety pause: config reload would leave open positions unmanaged",
-                        [
-                            f"open position still active for removed symbol: {symbol}"
-                            for symbol in removed_symbols
-                        ]
-                        + [
-                            "Reload was rejected. Restore these symbols in config.json or close the positions first."
-                        ],
+                        build_missing_position_block_lines(
+                            prefix="open position still active for removed symbol:",
+                            removed_symbols=removed_symbols,
+                            active_positions=positions,
+                            mode=reload_mode,
+                            closing_note=missing_position_cleanup_note(
+                                reload_mode, context="reload"
+                            ),
+                        ),
                         immediate=True,
                         source=source,
                     )
