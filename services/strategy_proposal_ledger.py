@@ -503,6 +503,47 @@ def sweep_expired(*, now: datetime | None = None) -> list[str]:
     return expired_ids
 
 
+def run_startup_sweep(
+    *,
+    min_interval_seconds: int = 60,
+    now: datetime | None = None,
+    last_sweep_at: datetime | str | None = None,
+) -> dict[str, Any]:
+    """Throttled wrapper around :func:`sweep_expired` for periodic callers.
+
+    Returns ``{"skipped": bool, "expired_ids": [...], "last_sweep_at": dt}``.
+    When ``last_sweep_at`` is provided and the elapsed time is below
+    ``min_interval_seconds``, the sweep is skipped so hot loops (e.g. Streamlit
+    reruns) do not hammer the ledger.
+    """
+
+    reference = _as_utc(now)
+    if last_sweep_at is not None:
+        try:
+            previous = (
+                last_sweep_at
+                if isinstance(last_sweep_at, datetime)
+                else _parse_utc(str(last_sweep_at))
+            )
+        except (ValueError, TypeError):
+            previous = None
+        if previous is not None:
+            elapsed = (reference - _as_utc(previous)).total_seconds()
+            if elapsed < max(0, int(min_interval_seconds)):
+                return {
+                    "skipped": True,
+                    "expired_ids": [],
+                    "last_sweep_at": _as_utc(previous),
+                }
+
+    expired = sweep_expired(now=reference)
+    return {
+        "skipped": False,
+        "expired_ids": expired,
+        "last_sweep_at": reference,
+    }
+
+
 def is_suppressed(
     *,
     symbol: str,
@@ -683,6 +724,7 @@ __all__ = [
     "list_decisions",
     "mark_applied",
     "mark_dismissed",
+    "run_startup_sweep",
     "sweep_expired",
     "upsert_pending",
 ]

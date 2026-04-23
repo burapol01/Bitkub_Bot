@@ -497,5 +497,63 @@ class IntegrationBuildTests(LedgerTestBase):
         self.assertEqual(active[0].symbol, "DOGE_THB")
 
 
+class RunStartupSweepTests(LedgerTestBase):
+    def test_sweep_marks_expired_when_not_throttled(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        ledger.upsert_pending([_make_rule_proposal()], now=now)
+        future = now + timedelta(minutes=10)
+
+        outcome = ledger.run_startup_sweep(now=future)
+
+        self.assertFalse(outcome["skipped"])
+        self.assertEqual(len(outcome["expired_ids"]), 1)
+        self.assertEqual(outcome["last_sweep_at"], future)
+
+    def test_sweep_throttled_within_min_interval(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        ledger.upsert_pending([_make_rule_proposal()], now=now)
+        future = now + timedelta(minutes=10)
+
+        # First sweep runs.
+        first = ledger.run_startup_sweep(now=future, min_interval_seconds=60)
+        self.assertFalse(first["skipped"])
+
+        # Second sweep 30s later is throttled.
+        shortly_after = future + timedelta(seconds=30)
+        throttled = ledger.run_startup_sweep(
+            now=shortly_after,
+            min_interval_seconds=60,
+            last_sweep_at=first["last_sweep_at"],
+        )
+        self.assertTrue(throttled["skipped"])
+        self.assertEqual(throttled["expired_ids"], [])
+
+    def test_sweep_runs_again_after_min_interval_elapses(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        ledger.upsert_pending([_make_rule_proposal()], now=now)
+        future = now + timedelta(minutes=10)
+
+        first = ledger.run_startup_sweep(now=future, min_interval_seconds=60)
+        later = future + timedelta(seconds=120)
+
+        second = ledger.run_startup_sweep(
+            now=later,
+            min_interval_seconds=60,
+            last_sweep_at=first["last_sweep_at"],
+        )
+        self.assertFalse(second["skipped"])
+        # Nothing left to expire on the second run.
+        self.assertEqual(second["expired_ids"], [])
+
+    def test_sweep_accepts_iso_string_last_sweep(self) -> None:
+        now = datetime(2026, 4, 22, 10, 0, 0, tzinfo=timezone.utc)
+        outcome = ledger.run_startup_sweep(
+            now=now,
+            min_interval_seconds=60,
+            last_sweep_at="2026-04-22T09:59:30+00:00",
+        )
+        self.assertTrue(outcome["skipped"])
+
+
 if __name__ == "__main__":
     unittest.main()
