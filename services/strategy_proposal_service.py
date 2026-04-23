@@ -110,6 +110,7 @@ class RuleProposal:
     freshness_status: str = ""
     snapshot_ts: str = ""
     expires_at: str = ""
+    proposal_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -151,6 +152,7 @@ class PruneProposal:
     baseline_pnl_thb: float = 0.0
     best_pnl_thb: float = 0.0
     snapshot_ts: str = ""
+    proposal_id: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
