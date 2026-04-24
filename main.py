@@ -341,6 +341,27 @@ def build_missing_position_block_lines(
     return lines
 
 
+def reload_prune_is_auto_allowed(mode: str) -> bool:
+    normalized_mode = str(mode or "").strip().lower()
+    return normalized_mode != "" and normalized_mode != "paper"
+
+
+def prune_orphaned_paper_positions(
+    *,
+    removed_symbols: list[str],
+    positions: dict,
+    cooldowns: dict,
+    latest_prices: dict,
+) -> dict[str, dict]:
+    removed_snapshots: dict[str, dict] = {}
+    for symbol in removed_symbols:
+        if symbol in positions:
+            removed_snapshots[symbol] = dict(positions.pop(symbol))
+        cooldowns.pop(symbol, None)
+        latest_prices.pop(symbol, None)
+    return removed_snapshots
+
+
 def missing_position_cleanup_note(mode: str, *, context: str) -> str:
     normalized_mode = str(mode or "").strip().lower()
     if context == "startup":
@@ -2713,36 +2734,80 @@ def main():
                     return True
 
                 removed_symbols = missing_position_symbols(new_config["rules"], positions)
+                auto_pruned_symbols: list[str] = []
+                auto_pruned_snapshots: dict[str, dict] = {}
                 if removed_symbols:
                     reload_mode = str(new_config.get("mode", config.get("mode", "paper")))
-                    activate_safety_pause(
-                        "Safety pause: config reload would leave open positions unmanaged",
-                        build_missing_position_block_lines(
-                            prefix="open position still active for removed symbol:",
-                            removed_symbols=removed_symbols,
-                            active_positions=positions,
-                            mode=reload_mode,
-                            closing_note=missing_position_cleanup_note(
-                                reload_mode, context="reload"
+                    if not reload_prune_is_auto_allowed(reload_mode):
+                        activate_safety_pause(
+                            "Safety pause: config reload would leave open positions unmanaged",
+                            build_missing_position_block_lines(
+                                prefix="open position still active for removed symbol:",
+                                removed_symbols=removed_symbols,
+                                active_positions=positions,
+                                mode=reload_mode,
+                                closing_note=missing_position_cleanup_note(
+                                    reload_mode, context="reload"
+                                ),
                             ),
-                        ),
-                        immediate=True,
-                        source=source,
+                            immediate=True,
+                            source=source,
+                        )
+                        audit_event(
+                            action_type="config_reload",
+                            actor_type=actor_type,
+                            source=source,
+                            target_type="config",
+                            target_id="active",
+                            status="failed",
+                            message="Config reload rejected because open positions would become unmanaged",
+                            reason="removed_symbols_with_open_positions",
+                            actor_id=actor_id,
+                            correlation_id=correlation_id,
+                            metadata={"removed_symbols": removed_symbols},
+                        )
+                        return True
+
+                    auto_pruned_snapshots = prune_orphaned_paper_positions(
+                        removed_symbols=removed_symbols,
+                        positions=positions,
+                        cooldowns=cooldowns,
+                        latest_prices=latest_prices,
+                    )
+                    auto_pruned_symbols = sorted(auto_pruned_snapshots)
+                    prune_message = (
+                        f"Auto-pruned {len(auto_pruned_symbols)} local paper position(s) "
+                        f"during reload in mode={reload_mode}"
+                    )
+                    insert_runtime_event(
+                        created_at=now_text(),
+                        event_type="auto_prune_paper_positions",
+                        severity="warning",
+                        message=prune_message,
+                        details={
+                            "mode": reload_mode,
+                            "removed_symbols": auto_pruned_symbols,
+                            "positions": auto_pruned_snapshots,
+                        },
                     )
                     audit_event(
-                        action_type="config_reload",
+                        action_type="auto_prune_paper_positions",
                         actor_type=actor_type,
                         source=source,
-                        target_type="config",
-                        target_id="active",
-                        status="failed",
-                        message="Config reload rejected because open positions would become unmanaged",
-                        reason="removed_symbols_with_open_positions",
+                        target_type="paper_positions",
+                        target_id="runtime_state",
+                        old_value={"symbols": auto_pruned_symbols},
+                        new_value={"symbols": []},
+                        status="succeeded",
+                        message=prune_message,
+                        reason="removed_symbols_auto_pruned_in_non_paper_mode",
                         actor_id=actor_id,
                         correlation_id=correlation_id,
-                        metadata={"removed_symbols": removed_symbols},
+                        metadata={
+                            "mode": reload_mode,
+                            "removed_symbols": auto_pruned_symbols,
+                        },
                     )
-                    return True
 
                 config = new_config
                 prune_unsupported_live_entry_symbols()
@@ -2758,9 +2823,14 @@ def main():
                     notice = "Reloaded config.json successfully; safety pause cleared"
                 else:
                     notice = "Reloaded config.json successfully"
-                notice_lines = change_lines
+                notice_lines = list(change_lines)
                 if filter_was_reset:
-                    notice_lines = change_lines + ["report filter reset to ALL"]
+                    notice_lines.append("report filter reset to ALL")
+                if auto_pruned_symbols:
+                    notice_lines.append(
+                        f"auto-pruned local paper positions for removed symbols: "
+                        f"{', '.join(auto_pruned_symbols)}"
+                    )
                 insert_runtime_event(
                     created_at=now_text(),
                     event_type="config_reload",
