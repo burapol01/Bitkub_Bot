@@ -18,11 +18,16 @@ def create_position_from_coin_qty(
     timestamp: str,
     entry_source: str,
 ) -> dict:
+    if float(last_price) <= 0:
+        raise ValueError("last_price must be greater than 0")
+    if float(coin_qty) <= 0:
+        raise ValueError("coin_qty must be greater than 0")
+
     fee_rate = get_fee_rate()
-    net_budget_thb = float(coin_qty) * float(last_price)
     if fee_rate >= 1:
         raise ValueError("fee_rate must be less than 1.0")
 
+    net_budget_thb = float(coin_qty) * float(last_price)
     budget_thb = net_budget_thb / (1 - fee_rate)
     buy_fee_thb = budget_thb - net_budget_thb
     stop_loss_percent = float(config["stop_loss_percent"])
@@ -47,11 +52,17 @@ def create_position_from_coin_qty(
 def open_position(
     symbol: str, last_price: float, config: dict, positions: dict, timestamp: str
 ):
+    if float(last_price) <= 0:
+        print(
+            f"[SKIP BUY]   {symbol} | invalid last_price={last_price} (must be > 0)"
+        )
+        return
+
     fee_rate = get_fee_rate()
     budget_thb = float(config["budget_thb"])
     buy_fee_thb = budget_thb * fee_rate
     net_budget_thb = budget_thb - buy_fee_thb
-    coin_qty = net_budget_thb / last_price if last_price > 0 else 0.0
+    coin_qty = net_budget_thb / last_price
 
     positions[symbol] = create_position_from_coin_qty(
         last_price=last_price,
@@ -166,6 +177,12 @@ def handle_symbol(
     cooldowns: dict,
     timestamp: str,
 ):
+    if float(last_price) <= 0:
+        print(
+            f"[SKIP]       {symbol} | invalid last_price={last_price}; skipping handle_symbol"
+        )
+        return
+
     position = positions.get(symbol)
     max_trades_per_day = int(config["max_trades_per_day"])
 
