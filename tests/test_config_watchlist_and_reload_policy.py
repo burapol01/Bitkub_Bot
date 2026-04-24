@@ -8,6 +8,8 @@ from main import (
     describe_missing_position_line,
     missing_position_cleanup_note,
     missing_position_symbols,
+    prune_orphaned_paper_positions,
+    reload_prune_is_auto_allowed,
     should_queue_config_reload_telegram_notification,
     should_queue_safety_pause_telegram_notification,
 )
@@ -225,6 +227,71 @@ class MissingPositionReloadGateTests(unittest.TestCase):
         self.assertIn("visibility only", note)
         self.assertIn("'c'", note)
         self.assertIn("Bitkub orders", note)
+
+
+class ReloadAutoPrunePolicyTests(unittest.TestCase):
+    def _sample_position(self, **overrides):
+        position = {
+            "coin_qty": 1.0,
+            "buy_price": 10.0,
+            "budget_thb": 100.0,
+            "buy_time": "2026-04-22 10:11:12",
+            "entry_source": "wallet_import",
+        }
+        position.update(overrides)
+        return position
+
+    def test_paper_mode_blocks_auto_prune(self) -> None:
+        self.assertFalse(reload_prune_is_auto_allowed("paper"))
+        self.assertFalse(reload_prune_is_auto_allowed("PAPER"))
+
+    def test_non_paper_modes_allow_auto_prune(self) -> None:
+        self.assertTrue(reload_prune_is_auto_allowed("live"))
+        self.assertTrue(reload_prune_is_auto_allowed("shadow-live"))
+        self.assertTrue(reload_prune_is_auto_allowed("read-only"))
+        self.assertTrue(reload_prune_is_auto_allowed("live-disabled"))
+
+    def test_unknown_or_empty_mode_is_not_auto_allowed(self) -> None:
+        self.assertFalse(reload_prune_is_auto_allowed(""))
+        self.assertFalse(reload_prune_is_auto_allowed("   "))
+
+    def test_prune_orphaned_paper_positions_removes_requested_symbols(self) -> None:
+        positions = {
+            "THB_BTC": self._sample_position(),
+            "THB_ALPHA": self._sample_position(coin_qty=5.0),
+            "THB_ZKC": self._sample_position(coin_qty=7.0),
+        }
+        cooldowns = {"THB_ALPHA": "2026-04-22", "THB_BTC": "2026-04-22"}
+        latest_prices = {"THB_ALPHA": 10.0, "THB_BTC": 20.0, "THB_ZKC": 30.0}
+
+        removed = prune_orphaned_paper_positions(
+            removed_symbols=["THB_ALPHA", "THB_ZKC"],
+            positions=positions,
+            cooldowns=cooldowns,
+            latest_prices=latest_prices,
+        )
+
+        self.assertEqual(sorted(removed), ["THB_ALPHA", "THB_ZKC"])
+        self.assertAlmostEqual(removed["THB_ALPHA"]["coin_qty"], 5.0)
+        self.assertAlmostEqual(removed["THB_ZKC"]["coin_qty"], 7.0)
+        self.assertEqual(sorted(positions), ["THB_BTC"])
+        self.assertEqual(sorted(cooldowns), ["THB_BTC"])
+        self.assertEqual(sorted(latest_prices), ["THB_BTC"])
+
+    def test_prune_orphaned_paper_positions_tolerates_missing_entries(self) -> None:
+        positions = {"THB_BTC": self._sample_position()}
+        cooldowns: dict = {}
+        latest_prices: dict = {}
+
+        removed = prune_orphaned_paper_positions(
+            removed_symbols=["THB_ALPHA"],
+            positions=positions,
+            cooldowns=cooldowns,
+            latest_prices=latest_prices,
+        )
+
+        self.assertEqual(removed, {})
+        self.assertIn("THB_BTC", positions)
 
 
 if __name__ == "__main__":
